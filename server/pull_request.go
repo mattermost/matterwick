@@ -5,7 +5,6 @@ package server
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	"github.com/mattermost/mattermost-server/v5/mlog"
@@ -76,93 +75,6 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		}
 	}
 
-	s.checkPullRequestForChanges(pr)
-}
-
-func (s *Server) checkPullRequestForChanges(pr *model.PullRequest) {
-	result := <-s.Store.PullRequest().Get(pr.RepoOwner, pr.RepoName, pr.Number)
-	if result.Err != nil {
-		mlog.Error(result.Err.Error())
-		return
-	}
-
-	if result.Data == nil {
-		if resultSave := <-s.Store.PullRequest().Save(pr); resultSave.Err != nil {
-			mlog.Error(resultSave.Err.Error())
-		}
-
-		for _, label := range pr.Labels {
-			s.handlePRLabeled(pr, label)
-		}
-
-		return
-	}
-
-	oldPr := result.Data.(*model.PullRequest)
-	prHasChanges := false
-
-	for _, label := range pr.Labels {
-		hadLabel := false
-
-		for _, oldLabel := range oldPr.Labels {
-			if label == oldLabel {
-				hadLabel = true
-				break
-			}
-		}
-
-		if !hadLabel {
-			s.handlePRLabeled(pr, label)
-			prHasChanges = true
-		}
-	}
-
-	for _, oldLabel := range oldPr.Labels {
-		hasLabel := false
-
-		for _, label := range pr.Labels {
-			if label == oldLabel {
-				hasLabel = true
-				break
-			}
-		}
-
-		if !hasLabel {
-			prHasChanges = true
-		}
-	}
-
-	if oldPr.Ref != pr.Ref {
-		prHasChanges = true
-	}
-
-	if oldPr.Sha != pr.Sha {
-		prHasChanges = true
-	}
-
-	if oldPr.State != pr.State {
-		prHasChanges = true
-	}
-
-	if oldPr.BuildStatus != pr.BuildStatus {
-		prHasChanges = true
-	}
-
-	if oldPr.BuildConclusion != pr.BuildConclusion {
-		prHasChanges = true
-	}
-
-	if oldPr.BuildLink != pr.BuildLink {
-		prHasChanges = true
-	}
-
-	if prHasChanges {
-		mlog.Info("pr has changes", mlog.Int("pr", pr.Number))
-		if result := <-s.Store.PullRequest().Save(pr); result.Err != nil {
-			mlog.Error(result.Err.Error())
-			return
-		}
-	}
 }
 
 func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
@@ -199,13 +111,6 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 		}
 	}
 
-}
-
-func checkFileExists(filepath string) bool {
-	if _, err := os.Stat(filepath); err == nil {
-		return true
-	}
-	return false
 }
 
 func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest) {
