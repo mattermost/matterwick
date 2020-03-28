@@ -3,9 +3,10 @@ package server
 import (
 	"context"
 
+	"github.com/mattermost/matterwick/model"
+
 	jenkins "github.com/cpanato/golang-jenkins"
 	"github.com/heroku/docker-registry-client/registry"
-	"github.com/mattermost/matterwick/model"
 )
 
 // MockedBuilds implements buildsInterface but returns hardcoded information.

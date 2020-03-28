@@ -16,13 +16,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/braintree/manners"
-	"github.com/google/go-github/v28/github"
-	"github.com/gorilla/mux"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/mattermost-server/v5/utils/fileutils"
 	"github.com/mattermost/matterwick/store"
+
+	"github.com/braintree/manners"
+	"github.com/google/go-github/v28/github"
+	"github.com/gorilla/mux"
 )
 
 // Server is the mattermod server.

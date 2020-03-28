@@ -5,9 +5,11 @@ package server
 
 import (
 	"context"
-	"github.com/google/go-github/v28/github"
-	"github.com/mattermost/matterwick/model"
+
 	"github.com/mattermost/mattermost-server/v5/mlog"
+	"github.com/mattermost/matterwick/model"
+
+	"github.com/google/go-github/v28/github"
 	"golang.org/x/oauth2"
 )
 

@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
-	jenkins "github.com/cpanato/golang-jenkins"
-	"github.com/heroku/docker-registry-client/registry"
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
+
+	jenkins "github.com/cpanato/golang-jenkins"
+	"github.com/heroku/docker-registry-client/registry"
 	"github.com/pkg/errors"
 )
 

@@ -13,16 +13,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
 	"time"
 
-	"github.com/google/go-github/v28/github"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
+	"github.com/mattermost/mattermost-server/v5/mlog"
+	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
 	"github.com/mattermost/matterwick/internal/cloudtools"
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
-	"github.com/mattermost/mattermost-server/v5/mlog"
-	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
+
+	"github.com/google/go-github/v28/github"
 	"github.com/pkg/errors"
 )
 

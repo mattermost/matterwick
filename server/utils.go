@@ -3,8 +3,8 @@ package server
 import (
 	"fmt"
 
-	"github.com/mattermost/matterwick/model"
 	"github.com/mattermost/mattermost-server/v5/mlog"
+	"github.com/mattermost/matterwick/model"
 )
 
 func (s *Server) logErrorToMattermost(msg string, args ...interface{}) {
