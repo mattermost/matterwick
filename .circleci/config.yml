@@ -1,0 +1,50 @@
+version: 2.1
+jobs:
+  lint:
+    docker:
+      - image: circleci/golang:1.14.1
+    steps:
+      - checkout
+      - run: make check-style
+
+  build:
+    docker:
+      - image: circleci/golang:1.14.1
+    steps:
+      - checkout
+      - run: make build
+
+  test:
+    docker:
+      - image: circleci/golang:1.14.1
+      - image: circleci/mysql:5.7
+        environment:
+          MYSQL_ROOT_PASSWORD: matterwick
+          MYSQL_DATABASE: matterwick
+          MYSQL_USER: matterwick
+          MYSQL_PASSWORD: matterwick
+    steps:
+      - checkout
+      - run:
+          name: Waiting for MySQL to be ready
+          command: |
+            for i in `seq 1 10`;
+            do
+              nc -z 127.0.0.1 3306 && echo Success && exit 0
+              echo -n .
+              sleep 1
+            done
+            echo Failed waiting for MySQL && exit 1
+      - run: make test
+
+workflows:
+  version: 2
+  untagged-build:
+    jobs:
+      - lint
+      - build:
+          requires:
+            - lint
+      - test:
+          requires:
+            - build

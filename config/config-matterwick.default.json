@@ -1,0 +1,52 @@
+{
+  "ListenAddress": "0.0.0.0:8087",
+  "GithubAccessToken": "",
+  "GitHubTokenReserve": 50,
+  "GitHubWebhookSecret": "",
+  "Org": "",
+  "Username": "",
+  "DriverName": "mysql",
+  "DataSource": "",
+  "Repositories": [
+    {
+      "Owner": "",
+      "Name": "",
+      "BuildStatusContext": "",
+      "JenkinsServer": "jenkins",
+      "JobName": "",
+      "InstanceSetupUpgradeScript": "",
+      "InstanceSetupScript": ""
+    }
+  ],
+  "SetupSpinmintTag": "",
+  "SetupSpinmintMessage": "",
+  "SetupSpinmintDoneMessage": "",
+  "SetupSpinmintFailedMessage": "",
+  "DestroyedSpinmintMessage": "",
+  "DestroyedExpirationSpinmintMessage": "",
+  "SpinmintsUseHttps": false,
+  "SetupSpinmintUpgradeTag": "",
+  "SetupSpinmintUpgradeMessage": "",
+  "SetupSpinmintUpgradeDoneMessage": "",
+  "BlacklistPaths": [],
+  "PrLabels": [],
+  "JenkinsCredentials": {
+    "jenkins": {
+      "URL": "",
+      "Username": "",
+      "ApiToken": ""
+    }
+  },
+  "MattermostWebhookURL": "",
+  "MattermostWebhookFooter": "",
+  "LogSettings": {
+    "EnableConsole": true,
+    "ConsoleLevel": "DEBUG",
+    "ConsoleJson": true,
+    "EnableFile": true,
+    "FileLevel": "INFO",
+    "FileJson": true,
+    "FileFormat": "",
+    "FileLocation": ""
+  }
+}
