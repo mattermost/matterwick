@@ -7,12 +7,20 @@ jobs:
       - checkout
       - run: make check-style
 
-  build:
+  build-image:
     docker:
       - image: circleci/golang:1.14.1
     steps:
       - checkout
-      - run: make build
+      - setup_remote_docker
+      - run: make build-image
+      - run: |
+          set -e
+          set -u
+          export TAG="${CIRCLE_SHA1:0:7}"
+          #echo $DOCKER_PASSWORD | docker login --username $DOCKER_USERNAME --password-stdin
+          docker tag mattermost/matterwick:test mattermost/matterwick:$TAG
+          #docker push mattermost/matterwick:$TAG
 
   test:
     docker:
@@ -39,10 +47,10 @@ jobs:
 
 workflows:
   version: 2
-  untagged-build:
+  pr-build:
     jobs:
       - lint
-      - build:
+      - build-image:
           requires:
             - lint
       - test:
