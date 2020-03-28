@@ -82,24 +82,6 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 	return pr, nil
 }
 
-func (s *Server) GetIssueFromGithub(repoOwner, repoName string, ghIssue *github.Issue) (*model.Issue, error) {
-	issue := &model.Issue{
-		RepoOwner: repoOwner,
-		RepoName:  repoName,
-		Number:    *ghIssue.Number,
-		Username:  *ghIssue.User.Login,
-		State:     *ghIssue.State,
-	}
-
-	if labels, _, err := NewGithubClient(s.Config.GithubAccessToken).Issues.ListLabelsByIssue(context.Background(), issue.RepoOwner, issue.RepoName, issue.Number, nil); err != nil {
-		return nil, err
-	} else {
-		issue.Labels = labelsToStringArray(labels)
-	}
-
-	return issue, nil
-}
-
 func labelsToStringArray(labels []*github.Label) []string {
 	out := make([]string, len(labels))
 
