@@ -14,35 +14,40 @@ import (
 	"github.com/google/go-github/v28/github"
 )
 
-func (s *Server) handlePullRequestEvent(event *PullRequestEvent) {
-	mlog.Info("PR-Event", mlog.String("repo", *event.Repo.Name), mlog.Int("pr", event.PRNumber), mlog.String("action", event.Action))
+func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
+	onwer := event.GetRepo().GetOwner().GetName()
+	repoName := event.GetRepo().GetName()
+	prNumber := event.GetNumber()
+	label := event.GetLabel().GetName()
+
+	mlog.Info("PR-Event", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("action", event.GetAction()))
 	pr, err := s.GetPullRequestFromGithub(event.PullRequest)
 	if err != nil {
-		mlog.Error("Unable to get PR from GitHub", mlog.Int("pr", event.PRNumber), mlog.Err(err))
+		mlog.Error("Unable to get PR from GitHub", mlog.Int("pr", prNumber), mlog.Err(err))
 		return
 	}
 
-	switch event.Action {
+	switch event.GetAction() {
 	case "opened":
-		mlog.Info("PR opened", mlog.String("repo", pr.RepoName), mlog.Int("pr", pr.Number))
+		mlog.Info("PR opened", mlog.String("repo", repoName), mlog.Int("pr", pr.Number))
 	case "reopened":
-		mlog.Info("PR reopened", mlog.String("repo", pr.RepoName), mlog.Int("pr", pr.Number))
+		mlog.Info("PR reopened", mlog.String("repo", repoName), mlog.Int("pr", pr.Number))
 	case "labeled":
 		if event.Label == nil {
 			mlog.Error("Label event received, but label object was empty")
 			return
 		}
-		if s.isSpinWickLabel(*event.Label.Name) {
-			mlog.Info("PR received SpinWick label", mlog.String("repo", *event.Repo.Name), mlog.Int("pr", event.PRNumber), mlog.String("label", *event.Label.Name))
+		if s.isSpinWickLabel(label) {
+			mlog.Info("PR received SpinWick label", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWick:
-				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new SpinWick test server using Mattermost Cloud.")
+				s.sendGitHubComment(onwer, repoName, prNumber, "Creating a new SpinWick test server using Mattermost Cloud.")
 				s.handleCreateSpinWick(pr, "miniSingleton", false)
 			case s.Config.SetupSpinWickHA:
-				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
+				s.sendGitHubComment(onwer, repoName, prNumber, "Creating a new HA SpinWick test server using Mattermost Cloud.")
 				s.handleCreateSpinWick(pr, "miniHA", true)
 			default:
-				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", *event.Label.Name))
+				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", label))
 			}
 		}
 	case "unlabeled":
@@ -50,14 +55,14 @@ func (s *Server) handlePullRequestEvent(event *PullRequestEvent) {
 			mlog.Error("Unlabel event received, but label object was empty")
 			return
 		}
-		if s.isSpinWickLabel(*event.Label.Name) {
-			mlog.Info("PR SpinWick label was removed", mlog.String("repo", *event.Repo.Name), mlog.Int("pr", event.PRNumber), mlog.String("label", *event.Label.Name))
+		if s.isSpinWickLabel(label) {
+			mlog.Info("PR SpinWick label was removed", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
 			s.handleDestroySpinWick(pr)
 		}
 	case "synchronize":
-		mlog.Info("PR has a new commit", mlog.String("repo", pr.RepoName), mlog.Int("pr", pr.Number))
+		mlog.Info("PR has a new commit", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 		if s.isSpinWickLabelInLabels(pr.Labels) {
-			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", pr.RepoName), mlog.Int("pr", pr.Number))
+			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 			if s.isSpinWickHALabel(pr.Labels) {
 				s.handleUpdateSpinWick(pr, true)
 			} else {
@@ -65,7 +70,7 @@ func (s *Server) handlePullRequestEvent(event *PullRequestEvent) {
 			}
 		}
 	case "closed":
-		mlog.Info("PR was closed", mlog.String("repo", *event.Repo.Name), mlog.Int("pr", event.PRNumber))
+		mlog.Info("PR was closed", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			s.handleDestroySpinWick(pr)
 		}

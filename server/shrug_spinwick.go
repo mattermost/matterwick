@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/google/go-github/v28/github"
 )
 
 const shrugWick = `data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBA
@@ -1536,7 +1538,7 @@ func (s *Server) serveShrugWick(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, dec)
 }
 
-func (s *Server) handleShrugWick(eventIssueComment IssueComment) {
-	msg := fmt.Sprintf("In response to [this](%s)\n\n ![shrugWick](%s/shrug_wick)", eventIssueComment.Comment.GetHTMLURL(), s.Config.MatterWickURL)
-	s.sendGitHubComment(*eventIssueComment.Repository.Owner.Login, *eventIssueComment.Repository.Name, *eventIssueComment.Issue.Number, msg)
+func (s *Server) handleShrugWick(eventIssueCommentEvent *github.IssueCommentEvent) {
+	msg := fmt.Sprintf("In response to [this](%s)\n\n ![shrugWick](%s/shrug_wick)", eventIssueCommentEvent.GetComment().GetHTMLURL(), s.Config.MatterWickURL)
+	s.sendGitHubComment(eventIssueCommentEvent.GetRepo().GetOwner().GetLogin(), eventIssueCommentEvent.GetRepo().GetName(), eventIssueCommentEvent.GetIssue().GetNumber(), msg)
 }

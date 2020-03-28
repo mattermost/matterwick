@@ -149,16 +149,16 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	case "pull_request":
 		event := PullRequestEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
-		if event != nil && event.PRNumber != 0 {
-			mlog.Info("pr event", mlog.Int("pr", event.PRNumber), mlog.String("action", event.Action))
+		if event != nil && event.GetNumber() != 0 {
+			mlog.Info("pr event", mlog.Int("pr", event.GetNumber()), mlog.String("action", event.GetAction()))
 			s.handlePullRequestEvent(event)
 			return
 		}
 	case "issue_comment":
-		eventIssueComment := IssueCommentFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
-		if eventIssueComment != nil && eventIssueComment.Action == "created" {
-			if strings.Contains(strings.TrimSpace(*eventIssueComment.Comment.Body), "/shrugwick") {
-				s.handleShrugWick(*eventIssueComment)
+		eventIssueEventComment := IssueCommentEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		if eventIssueEventComment != nil && eventIssueEventComment.GetAction() == "created" {
+			if strings.Contains(strings.TrimSpace(eventIssueEventComment.GetComment().GetBody()), "/shrugwick") {
+				s.handleShrugWick(eventIssueEventComment)
 			}
 			return
 		}

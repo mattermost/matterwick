@@ -10,26 +10,9 @@ import (
 	"github.com/google/go-github/v28/github"
 )
 
-type PullRequestEvent struct {
-	Action        string              `json:"action"`
-	PRNumber      int                 `json:"number"`
-	PullRequest   *github.PullRequest `json:"pull_request"`
-	Issue         *github.Issue       `json:"issue"`
-	Label         *github.Label       `json:"label"`
-	Repo          *github.Repository  `json:"repository"`
-	RepositoryUrl string              `json:"repository_url"`
-}
-
-type IssueComment struct {
-	Action     string                     `json:"action"`
-	Comment    *github.PullRequestComment `json:"comment"`
-	Issue      *github.Issue              `json:"issue"`
-	Repository *github.Repository         `json:"repository"`
-}
-
-func PullRequestEventFromJson(data io.Reader) *PullRequestEvent {
+func PullRequestEventFromJson(data io.Reader) *github.PullRequestEvent {
 	decoder := json.NewDecoder(data)
-	var event PullRequestEvent
+	var event github.PullRequestEvent
 	if err := decoder.Decode(&event); err != nil {
 		return nil
 	}
@@ -37,9 +20,9 @@ func PullRequestEventFromJson(data io.Reader) *PullRequestEvent {
 	return &event
 }
 
-func IssueCommentFromJson(data io.Reader) *IssueComment {
+func IssueCommentEventFromJson(data io.Reader) *github.IssueCommentEvent {
 	decoder := json.NewDecoder(data)
-	var event IssueComment
+	var event github.IssueCommentEvent
 	if err := decoder.Decode(&event); err != nil {
 		return nil
 	}
