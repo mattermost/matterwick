@@ -5,6 +5,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
@@ -12,6 +14,36 @@ import (
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/oauth2"
 )
+
+func PullRequestEventFromJson(data io.Reader) *github.PullRequestEvent {
+	decoder := json.NewDecoder(data)
+	var event github.PullRequestEvent
+	if err := decoder.Decode(&event); err != nil {
+		return nil
+	}
+
+	return &event
+}
+
+func IssueCommentEventFromJson(data io.Reader) *github.IssueCommentEvent {
+	decoder := json.NewDecoder(data)
+	var event github.IssueCommentEvent
+	if err := decoder.Decode(&event); err != nil {
+		return nil
+	}
+
+	return &event
+}
+
+func PingEventFromJson(data io.Reader) *github.PingEvent {
+	decoder := json.NewDecoder(data)
+	var event github.PingEvent
+	if err := decoder.Decode(&event); err != nil {
+		return nil
+	}
+
+	return &event
+}
 
 func NewGithubClient(token string) *github.Client {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
