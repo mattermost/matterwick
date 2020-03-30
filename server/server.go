@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +18,6 @@ import (
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/mattermost-server/v5/utils/fileutils"
-	"github.com/mattermost/matterwick/store"
 
 	"github.com/braintree/manners"
 	"github.com/google/go-github/v28/github"
@@ -29,7 +27,6 @@ import (
 // Server is the mattermod server.
 type Server struct {
 	Config *ServerConfig
-	Store  store.Store
 	Router *mux.Router
 
 	webhookChannelsLock sync.Mutex
@@ -43,26 +40,17 @@ type Server struct {
 }
 
 const (
-	INSTANCE_ID_MESSAGE = "Instance ID: "
-	LOG_FILENAME        = "matterwick.log"
+	LOG_FILENAME = "matterwick.log"
 
 	// buildOverride overrides the buildsInterface of the server for development
 	// and testing.
 	buildOverride = "MATTERMOD_BUILD_OVERRIDE"
 )
 
-var (
-	INSTANCE_ID_PATTERN = regexp.MustCompile(INSTANCE_ID_MESSAGE + "(i-[a-z0-9]+)")
-	INSTANCE_ID         = "INSTANCE_ID"
-	INTERNAL_IP         = "INTERNAL_IP"
-	SPINMINT_LINK       = "SPINMINT_LINK"
-)
-
 // New returns a new server with the desired configuration
 func New(config *ServerConfig) *Server {
 	s := &Server{
 		Config:          config,
-		Store:           store.NewSqlStore(config.DriverName, config.DataSource),
 		Router:          mux.NewRouter(),
 		webhookChannels: make(map[string]chan cloudModel.WebhookPayload),
 		StartTime:       time.Now(),
