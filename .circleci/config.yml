@@ -1,42 +1,98 @@
 version: 2.1
+
+executors:
+  default:
+    docker:
+    - image: circleci/golang:1.14.1
+
+
 jobs:
   lint:
-    docker:
-      - image: circleci/golang:1.14.1
+    executor:
+      name: default
     steps:
-      - checkout
-      - run: make check-style
+    - checkout
+    - run: make check-style
+
+  build-image-pr:
+    executor:
+      name: default
+    steps:
+    - checkout
+    - setup_remote_docker
+    - run: make build-image
 
   build-image:
-    docker:
-      - image: circleci/golang:1.14.1
+    executor:
+      name: default
     steps:
-      - checkout
-      - setup_remote_docker
-      - run: make build-image
-      - run: |
-          set -e
-          set -u
-          export TAG="${CIRCLE_SHA1:0:7}"
-          #echo $DOCKER_PASSWORD | docker login --username $DOCKER_USERNAME --password-stdin
-          docker tag mattermost/matterwick:test mattermost/matterwick:$TAG
-          #docker push mattermost/matterwick:$TAG
+    - checkout
+    - setup_remote_docker
+    - run: make build-image
+    - run: |
+        set -e
+        set -u
+        if [[ -z "${CIRCLE_TAG:-}" ]]; then
+          echo "Pushing lastest for $CIRCLE_BRANCH..."
+          TAG=latest
+        else
+          echo "Pushing release $CIRCLE_TAG..."
+          TAG="$CIRCLE_TAG"
+        fi
+        export TAG="${CIRCLE_SHA1:0:7}"
+        echo $DOCKER_ACCESS_TOKEN | docker login --username $DOCKER_USERNAME --password-stdin
+        docker tag mattermost/matterwick:test mattermost/matterwick:$TAG
+        docker push mattermost/matterwick:$TAG
 
   test:
-    docker:
-      - image: circleci/golang:1.14.1
+    executor:
+      name: default
     steps:
-      - checkout
-      - run: make test
+    - checkout
+    - run: make test
 
 workflows:
   version: 2
-  pr-build:
+  pr-builds:
     jobs:
-      - lint
-      - build-image:
-          requires:
-            - lint
-      - test:
-          requires:
-            - build-image
+    - lint
+    - test:
+        requires:
+        - lint
+    - build-image-pr:
+        requires:
+        - test
+    - build-image:
+        context: matterbuild-docker
+        requires:
+        - test
+        filters:
+          branches:
+            only:
+            - master
+
+  tag-builds:
+    jobs:
+    - lint:
+        filters:
+          tags:
+            only: /^v.*/
+          branches:
+            ignore: /.*/
+    - test:
+        requires:
+        - lint
+        filters:
+          tags:
+            only: /^v.*/
+          branches:
+            ignore: /.*/
+    - build-image:
+        context: matterbuild-docker
+        requires:
+        - test
+        filters:
+          tags:
+            only: /^v.*/
+          branches:
+            ignore: /.*/
