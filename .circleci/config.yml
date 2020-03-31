@@ -39,7 +39,6 @@ jobs:
           echo "Pushing release $CIRCLE_TAG..."
           TAG="$CIRCLE_TAG"
         fi
-        export TAG="${CIRCLE_SHA1:0:7}"
         echo $DOCKER_ACCESS_TOKEN | docker login --username $DOCKER_USERNAME --password-stdin
         docker tag mattermost/matterwick:test mattermost/matterwick:$TAG
         docker push mattermost/matterwick:$TAG
