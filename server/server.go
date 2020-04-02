@@ -126,8 +126,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventType := os.Getenv("Http_X_Github_Event")
-
+	eventType := r.Header.Get("X-GitHub-Event")
 	switch eventType {
 	case "ping":
 		pingEvent := PingEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
@@ -150,6 +149,9 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+	default:
+		mlog.Info("Other Events")
+		return
 	}
 }
 
