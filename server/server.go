@@ -107,10 +107,13 @@ func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
+	mlog.Info("NEW EVENT")
 	overLimit := s.CheckLimitRateAndAbortRequest()
 	if overLimit {
 		return
 	}
+
+	mlog.Info("not rate")
 
 	buf, _ := ioutil.ReadAll(r.Body)
 
