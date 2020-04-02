@@ -115,7 +115,6 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 
 func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest) {
 	serverMessages := []string{s.Config.SetupSpinmintMessage,
-		s.Config.SetupSpinmintUpgradeMessage,
 		s.Config.SetupSpinmintFailedMessage,
 		"Spinmint test server created",
 		"Spinmint upgrade test server created",
