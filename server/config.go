@@ -63,27 +63,20 @@ type ServerConfig struct {
 
 	Repositories []*Repository
 
-	SetupSpinWick            string
-	SetupSpinWickHA          string
-	SpinWickHALicense        string
-	ProvisionerServer        string
-	AwsAPIKey                string
-	DNSNameTestServer        string
-	AWSEmailAccessKey        string
-	AWSEmailSecretKey        string
-	AWSEmailEndpoint         string
-	TokenToDeleteTestServers string
+	SetupSpinWick     string
+	SetupSpinWickHA   string
+	SpinWickHALicense string
+	ProvisionerServer string
+	AwsAPIKey         string
+	DNSNameTestServer string
+	AWSEmailAccessKey string
+	AWSEmailSecretKey string
+	AWSEmailEndpoint  string
 
-	SetupSpinmintTag                   string
 	SetupSpinmintMessage               string
-	SetupSpinmintDoneMessage           string
 	SetupSpinmintFailedMessage         string
 	DestroyedSpinmintMessage           string
 	DestroyedExpirationSpinmintMessage string
-
-	SetupSpinmintUpgradeTag         string
-	SetupSpinmintUpgradeMessage     string
-	SetupSpinmintUpgradeDoneMessage string
 
 	PrLabels []LabelResponse
 
@@ -92,8 +85,6 @@ type ServerConfig struct {
 	DockerRegistryURL string
 	DockerUsername    string
 	DockerPassword    string
-
-	BlacklistPaths []string
 
 	MattermostWebhookURL    string
 	MattermostWebhookFooter string
