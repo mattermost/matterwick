@@ -142,7 +142,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		event := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if event != nil && event.GetNumber() != 0 {
 			mlog.Info("pr event", mlog.Int("pr", event.GetNumber()), mlog.String("action", event.GetAction()))
-			s.handlePullRequestEvent(event)
+			go s.handlePullRequestEvent(event)
 		}
 	case "issue_comment":
 		eventIssueEventComment := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
