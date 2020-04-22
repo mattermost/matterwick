@@ -117,12 +117,14 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)
 	if receivedHash[0] != "sha1" {
 		mlog.Error("Invalid webhook hash signature: SHA1")
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
 	err := ValidateSignature(receivedHash, buf, s.Config.GitHubWebhookSecret)
 	if err != nil {
 		mlog.Error(err.Error())
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
@@ -130,29 +132,38 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	switch eventType {
 	case "ping":
 		pingEvent := PingEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
-		if pingEvent != nil {
-			mlog.Info("ping event", mlog.Int64("HookID", pingEvent.GetHookID()))
+		if pingEvent == nil {
+			mlog.Info("ping event failed")
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		mlog.Info("ping event", mlog.Int64("HookID", pingEvent.GetHookID()))
 	case "pull_request":
 		event := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if event != nil && event.GetNumber() != 0 {
 			mlog.Info("pr event", mlog.Int("pr", event.GetNumber()), mlog.String("action", event.GetAction()))
 			s.handlePullRequestEvent(event)
-			return
 		}
 	case "issue_comment":
 		eventIssueEventComment := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		if !eventIssueEventComment.GetIssue().IsPullRequest() {
+			// if not a pull request dont need to set the status
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		if eventIssueEventComment != nil && eventIssueEventComment.GetAction() == "created" {
 			if strings.Contains(strings.TrimSpace(eventIssueEventComment.GetComment().GetBody()), "/shrugwick") {
 				s.handleShrugWick(eventIssueEventComment)
 			}
-			return
 		}
 	default:
 		mlog.Info("Other Events")
+		w.WriteHeader(http.StatusNotImplemented)
 		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {

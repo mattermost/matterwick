@@ -357,8 +357,11 @@ github.com/mattermost/mattermost-cloud v0.14.1 h1:sUov7Ob7P9VwuFDl4qtFqAusmGAgLu
 github.com/mattermost/mattermost-cloud v0.14.1/go.mod h1:NYzd+QlyNRXDpFHxFk1hy2mA7iXqx620E35X4hFoEbo=
 github.com/mattermost/mattermost-operator v0.8.5 h1:rOmnn6DvxNg2+NuupRLQUEwDX1sdAEMof5pOaYytYjA=
 github.com/mattermost/mattermost-operator v0.8.5/go.mod h1:Rinpkr6ordw53vU23itYjIaypS117QJwCGKr3YiriNI=
+github.com/mattermost/mattermost-server v1.4.0 h1:bAN0zYgjyhXPy67VTiHLg+bu8mDJ2bhx109BKk2Ddos=
+github.com/mattermost/mattermost-server v5.11.1+incompatible h1:LPzKY0+2Tic/ik67qIg6VrydRCgxNXZQXOeaiJ2rMBY=
 github.com/mattermost/mattermost-server/v5 v5.20.0-rc4 h1:UfANw6lvbUpvLaHYuUpJdYzSU8nSTIw8ij+lt38MNCM=
 github.com/mattermost/mattermost-server/v5 v5.20.0-rc4/go.mod h1:m07Izu2s34J6Qrc7zo15TZ09jxu4OF/5LbEFh5d+R7o=
+github.com/mattermost/mattermost-server/v5 v5.22.0 h1:LxRm0WUhN4nkRbwGK/TmCRW3SBDbxNPbyu/+aSswJxU=
 github.com/mattermost/rsc v0.0.0-20160330161541-bbaefb05eaa0/go.mod h1:nV5bfVpT//+B1RPD2JvRnxbkLmJEYXmRaaVl15fsXjs=
 github.com/mattermost/viper v1.0.4/go.mod h1:uc5hKG9lv4/KRwPOt2c1omOyirS/UnuA2TytiZQSFHM=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
