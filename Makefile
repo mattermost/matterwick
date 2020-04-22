@@ -1,5 +1,5 @@
 ## Docker Build Versions
-DOCKER_BUILD_IMAGE = golang:1.14.1
+DOCKER_BUILD_IMAGE = golang:1.14.2
 DOCKER_BASE_IMAGE = alpine:3.11.3
 MATTERWICK_IMAGE ?= mattermost/matterwick:test
 
