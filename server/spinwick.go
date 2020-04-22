@@ -4,9 +4,7 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -380,49 +378,10 @@ func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRe
 					return
 				}
 			case cloudModel.InstallationStateCreationNoCompatibleClusters:
-				err := s.requestK8sClusterCreation(pr)
-				if err != nil {
-					request.WithError(errors.Wrap(err, "unable to create a new cluster to accommodate the installation")).ShouldReportError()
-					return
-				}
-				// This sleep is a bit hacky, but is intended to ensure that the
-				// installation has time to be worked on before we check its state
-				// again so we don't create another cluster needlessly.
-				time.Sleep(30 * time.Second)
+				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "No Kubernetes clusters available at the moment, please contact the Mattermost Cloud Team or wait a bit.")
+				request.WithError(errors.New("no k8s clusters available")).IntentionalAbort()
+				return
 			}
-		}
-	}
-}
-
-func (s *Server) waitK8sCluster(ctx context.Context, pr *model.PullRequest, clusterRequestID string) error {
-	for {
-		url := fmt.Sprintf("%s/api/cluster/%s", s.Config.ProvisionerServer, clusterRequestID)
-		resp, err := makeRequest("GET", url, nil)
-		if err != nil {
-			mlog.Error("Error making the post request to create the k8s cluster", mlog.Err(err))
-			return err
-		}
-		defer resp.Body.Close()
-
-		var clusterRequest cloudModel.Cluster
-		err = json.NewDecoder(resp.Body).Decode(&clusterRequest)
-		if err != nil && err != io.EOF {
-			mlog.Error("Error decoding cluster response", mlog.Err(err))
-		}
-		if clusterRequest.State == "stable" {
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Kubernetes cluster created. Now will deploy Mattermost... Hang on!")
-			return nil
-		} else if clusterRequest.State == "creation-failed" {
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Failed to create the k8s cluster.")
-			return errors.New("error creating k8s cluster")
-		}
-		mlog.Info("Provisioner Server - cluster request creating... sleep", mlog.String("ClusterID", clusterRequest.ID), mlog.String("State", clusterRequest.State))
-		time.Sleep(20 * time.Second)
-		select {
-		case <-ctx.Done():
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Timed out waiting for the kubernetes cluster. Please check the logs.")
-			return errors.New("timed out waiting for the cluster installation complete")
-		case <-time.After(10 * time.Second):
 		}
 	}
 }
@@ -558,44 +517,6 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	mlog.Info("Mattermost configuration complete")
 
 	return nil
-}
-
-func (s *Server) requestK8sClusterCreation(pr *model.PullRequest) error {
-	mlog.Info("Building new kubernetes cluster")
-
-	url := fmt.Sprintf("%s/api/clusters", s.Config.ProvisionerServer)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Please wait while a new kubernetes cluster is created for your SpinWick")
-
-	clusterRequest := cloudModel.CreateClusterRequest{
-		Size: "SizeAlef1000",
-	}
-	b, err := json.Marshal(clusterRequest)
-	if err != nil {
-		mlog.Error("Error trying to marshal the cluster request", mlog.Err(err))
-		return err
-	}
-
-	respReqCluster, err := makeRequest("POST", url, bytes.NewBuffer(b))
-	if err != nil {
-		mlog.Error("Error trying to send the k8s-cluster-creation request", mlog.Err(err))
-		return err
-	}
-	defer respReqCluster.Body.Close()
-
-	var cluster cloudModel.Cluster
-	err = json.NewDecoder(respReqCluster.Body).Decode(&cluster)
-	if err != nil && err != io.EOF {
-		mlog.Error("Error decoding cluster", mlog.Err(err))
-		return fmt.Errorf("Error decoding cluster: %s", err)
-	}
-	mlog.Info("Provisioner Server - cluster request", mlog.String("ClusterID", cluster.ID))
-
-	wait := 900
-	mlog.Info("Waiting up to 900 seconds for the k8s cluster creation to complete...")
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
-	defer cancel()
-
-	return s.waitK8sCluster(ctx, pr, cluster.ID)
 }
 
 func checkDNS(ctx context.Context, url string) error {
