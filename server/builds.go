@@ -57,7 +57,7 @@ func (b *Builds) buildJenkinsClient(s *Server, pr *model.PullRequest) (*Reposito
 
 	client := jenkins.NewJenkins(&jenkins.Auth{
 		Username: credentials.Username,
-		ApiToken: credentials.ApiToken,
+		ApiToken: credentials.APIToken,
 	}, credentials.URL)
 
 	return repo, client, nil
@@ -165,7 +165,7 @@ func (b *Builds) waitForBuild(ctx context.Context, s *Server, client *jenkins.Je
 }
 
 func (b *Builds) checkBuildLink(ctx context.Context, s *Server, pr *model.PullRequest) (string, error) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	repo, _ := GetRepository(s.Config.Repositories, pr.RepoOwner, pr.RepoName)
 	for {
 		combined, _, err := client.Repositories.GetCombinedStatus(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil)

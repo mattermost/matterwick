@@ -11,6 +11,7 @@ import (
 	"net/http"
 )
 
+// WebhookRequest defines the message to send to MM
 type WebhookRequest struct {
 	Username string `json:"username"`
 	Text     string `json:"text"`

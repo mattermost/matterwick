@@ -10,10 +10,11 @@ import (
 	"github.com/mattermost/mattermost-server/v5/mlog"
 )
 
+// CheckLimitRateAndSleep checks the api rate and sleep if needed
 func (s *Server) CheckLimitRateAndSleep() {
 	mlog.Info("Checking the rate limit on Github and will sleep if need...")
 
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	rate, _, err := client.RateLimits(context.Background())
 	if err != nil {
 		mlog.Error("Error getting the rate limit", mlog.Err(err))
@@ -30,10 +31,11 @@ func (s *Server) CheckLimitRateAndSleep() {
 	}
 }
 
+// CheckLimitRateAndAbortRequest checks the api rate and abort the request if needed
 func (s *Server) CheckLimitRateAndAbortRequest() bool {
 	mlog.Info("Checking the rate limit on Github and will abort request if need...")
 
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	rate, _, err := client.RateLimits(context.Background())
 	if err != nil {
 		mlog.Error("Error getting the rate limit", mlog.Err(err))

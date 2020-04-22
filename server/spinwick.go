@@ -68,7 +68,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		Aborted:        false,
 	}
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AwsAPIKey, ownerID)
+	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -114,7 +114,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	headers := map[string]string{
-		"x-api-key": s.Config.AwsAPIKey,
+		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
 	installation, err := cloudClient.CreateInstallation(installationRequest)
@@ -182,7 +182,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 	}
 
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AwsAPIKey, ownerID)
+	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -232,7 +232,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 	// Let's get the installation state one last time. If the version matches
 	// what we want then another process already updated it.
 	headers := map[string]string{
-		"x-api-key": s.Config.AwsAPIKey,
+		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
 	installation, err := cloudClient.GetInstallation(request.InstallationID)
@@ -305,7 +305,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AwsAPIKey, ownerID)
+	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -317,7 +317,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	mlog.Info("Destroying SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("installation_id", request.InstallationID))
 
 	headers := map[string]string{
-		"x-api-key": s.Config.AwsAPIKey,
+		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
 	err = cloudClient.DeleteInstallation(request.InstallationID)
@@ -329,7 +329,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	s.commentLock.Lock()
 	defer s.commentLock.Unlock()
 
-	comments, _, err := NewGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
+	comments, _, err := newGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
@@ -663,7 +663,7 @@ func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComm
 			for _, message := range serverMessages {
 				if strings.Contains(*comment.Body, message) {
 					mlog.Info("Removing old spinwick comment with ID", mlog.Int64("ID", *comment.ID))
-					_, err := NewGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
+					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
 						mlog.Error("Unable to remove old spinwick Mattermod comment", mlog.Err(err))
 					}

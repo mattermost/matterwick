@@ -84,7 +84,7 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 	s.commentLock.Lock()
 	defer s.commentLock.Unlock()
 
-	comments, _, err := NewGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
+	comments, _, err := newGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
 	if err != nil {
 		mlog.Error("Unable to list comments for PR", mlog.Int("pr", pr.Number), mlog.Err(err))
 		return
@@ -95,7 +95,7 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 		if *comment.User.Login == s.Config.Username &&
 			strings.Contains(*comment.Body, s.Config.DestroyedSpinmintMessage) || strings.Contains(*comment.Body, s.Config.DestroyedExpirationSpinmintMessage) {
 			mlog.Info("Removing old server deletion comment with ID", mlog.Int64("ID", *comment.ID))
-			_, err := NewGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
+			_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 			if err != nil {
 				mlog.Error("Unable to remove old server deletion comment", mlog.Err(err))
 			}
@@ -137,7 +137,7 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 			for _, message := range serverMessages {
 				if strings.Contains(*comment.Body, message) {
 					mlog.Info("Removing old comment with ID", mlog.Int64("ID", *comment.ID))
-					_, err := NewGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
+					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
 						mlog.Error("Unable to remove old Mattermod comment", mlog.Err(err))
 					}

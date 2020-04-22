@@ -15,7 +15,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func PullRequestEventFromJson(data io.Reader) *github.PullRequestEvent {
+// PullRequestEventFromJSON parses json to a github.PullRequestEvent
+func PullRequestEventFromJSON(data io.Reader) *github.PullRequestEvent {
 	decoder := json.NewDecoder(data)
 	var event github.PullRequestEvent
 	if err := decoder.Decode(&event); err != nil {
@@ -25,7 +26,8 @@ func PullRequestEventFromJson(data io.Reader) *github.PullRequestEvent {
 	return &event
 }
 
-func IssueCommentEventFromJson(data io.Reader) *github.IssueCommentEvent {
+// IssueCommentEventFromJSON parses json to a github.IssueCommentEvent
+func IssueCommentEventFromJSON(data io.Reader) *github.IssueCommentEvent {
 	decoder := json.NewDecoder(data)
 	var event github.IssueCommentEvent
 	if err := decoder.Decode(&event); err != nil {
@@ -35,7 +37,8 @@ func IssueCommentEventFromJson(data io.Reader) *github.IssueCommentEvent {
 	return &event
 }
 
-func PingEventFromJson(data io.Reader) *github.PingEvent {
+// PingEventFromJSON parses json to a github.PingEvent
+func PingEventFromJSON(data io.Reader) *github.PingEvent {
 	decoder := json.NewDecoder(data)
 	var event github.PingEvent
 	if err := decoder.Decode(&event); err != nil {
@@ -45,13 +48,14 @@ func PingEventFromJson(data io.Reader) *github.PingEvent {
 	return &event
 }
 
-func NewGithubClient(token string) *github.Client {
+func newGithubClient(token string) *github.Client {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(oauth2.NoContext, ts)
 
 	return github.NewClient(tc)
 }
 
+// GetPullRequestFromGithub get updated pr info
 func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*model.PullRequest, error) {
 	pr := &model.PullRequest{
 		RepoOwner: *pullRequest.Base.Repo.Owner.Login,
@@ -70,42 +74,43 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 		pr.FullName = *pullRequest.Head.Repo.FullName
 	}
 
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 
 	repo, ok := GetRepository(s.Config.Repositories, pr.RepoOwner, pr.RepoName)
 	if ok && repo.BuildStatusContext != "" {
-		if combined, _, err := client.Repositories.GetCombinedStatus(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil); err != nil {
+		combined, _, err := client.Repositories.GetCombinedStatus(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil)
+		if err != nil {
 			return nil, err
-		} else {
-			for _, status := range combined.Statuses {
-				if *status.Context == repo.BuildStatusContext {
-					pr.BuildStatus = *status.State
-					pr.BuildLink = *status.TargetURL
-					break
-				}
+		}
+		for _, status := range combined.Statuses {
+			if *status.Context == repo.BuildStatusContext {
+				pr.BuildStatus = *status.State
+				pr.BuildLink = *status.TargetURL
+				break
 			}
 		}
 
 		// for the repos using circleci we have the checks now
-		if checks, _, err := client.Checks.ListCheckRunsForRef(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil); err != nil {
+		checks, _, err := client.Checks.ListCheckRunsForRef(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil)
+		if err != nil {
 			return nil, err
-		} else {
-			for _, status := range checks.CheckRuns {
-				if *status.Name == repo.BuildStatusContext {
-					pr.BuildStatus = status.GetStatus()
-					pr.BuildConclusion = status.GetConclusion()
-					pr.BuildLink = status.GetHTMLURL()
-					break
-				}
+		}
+		for _, status := range checks.CheckRuns {
+			if *status.Name == repo.BuildStatusContext {
+				pr.BuildStatus = status.GetStatus()
+				pr.BuildConclusion = status.GetConclusion()
+				pr.BuildLink = status.GetHTMLURL()
+				break
 			}
 		}
+
 	}
 
-	if labels, _, err := client.Issues.ListLabelsByIssue(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil); err != nil {
+	labels, _, err := client.Issues.ListLabelsByIssue(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
+	if err != nil {
 		return nil, err
-	} else {
-		pr.Labels = labelsToStringArray(labels)
 	}
+	pr.Labels = labelsToStringArray(labels)
 
 	return pr, nil
 }
@@ -122,7 +127,7 @@ func labelsToStringArray(labels []*github.Label) []string {
 
 func (s *Server) sendGitHubComment(repoOwner, repoName string, number int, comment string) {
 	mlog.Debug("Sending GitHub comment", mlog.Int("issue", number), mlog.String("comment", comment))
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	_, _, err := client.Issues.CreateComment(context.Background(), repoOwner, repoName, number, &github.IssueComment{Body: &comment})
 	if err != nil {
 		mlog.Error("Error commenting", mlog.Err(err))
@@ -131,7 +136,7 @@ func (s *Server) sendGitHubComment(repoOwner, repoName string, number int, comme
 
 func (s *Server) removeLabel(repoOwner, repoName string, number int, label string) {
 	mlog.Info("Removing label on issue", mlog.Int("issue", number), mlog.String("label", label))
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	_, err := client.Issues.RemoveLabelForIssue(context.Background(), repoOwner, repoName, number, label)
 	if err != nil {
 		mlog.Error("Error removing the label", mlog.Err(err))
@@ -140,7 +145,7 @@ func (s *Server) removeLabel(repoOwner, repoName string, number int, label strin
 }
 
 func (s *Server) getComments(repoOwner, repoName string, number int) ([]*github.IssueComment, error) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	comments, _, err := client.Issues.ListComments(context.Background(), repoOwner, repoName, number, nil)
 	if err != nil {
 		mlog.Error("pr_error", mlog.Err(err))
@@ -149,8 +154,9 @@ func (s *Server) getComments(repoOwner, repoName string, number int) ([]*github.
 	return comments, nil
 }
 
+// GetUpdateChecks retrieve updated status checks from GH
 func (s *Server) GetUpdateChecks(owner, repoName string, prNumber int) (*model.PullRequest, error) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	prGitHub, _, err := client.PullRequests.Get(context.Background(), owner, repoName, prNumber)
 	pr, err := s.GetPullRequestFromGithub(prGitHub)
 	if err != nil {
@@ -162,7 +168,7 @@ func (s *Server) GetUpdateChecks(owner, repoName string, prNumber int) (*model.P
 }
 
 func (s *Server) checkUserPermission(user, repoOwner string) bool {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 
 	_, resp, err := client.Organizations.GetOrgMembership(context.Background(), user, repoOwner)
 	if resp.StatusCode == 404 {
@@ -177,7 +183,7 @@ func (s *Server) checkUserPermission(user, repoOwner string) bool {
 }
 
 func (s *Server) checkIfRefExists(pr *model.PullRequest, org string, ref string) (bool, error) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	_, response, err := client.Git.GetRef(context.Background(), org, pr.RepoName, ref)
 	if err != nil {
 		return false, err
@@ -196,7 +202,7 @@ func (s *Server) checkIfRefExists(pr *model.PullRequest, org string, ref string)
 }
 
 func (s *Server) createRef(pr *model.PullRequest, ref string) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	_, _, err := client.Git.CreateRef(
 		context.Background(),
 		pr.RepoOwner,
@@ -214,7 +220,7 @@ func (s *Server) createRef(pr *model.PullRequest, ref string) {
 }
 
 func (s *Server) deleteRefWhereCombinedStateEqualsSuccess(repoOwner string, repoName string, ref string) error {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	cStatus, _, _ := client.Repositories.GetCombinedStatus(context.Background(), repoOwner, repoName, ref, nil)
 	if cStatus.GetState() == "success" {
 		_, err := client.Git.DeleteRef(context.Background(), repoOwner, repoName, ref)
@@ -226,7 +232,7 @@ func (s *Server) deleteRefWhereCombinedStateEqualsSuccess(repoOwner string, repo
 }
 
 func (s *Server) deleteRef(repoOwner string, repoName string, ref string) error {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	_, err := client.Git.DeleteRef(context.Background(), repoOwner, repoName, ref)
 	if err != nil {
 		return err
@@ -235,7 +241,7 @@ func (s *Server) deleteRef(repoOwner string, repoName string, ref string) error 
 }
 
 func (s *Server) areChecksSuccessfulForPr(pr *model.PullRequest, org string) (bool, error) {
-	client := NewGithubClient(s.Config.GithubAccessToken)
+	client := newGithubClient(s.Config.GithubAccessToken)
 	mlog.Debug("Checking combined status for ref", mlog.Int("prNumber", pr.Number), mlog.String("ref", pr.Ref), mlog.String("prSha", pr.Sha))
 	cStatus, _, err := client.Repositories.GetCombinedStatus(context.Background(), org, pr.RepoName, pr.Sha, nil)
 	if err != nil {

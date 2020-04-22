@@ -42,7 +42,7 @@ lint:
 
 ## Runs govet against all packages.
 .PHONY: vet
-govet:
+vet:
 	@echo Running govet
 	$(GO) vet ./...
 	@echo Govet success

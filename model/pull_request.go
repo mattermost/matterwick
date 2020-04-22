@@ -9,11 +9,7 @@ import (
 	"time"
 )
 
-const (
-	STATE_OPEN   = "open"
-	STATE_CLOSED = "closed"
-)
-
+// PullRequest defines a pr
 type PullRequest struct {
 	RepoOwner       string
 	RepoName        string
@@ -31,20 +27,23 @@ type PullRequest struct {
 	CreatedAt       time.Time
 }
 
-func (o *PullRequest) ToJson() (string, error) {
-	if b, err := json.Marshal(o); err != nil {
+// ToJSON converts to json
+func (o *PullRequest) ToJSON() (string, error) {
+	b, err := json.Marshal(o)
+	if err != nil {
 		return "", err
-	} else {
-		return string(b), nil
 	}
+
+	return string(b), nil
 }
 
-func PullRequestFromJson(data io.Reader) (*PullRequest, error) {
+// PullRequestFromJSON convert from json to the struct
+func PullRequestFromJSON(data io.Reader) (*PullRequest, error) {
 	var pr PullRequest
 
 	if err := json.NewDecoder(data).Decode(&pr); err != nil {
 		return nil, err
-	} else {
-		return &pr, nil
 	}
+
+	return &pr, nil
 }

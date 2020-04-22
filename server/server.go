@@ -26,7 +26,7 @@ import (
 
 // Server is the mattermod server.
 type Server struct {
-	Config *ServerConfig
+	Config *MatterwickConfig
 	Router *mux.Router
 
 	webhookChannelsLock sync.Mutex
@@ -40,7 +40,7 @@ type Server struct {
 }
 
 const (
-	LOG_FILENAME = "matterwick.log"
+	logFilename = "matterwick.log"
 
 	// buildOverride overrides the buildsInterface of the server for development
 	// and testing.
@@ -48,7 +48,7 @@ const (
 )
 
 // New returns a new server with the desired configuration
-func New(config *ServerConfig) *Server {
+func New(config *MatterwickConfig) *Server {
 	s := &Server{
 		Config:          config,
 		Router:          mux.NewRouter(),
@@ -129,20 +129,20 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	eventType := r.Header.Get("X-GitHub-Event")
 	switch eventType {
 	case "ping":
-		pingEvent := PingEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		pingEvent := PingEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if pingEvent != nil {
 			mlog.Info("ping event", mlog.Int64("HookID", pingEvent.GetHookID()))
 			return
 		}
 	case "pull_request":
-		event := PullRequestEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		event := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if event != nil && event.GetNumber() != 0 {
 			mlog.Info("pr event", mlog.Int("pr", event.GetNumber()), mlog.String("action", event.GetAction()))
 			s.handlePullRequestEvent(event)
 			return
 		}
 	case "issue_comment":
-		eventIssueEventComment := IssueCommentEventFromJson(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		eventIssueEventComment := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if eventIssueEventComment != nil && eventIssueEventComment.GetAction() == "created" {
 			if strings.Contains(strings.TrimSpace(eventIssueEventComment.GetComment().GetBody()), "/shrugwick") {
 				s.handleShrugWick(eventIssueEventComment)
@@ -188,21 +188,23 @@ func messageByUserContains(comments []*github.IssueComment, username string, tex
 	return false
 }
 
+// GetLogFileLocation gets the log file locations
 func GetLogFileLocation(fileLocation string) string {
 	if fileLocation == "" {
 		fileLocation, _ = fileutils.FindDir("logs")
 	}
 
-	return filepath.Join(fileLocation, LOG_FILENAME)
+	return filepath.Join(fileLocation, logFilename)
 }
 
-func SetupLogging(config *ServerConfig) {
+// SetupLogging sets the logging
+func SetupLogging(config *MatterwickConfig) {
 	loggingConfig := &mlog.LoggerConfiguration{
 		EnableConsole: config.LogSettings.EnableConsole,
-		ConsoleJson:   config.LogSettings.ConsoleJson,
+		ConsoleJson:   config.LogSettings.ConsoleJSON,
 		ConsoleLevel:  strings.ToLower(config.LogSettings.ConsoleLevel),
 		EnableFile:    config.LogSettings.EnableFile,
-		FileJson:      config.LogSettings.FileJson,
+		FileJson:      config.LogSettings.FileJSON,
 		FileLevel:     strings.ToLower(config.LogSettings.FileLevel),
 		FileLocation:  GetLogFileLocation(config.LogSettings.FileLocation),
 	}

@@ -32,7 +32,7 @@
     "jenkins": {
       "URL": "",
       "Username": "",
-      "ApiToken": ""
+      "APIToken": ""
     }
   },
   "MattermostWebhookURL": "",
@@ -40,10 +40,10 @@
   "LogSettings": {
     "EnableConsole": true,
     "ConsoleLevel": "DEBUG",
-    "ConsoleJson": true,
+    "ConsoleJSON": true,
     "EnableFile": true,
     "FileLevel": "INFO",
-    "FileJson": true,
+    "FileJSON": true,
     "FileFormat": "",
     "FileLocation": ""
   }

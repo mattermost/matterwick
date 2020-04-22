@@ -11,11 +11,13 @@ import (
 	"github.com/pkg/errors"
 )
 
+// LabelResponse contains the label information
 type LabelResponse struct {
 	Label   string
 	Message string
 }
 
+// Repository related to the repository
 type Repository struct {
 	Owner                      string
 	Name                       string
@@ -26,25 +28,15 @@ type Repository struct {
 	JobName                    string
 }
 
+// JenkinsCredentials holds the jenkins creds
 type JenkinsCredentials struct {
 	URL      string
 	Username string
-	ApiToken string
+	APIToken string
 }
 
-type Integration struct {
-	RepositoryName  string
-	Files           []string
-	IntegrationLink string
-	Message         string
-}
-
-type BuildMobileAppJob struct {
-	JobName           string
-	ExpectedArtifacts int
-}
-
-type ServerConfig struct {
+// MatterwickConfig defines all config for to run the server
+type MatterwickConfig struct {
 	ListenAddress               string
 	MatterWickURL               string
 	GithubAccessToken           string
@@ -67,7 +59,7 @@ type ServerConfig struct {
 	SetupSpinWickHA   string
 	SpinWickHALicense string
 	ProvisionerServer string
-	AwsAPIKey         string
+	AWSAPIKey         string
 	DNSNameTestServer string
 	AWSEmailAccessKey string
 	AWSEmailSecretKey string
@@ -91,10 +83,10 @@ type ServerConfig struct {
 
 	LogSettings struct {
 		EnableConsole bool
-		ConsoleJson   bool
+		ConsoleJSON   bool
 		ConsoleLevel  string
 		EnableFile    bool
-		FileJson      bool
+		FileJSON      bool
 		FileLevel     string
 		FileLocation  string
 	}
@@ -114,8 +106,9 @@ func findConfigFile(fileName string) string {
 	return fileName
 }
 
-func GetConfig(fileName string) (*ServerConfig, error) {
-	config := &ServerConfig{}
+// GetConfig gets the config
+func GetConfig(fileName string) (*MatterwickConfig, error) {
+	config := &MatterwickConfig{}
 	fileName = findConfigFile(fileName)
 
 	file, err := os.Open(fileName)
@@ -132,6 +125,7 @@ func GetConfig(fileName string) (*ServerConfig, error) {
 	return config, nil
 }
 
+// GetRepository gets the repo
 func GetRepository(repositories []*Repository, owner, name string) (*Repository, bool) {
 	for _, repo := range repositories {
 		if repo.Owner == owner && repo.Name == name {

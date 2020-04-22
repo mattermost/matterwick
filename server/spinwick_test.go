@@ -31,7 +31,7 @@ func TestIsSpinWickLabel(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
 	s := &Server{
-		Config: &ServerConfig{
+		Config: &MatterwickConfig{
 			SetupSpinWick:   spinwickLabel,
 			SetupSpinWickHA: spinwickHALabel,
 		},
@@ -57,7 +57,7 @@ func TestIsSpinWickLabelInLabels(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
 	s := &Server{
-		Config: &ServerConfig{
+		Config: &MatterwickConfig{
 			SetupSpinWick:   spinwickLabel,
 			SetupSpinWickHA: spinwickHALabel,
 		},
