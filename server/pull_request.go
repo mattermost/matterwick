@@ -117,9 +117,10 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Failed to create mattermost installation",
 		"Creating a new SpinWick test server using Mattermost Cloud.",
 		"Please wait while a new kubernetes cluster is created for your SpinWick",
+		"Mattermost test server updated with git commit",
 	}
 
-	mlog.Info("Removing old Mattermod comments")
+	mlog.Info("Removing old Matterwick comments")
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username {
 			for _, message := range serverMessages {
