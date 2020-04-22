@@ -90,7 +90,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 			return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 		}
 
-		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("build_link", pr.BuildLink))
+		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
 
 		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr)
 		if errImage != nil {

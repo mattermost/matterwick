@@ -11,49 +11,16 @@ import (
 	"github.com/pkg/errors"
 )
 
-// LabelResponse contains the label information
-type LabelResponse struct {
-	Label   string
-	Message string
-}
-
-// Repository related to the repository
-type Repository struct {
-	Owner                      string
-	Name                       string
-	BuildStatusContext         string
-	JenkinsServer              string
-	InstanceSetupScript        string
-	InstanceSetupUpgradeScript string
-	JobName                    string
-}
-
-// JenkinsCredentials holds the jenkins creds
-type JenkinsCredentials struct {
-	URL      string
-	Username string
-	APIToken string
-}
-
 // MatterwickConfig defines all config for to run the server
 type MatterwickConfig struct {
-	ListenAddress               string
-	MatterWickURL               string
-	GithubAccessToken           string
-	GitHubTokenReserve          int
-	GithubUsername              string
-	GithubAccessTokenCherryPick string
-	GitHubWebhookSecret         string
-	Org                         string
-	Username                    string
-	AutoAssignerTeam            string
-	AutoAssignerTeamID          int64
-	CircleCIToken               string
-
-	DriverName string
-	DataSource string
-
-	Repositories []*Repository
+	ListenAddress       string
+	MatterWickURL       string
+	GithubAccessToken   string
+	GitHubTokenReserve  int
+	GithubUsername      string
+	GitHubWebhookSecret string
+	Org                 string
+	Username            string
 
 	SetupSpinWick     string
 	SetupSpinWickHA   string
@@ -65,14 +32,9 @@ type MatterwickConfig struct {
 	AWSEmailSecretKey string
 	AWSEmailEndpoint  string
 
-	SetupSpinmintMessage               string
-	SetupSpinmintFailedMessage         string
-	DestroyedSpinmintMessage           string
-	DestroyedExpirationSpinmintMessage string
-
-	PrLabels []LabelResponse
-
-	JenkinsCredentials map[string]*JenkinsCredentials
+	SetupSpinmintMessage       string
+	SetupSpinmintFailedMessage string
+	DestroyedSpinmintMessage   string
 
 	DockerRegistryURL string
 	DockerUsername    string
@@ -123,15 +85,4 @@ func GetConfig(fileName string) (*MatterwickConfig, error) {
 	}
 
 	return config, nil
-}
-
-// GetRepository gets the repo
-func GetRepository(repositories []*Repository, owner, name string) (*Repository, bool) {
-	for _, repo := range repositories {
-		if repo.Owner == owner && repo.Name == name {
-			return repo, true
-		}
-	}
-
-	return nil, false
 }

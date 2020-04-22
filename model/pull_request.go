@@ -11,20 +11,17 @@ import (
 
 // PullRequest defines a pr
 type PullRequest struct {
-	RepoOwner       string
-	RepoName        string
-	FullName        string
-	Number          int
-	Username        string
-	Ref             string
-	Sha             string
-	Labels          []string
-	State           string
-	BuildStatus     string
-	BuildConclusion string
-	BuildLink       string
-	URL             string
-	CreatedAt       time.Time
+	RepoOwner string
+	RepoName  string
+	FullName  string
+	Number    int
+	Username  string
+	Ref       string
+	Sha       string
+	Labels    []string
+	State     string
+	URL       string
+	CreatedAt time.Time
 }
 
 // ToJSON converts to json

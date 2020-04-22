@@ -5,36 +5,14 @@
   "GitHubWebhookSecret": "",
   "Org": "",
   "Username": "",
-  "Repositories": [
-    {
-      "Owner": "",
-      "Name": "",
-      "BuildStatusContext": "",
-      "JenkinsServer": "jenkins",
-      "JobName": "",
-      "InstanceSetupUpgradeScript": "",
-      "InstanceSetupScript": ""
-    }
-  ],
   "SetupSpinmintTag": "",
-  "SetupSpinmintMessage": "",
   "SetupSpinmintDoneMessage": "",
   "SetupSpinmintFailedMessage": "",
   "DestroyedSpinmintMessage": "",
-  "DestroyedExpirationSpinmintMessage": "",
   "SpinmintsUseHttps": false,
   "SetupSpinmintUpgradeTag": "",
   "SetupSpinmintUpgradeMessage": "",
   "SetupSpinmintUpgradeDoneMessage": "",
-  "BlacklistPaths": [],
-  "PrLabels": [],
-  "JenkinsCredentials": {
-    "jenkins": {
-      "URL": "",
-      "Username": "",
-      "APIToken": ""
-    }
-  },
   "MattermostWebhookURL": "",
   "MattermostWebhookFooter": "",
   "LogSettings": {

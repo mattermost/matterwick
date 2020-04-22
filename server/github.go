@@ -76,36 +76,6 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 
 	client := newGithubClient(s.Config.GithubAccessToken)
 
-	repo, ok := GetRepository(s.Config.Repositories, pr.RepoOwner, pr.RepoName)
-	if ok && repo.BuildStatusContext != "" {
-		combined, _, err := client.Repositories.GetCombinedStatus(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, status := range combined.Statuses {
-			if *status.Context == repo.BuildStatusContext {
-				pr.BuildStatus = *status.State
-				pr.BuildLink = *status.TargetURL
-				break
-			}
-		}
-
-		// for the repos using circleci we have the checks now
-		checks, _, err := client.Checks.ListCheckRunsForRef(context.Background(), pr.RepoOwner, pr.RepoName, pr.Sha, nil)
-		if err != nil {
-			return nil, err
-		}
-		for _, status := range checks.CheckRuns {
-			if *status.Name == repo.BuildStatusContext {
-				pr.BuildStatus = status.GetStatus()
-				pr.BuildConclusion = status.GetConclusion()
-				pr.BuildLink = status.GetHTMLURL()
-				break
-			}
-		}
-
-	}
-
 	labels, _, err := client.Issues.ListLabelsByIssue(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
 	if err != nil {
 		return nil, err

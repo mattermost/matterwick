@@ -93,7 +93,7 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 	// Old comment created by Mattermod user for test server deletion will be deleted here
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username &&
-			strings.Contains(*comment.Body, s.Config.DestroyedSpinmintMessage) || strings.Contains(*comment.Body, s.Config.DestroyedExpirationSpinmintMessage) {
+			strings.Contains(*comment.Body, s.Config.DestroyedSpinmintMessage) {
 			mlog.Info("Removing old server deletion comment with ID", mlog.Int64("ID", *comment.ID))
 			_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 			if err != nil {
@@ -101,20 +101,10 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 			}
 		}
 	}
-
-	for _, label := range s.Config.PrLabels {
-		mlog.Info("looking for label", mlog.String("label", label.Label))
-		finalMessage := strings.Replace(label.Message, "USERNAME", pr.Username, -1)
-		if label.Label == addedLabel && !messageByUserContains(comments, s.Config.Username, finalMessage) {
-			mlog.Info("Posted message for label on PR: ", mlog.String("label", label.Label), mlog.Int("pr", pr.Number))
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, finalMessage)
-		}
-	}
-
 }
 
 func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest) {
-	serverMessages := []string{s.Config.SetupSpinmintMessage,
+	serverMessages := []string{
 		s.Config.SetupSpinmintFailedMessage,
 		"Spinmint test server created",
 		"Spinmint upgrade test server created",
@@ -125,8 +115,6 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Mattermost test server created!",
 		"Mattermost test server updated!",
 		"Failed to create mattermost installation",
-		"Kubernetes cluster created",
-		"Failed to create the k8s cluster",
 		"Creating a new SpinWick test server using Mattermost Cloud.",
 		"Please wait while a new kubernetes cluster is created for your SpinWick",
 	}
