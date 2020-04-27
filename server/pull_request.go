@@ -43,8 +43,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 				s.sendGitHubComment(onwer, repoName, prNumber, "Creating a new SpinWick test server using Mattermost Cloud.")
 				s.handleCreateSpinWick(pr, "miniSingleton", false)
 			case s.Config.SetupSpinWickHA:
-				s.sendGitHubComment(onwer, repoName, prNumber, "Creating a new HA SpinWick test server using Mattermost Cloud.")
-				s.handleCreateSpinWick(pr, "miniHA", true)
+				// TODO: Temporary for a fix, cpanato to review the EE pipeline to check if the image are being build with the sha commit
+				s.sendGitHubComment(onwer, repoName, prNumber, "HA SpinWick test server is temporary disabled.\nRemoving the label `Setup HA Cloud Test Server`.")
+				s.removeLabel(pr.RepoOwner, pr.RepoName, pr.Number, label)
+				// s.sendGitHubComment(onwer, repoName, prNumber, "Creating a new HA SpinWick test server using Mattermost Cloud.")
+				// s.handleCreateSpinWick(pr, "miniHA", true)
 			default:
 				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", label))
 			}

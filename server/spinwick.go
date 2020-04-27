@@ -66,7 +66,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		Aborted:        false,
 	}
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -81,8 +81,11 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	defer cancel()
 	// set the version to master
 	version := "master"
+	image := "mattermost/mattermost-enterprise-edition"
 	// if is server or webapp then set version to the PR git commit hash
 	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
+		// TODO: Temporary for a fix, cpanato to review the EE pipeline to check if the image are being build with the sha commit
+		image := "mattermost/mattermost-team-edition"
 		reg, errDocker := s.Builds.dockerRegistryClient(s)
 		if errDocker != nil {
 			return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
@@ -90,7 +93,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
 
-		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr)
+		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
 		if errImage != nil {
 			return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
 		}
@@ -103,6 +106,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:  ownerID,
 		Version:  version,
+		Image:    image,
 		DNS:      fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:     size,
 		Affinity: "multitenant",
@@ -180,7 +184,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 	}
 
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	id, image, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -214,13 +218,14 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	pr, err = s.Builds.waitForImage(ctx, s, reg, pr)
+	pr, err = s.Builds.waitForImage(ctx, s, reg, pr, image)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
 
-	upgradeRequest := &cloudModel.UpgradeInstallationRequest{
+	upgradeRequest := &cloudModel.UpdateInstallationRequest{
 		Version: s.Builds.getInstallationVersion(pr),
+		Image:   image,
 	}
 	if withLicense {
 		upgradeRequest.License = s.Config.SpinWickHALicense
@@ -233,7 +238,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
-	installation, err := cloudClient.GetInstallation(request.InstallationID)
+	installation, err := cloudClient.GetInstallation(request.InstallationID, &cloudModel.GetInstallationRequest{})
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get installation")).ShouldReportError()
 	}
@@ -303,7 +308,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
-	id, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
