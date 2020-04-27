@@ -22,6 +22,6 @@ func (b *MockedBuilds) dockerRegistryClient(s *Server) (*registry.Registry, erro
 	return nil, nil
 }
 
-func (b *MockedBuilds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest) (*model.PullRequest, error) {
+func (b *MockedBuilds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest, imageToCheck string) (*model.PullRequest, error) {
 	return pr, nil
 }

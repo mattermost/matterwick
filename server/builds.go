@@ -19,7 +19,7 @@ type Builds struct{}
 type buildsInterface interface {
 	getInstallationVersion(pr *model.PullRequest) string
 	dockerRegistryClient(s *Server) (*registry.Registry, error)
-	waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest) (*model.PullRequest, error)
+	waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest, imageToCheck string) (*model.PullRequest, error)
 }
 
 func (b *Builds) getInstallationVersion(pr *model.PullRequest) string {
@@ -39,26 +39,25 @@ func (b *Builds) dockerRegistryClient(s *Server) (reg *registry.Registry, err er
 	return reg, nil
 }
 
-func (b *Builds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest) (*model.PullRequest, error) {
+func (b *Builds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest, imageToCheck string) (*model.PullRequest, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return pr, errors.New("timed out waiting for image to publish")
 		case <-time.After(30 * time.Second):
 			desiredTag := b.getInstallationVersion(pr)
-			image := "mattermost/mattermost-enterprise-edition"
 
-			_, err := reg.ManifestDigest(image, desiredTag)
+			_, err := reg.ManifestDigest(imageToCheck, desiredTag)
 			if err != nil && !strings.Contains(err.Error(), "status=404") {
 				return pr, errors.Wrap(err, "unable to fetch tag from docker registry")
 			}
 
 			if err == nil {
-				mlog.Info("docker tag found, image was uploaded", mlog.String("image", image), mlog.String("tag", desiredTag))
+				mlog.Info("docker tag found, image was uploaded", mlog.String("image", imageToCheck), mlog.String("tag", desiredTag))
 				return pr, nil
 			}
 
-			mlog.Info("docker tag for the build not found. waiting a bit more...", mlog.String("image", image), mlog.String("tag", desiredTag), mlog.String("repo", pr.RepoName), mlog.Int("number", pr.Number))
+			mlog.Info("docker tag for the build not found. waiting a bit more...", mlog.String("image", imageToCheck), mlog.String("tag", desiredTag), mlog.String("repo", pr.RepoName), mlog.Int("number", pr.Number))
 		}
 	}
 }
