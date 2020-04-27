@@ -85,7 +85,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	// if is server or webapp then set version to the PR git commit hash
 	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
 		// TODO: Temporary for a fix, cpanato to review the EE pipeline to check if the image are being build with the sha commit
-		image := "mattermost/mattermost-team-edition"
+		image = "mattermost/mattermost-team-edition"
 		reg, errDocker := s.Builds.dockerRegistryClient(s)
 		if errDocker != nil {
 			return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
