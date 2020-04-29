@@ -24,7 +24,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Server is the mattermod server.
+// Server is the MatterWick server.
 type Server struct {
 	Config *MatterwickConfig
 	Router *mux.Router
@@ -44,7 +44,7 @@ const (
 
 	// buildOverride overrides the buildsInterface of the server for development
 	// and testing.
-	buildOverride = "MATTERMOD_BUILD_OVERRIDE"
+	buildOverride = "MATTERWICK_BUILD_OVERRIDE"
 )
 
 // New returns a new server with the desired configuration
@@ -69,7 +69,7 @@ func New(config *MatterwickConfig) *Server {
 
 // Start starts a server
 func (s *Server) Start() {
-	mlog.Info("Starting Mattermod Server")
+	mlog.Info("Starting MatterWick Server")
 
 	rand.Seed(time.Now().Unix())
 
@@ -89,7 +89,7 @@ func (s *Server) Start() {
 
 // Stop stops a server
 func (s *Server) Stop() {
-	mlog.Info("Stopping Mattermod")
+	mlog.Info("Stopping MatterWick")
 	manners.Close()
 }
 

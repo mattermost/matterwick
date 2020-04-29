@@ -90,7 +90,7 @@ func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
 		return
 	}
 
-	// Old comment created by Mattermod user for test server deletion will be deleted here
+	// Old comment created by MatterWick user for test server deletion will be deleted here
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username &&
 			strings.Contains(*comment.Body, s.Config.DestroyedSpinmintMessage) {
@@ -129,7 +129,7 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 					mlog.Info("Removing old comment with ID", mlog.Int64("ID", *comment.ID))
 					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
-						mlog.Error("Unable to remove old Mattermod comment", mlog.Err(err))
+						mlog.Error("Unable to remove old MatterWick comment", mlog.Err(err))
 					}
 					break
 				}

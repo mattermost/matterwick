@@ -75,6 +75,17 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 	request.InstallationID = id
 
+	// Remove old message to reduce the amount of similar messages and avoid confusion
+	serverNewCommitMessages := []string{
+		"Test server destroyed",
+	}
+	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
+	if errComments != nil {
+		mlog.Error("pr_error", mlog.Err(err))
+	} else {
+		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
+	}
+
 	mlog.Info("No SpinWick found for this PR. Creating a new one.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
@@ -354,7 +365,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "unable to make installation delete request to provisioning server")).ShouldReportError()
 	}
 
-	// Old comments created by Mattermod user will be deleted here.
+	// Old comments created by MatterWick user will be deleted here.
 	s.commentLock.Lock()
 	defer s.commentLock.Unlock()
 
@@ -609,7 +620,7 @@ func (s *Server) isSpinWickHALabel(labels []string) bool {
 }
 
 func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComment, serverMessages []string, pr *model.PullRequest) {
-	mlog.Info("Removing old spinwick Mattermod comments")
+	mlog.Info("Removing old spinwick MatterWick comments")
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username {
 			for _, message := range serverMessages {
@@ -617,7 +628,7 @@ func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComm
 					mlog.Info("Removing old spinwick comment with ID", mlog.Int64("ID", *comment.ID))
 					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
-						mlog.Error("Unable to remove old spinwick Mattermod comment", mlog.Err(err))
+						mlog.Error("Unable to remove old spinwick MatterWick comment", mlog.Err(err))
 					}
 					break
 				}
