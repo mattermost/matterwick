@@ -29,6 +29,7 @@ func (s *Server) sendToWebhook(webhookRequest *WebhookRequest, url string) error
 		return err
 	}
 
+	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -36,7 +37,7 @@ func (s *Server) sendToWebhook(webhookRequest *WebhookRequest, url string) error
 
 	if response.StatusCode != http.StatusOK {
 		contents, _ := ioutil.ReadAll(response.Body)
-		return fmt.Errorf("Received non-200 status code when posting to Mattermost: %v", contents)
+		return fmt.Errorf("Received non-200 status code when posting to Mattermost: %v", string(contents))
 	}
 
 	return nil

@@ -20,7 +20,7 @@ func (s *Server) logErrorToMattermost(msg string, args ...interface{}) {
 		webhookMessage += "\n---\n" + s.Config.MattermostWebhookFooter
 	}
 
-	webhookRequest := &WebhookRequest{Username: "Mattermod", Text: webhookMessage}
+	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: webhookMessage}
 
 	if err := s.sendToWebhook(webhookRequest, s.Config.MattermostWebhookURL); err != nil {
 		mlog.Error("Unable to post to Mattermost webhook", mlog.Err(err))
@@ -47,7 +47,7 @@ func (s *Server) logPrettyErrorToMattermost(msg string, pr *model.PullRequest, e
 	}
 	fullMessage = fullMessage + s.Config.MattermostWebhookFooter
 
-	webhookRequest := &WebhookRequest{Username: "Mattermod", Text: fullMessage}
+	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: fullMessage}
 
 	if err := s.sendToWebhook(webhookRequest, s.Config.MattermostWebhookURL); err != nil {
 		mlog.Error("Unable to post to Mattermost webhook", mlog.Err(err))
