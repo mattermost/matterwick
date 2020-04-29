@@ -82,22 +82,39 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	// set the version to master
 	version := "master"
 	image := "mattermost/mattermost-enterprise-edition"
-	// if is server or webapp then set version to the PR git commit hash
-	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
-		// TODO: Temporary for a fix, cpanato to review the EE pipeline to check if the image are being build with the sha commit
-		if pr.RepoName == "mattermost-server" {
-			image = "mattermost/mattermost-team-edition"
-		}
-		reg, errDocker := s.Builds.dockerRegistryClient(s)
-		if errDocker != nil {
-			return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
-		}
 
+	reg, errDocker := s.Builds.dockerRegistryClient(s)
+	if errDocker != nil {
+		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
+	}
+	// if is server or webapp then set version to the PR git commit hash
+	if pr.RepoName == "mattermost-webapp" {
 		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
 
+		// Waiting for Enterprise Image
 		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
 		if errImage != nil {
 			return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+		}
+
+		version = s.Builds.getInstallationVersion(prNew)
+	} else if pr.RepoName == "mattermost-server" {
+		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
+
+		ctxEnterprise, cancelEnterprise := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancelEnterprise()
+		// Waiting for Enterprise Image
+		prNew, errImage := s.Builds.waitForImage(ctxEnterprise, s, reg, pr, image)
+		if errImage != nil {
+			mlog.Warn("Did not find the EE image, fallback to TE", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
+			//fallback to TE
+			image := "mattermost/mattermost-team-edition"
+			prNew, errImage = s.Builds.waitForImage(ctxEnterprise, s, reg, pr, image)
+			if errImage != nil {
+				mlog.Warn("Did not find TE image", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
+				return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
+			}
 		}
 
 		version = s.Builds.getInstallationVersion(prNew)
