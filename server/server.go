@@ -175,9 +175,9 @@ func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	payloadClone := *payload
+	mlog.Debug("Received cloud webhook payload", mlog.Int("channels", len(s.webhookChannels)), mlog.String("payload", fmt.Sprintf("%+v", payloadClone)))
 
 	s.webhookChannelsLock.Lock()
-	mlog.Debug("Received cloud webhook payload", mlog.Int("channels", len(s.webhookChannels)), mlog.String("payload", fmt.Sprintf("%+v", payloadClone)))
 	for _, channel := range s.webhookChannels {
 		go func(ch chan cloudModel.WebhookPayload, p cloudModel.WebhookPayload) {
 			select {
