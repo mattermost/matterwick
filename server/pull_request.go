@@ -121,6 +121,7 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Creating a new SpinWick test server using Mattermost Cloud.",
 		"Please wait while a new kubernetes cluster is created for your SpinWick",
 		"Mattermost test server updated with git commit",
+		"Enterprise Edition Image not available",
 	}
 
 	mlog.Info("Removing old Matterwick comments")

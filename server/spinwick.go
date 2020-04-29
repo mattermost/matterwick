@@ -109,7 +109,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 			mlog.Warn("Did not find the EE image, fallback to TE", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
 			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
 			//fallback to TE
-			image := "mattermost/mattermost-team-edition"
+			image = "mattermost/mattermost-team-edition"
 			ctxTeam, cancelTeam := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancelTeam()
 			prNew, errImage = s.Builds.waitForImage(ctxTeam, s, reg, pr, image)

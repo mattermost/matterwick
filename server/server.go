@@ -147,7 +147,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	case "issue_comment":
 		eventIssueEventComment := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
 		if !eventIssueEventComment.GetIssue().IsPullRequest() {
-			// if not a pull request dont need to set the status
+			// if not a pull request dont need to continue
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
