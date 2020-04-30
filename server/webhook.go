@@ -17,7 +17,7 @@ type WebhookRequest struct {
 	Text     string `json:"text"`
 }
 
-func (s *Server) sendToWebhook(webhookRequest *WebhookRequest, url string) error {
+func (s *Server) sendToWebhook(webhookRequest *WebhookRequest) error {
 	b, err := json.Marshal(webhookRequest)
 	if err != nil {
 		return err
