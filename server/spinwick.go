@@ -140,8 +140,27 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 	mlog.Info("Provisioning Server - Installation request")
 
+	headers := map[string]string{
+		"x-api-key": s.Config.AWSAPIKey,
+	}
+	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+
+	var groupID string
+	var group *cloudModel.Group
+	if len(s.Config.CloudGroupID) != 0 {
+		group, err = cloudClient.GetGroup(s.Config.CloudGroupID)
+		if err != nil {
+			return request.WithError(errors.Wrapf(err, "unable to get group with ID %s", s.Config.CloudGroupID))
+		}
+		if group == nil {
+			return request.WithError(fmt.Errorf("group with ID %s does not exist", s.Config.CloudGroupID))
+		}
+		groupID = s.Config.CloudGroupID
+	}
+
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:  ownerID,
+		GroupID:  groupID,
 		Version:  version,
 		Image:    image,
 		DNS:      fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
@@ -152,10 +171,6 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		installationRequest.License = s.Config.SpinWickHALicense
 	}
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
 	installation, err := cloudClient.CreateInstallation(installationRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).ShouldReportError()
@@ -523,20 +538,8 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	config.TeamSettings.ExperimentalViewArchivedChannels = NewBool(true)
 	config.PluginSettings.EnableUploads = NewBool(true)
 	config.ServiceSettings.EnableTesting = NewBool(true)
-	// removed in 5.16
-	//config.ServiceSettings.ExperimentalLdapGroupSync = NewBool(true)
 	config.ServiceSettings.EnableDeveloper = NewBool(true)
 	config.LogSettings.FileLevel = NewString("INFO")
-	config.EmailSettings.FeedbackName = NewString("SpinWick Feedback")
-	config.EmailSettings.FeedbackEmail = NewString("feedback@mattermost.com")
-	config.EmailSettings.ReplyToAddress = NewString("feedback@mattermost.com")
-	config.EmailSettings.SMTPUsername = NewString(s.Config.AWSEmailAccessKey)
-	config.EmailSettings.SMTPPassword = NewString(s.Config.AWSEmailSecretKey)
-	config.EmailSettings.SMTPServer = NewString(s.Config.AWSEmailEndpoint)
-	config.EmailSettings.SMTPPort = NewString("465")
-	config.EmailSettings.EnableSMTPAuth = NewBool(true)
-	config.EmailSettings.ConnectionSecurity = NewString("TLS")
-	config.EmailSettings.SendEmailNotifications = NewBool(true)
 	config.LdapSettings.Enable = NewBool(true)
 	config.LdapSettings.EnableSync = NewBool(true)
 	config.LdapSettings.LdapServer = NewString("ldap.forumsys.com")

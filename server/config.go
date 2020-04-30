@@ -32,6 +32,7 @@ type MatterwickConfig struct {
 	AWSEmailSecretKey string
 	AWSEmailEndpoint  string
 
+	CloudGroupID               string
 	SetupSpinmintMessage       string
 	SetupSpinmintFailedMessage string
 	DestroyedSpinmintMessage   string

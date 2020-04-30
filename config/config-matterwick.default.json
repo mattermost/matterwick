@@ -5,6 +5,7 @@
   "GitHubWebhookSecret": "",
   "Org": "",
   "Username": "",
+  "CloudGroupID": "",
   "SetupSpinmintTag": "",
   "SetupSpinmintDoneMessage": "",
   "SetupSpinmintFailedMessage": "",
