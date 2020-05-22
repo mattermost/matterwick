@@ -140,6 +140,25 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 	mlog.Info("Provisioning Server - Installation request")
 
+	headers := map[string]string{
+		"x-api-key": s.Config.AWSAPIKey,
+	}
+	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+
+	// TODO: (cpanato) add the group permission in the AUTH
+	// var groupID string
+	// var group *cloudModel.Group
+	// if len(s.Config.CloudGroupID) != 0 {
+	// 	group, err = cloudClient.GetGroup(s.Config.CloudGroupID)
+	// 	if err != nil {
+	// 		return request.WithError(errors.Wrapf(err, "unable to get group with ID %s", s.Config.CloudGroupID))
+	// 	}
+	// 	if group == nil {
+	// 		return request.WithError(fmt.Errorf("group with ID %s does not exist", s.Config.CloudGroupID))
+	// 	}
+	// 	groupID = s.Config.CloudGroupID
+	// }
+
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:  ownerID,
 		Version:  version,
@@ -152,10 +171,11 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		installationRequest.License = s.Config.SpinWickHALicense
 	}
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
+	// TODO: (cpanato) Remove this when the above code comment is fixed
+	if len(s.Config.CloudGroupID) != 0 {
+		installationRequest.GroupID = s.Config.CloudGroupID
 	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+
 	installation, err := cloudClient.CreateInstallation(installationRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).ShouldReportError()
@@ -512,48 +532,6 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	_, response = client.AddTeamMember(firstTeam.Id, testUser.Id)
 	if response.StatusCode != 201 {
 		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
-	}
-
-	config, response := client.GetConfig()
-	if response.StatusCode != 200 {
-		return fmt.Errorf("error getting mattermost config: status code = %d, message = %s", response.StatusCode, response.Error.Message)
-	}
-
-	config.TeamSettings.EnableOpenServer = NewBool(true)
-	config.TeamSettings.ExperimentalViewArchivedChannels = NewBool(true)
-	config.PluginSettings.EnableUploads = NewBool(true)
-	config.ServiceSettings.EnableTesting = NewBool(true)
-	// removed in 5.16
-	//config.ServiceSettings.ExperimentalLdapGroupSync = NewBool(true)
-	config.ServiceSettings.EnableDeveloper = NewBool(true)
-	config.LogSettings.FileLevel = NewString("INFO")
-	config.EmailSettings.FeedbackName = NewString("SpinWick Feedback")
-	config.EmailSettings.FeedbackEmail = NewString("feedback@mattermost.com")
-	config.EmailSettings.ReplyToAddress = NewString("feedback@mattermost.com")
-	config.EmailSettings.SMTPUsername = NewString(s.Config.AWSEmailAccessKey)
-	config.EmailSettings.SMTPPassword = NewString(s.Config.AWSEmailSecretKey)
-	config.EmailSettings.SMTPServer = NewString(s.Config.AWSEmailEndpoint)
-	config.EmailSettings.SMTPPort = NewString("465")
-	config.EmailSettings.EnableSMTPAuth = NewBool(true)
-	config.EmailSettings.ConnectionSecurity = NewString("TLS")
-	config.EmailSettings.SendEmailNotifications = NewBool(true)
-	config.LdapSettings.Enable = NewBool(true)
-	config.LdapSettings.EnableSync = NewBool(true)
-	config.LdapSettings.LdapServer = NewString("ldap.forumsys.com")
-	config.LdapSettings.BaseDN = NewString("dc=example,dc=com")
-	config.LdapSettings.BindUsername = NewString("cn=read-only-admin,dc=example,dc=com")
-	config.LdapSettings.BindPassword = NewString("password")
-	config.LdapSettings.GroupDisplayNameAttribute = NewString("cn")
-	config.LdapSettings.GroupIdAttribute = NewString("entryUUID")
-	config.LdapSettings.EmailAttribute = NewString("mail")
-	config.LdapSettings.UsernameAttribute = NewString("uid")
-	config.LdapSettings.IdAttribute = NewString("uid")
-	config.LdapSettings.LoginIdAttribute = NewString("uid")
-
-	// UpdateConfig
-	_, response = client.UpdateConfig(config)
-	if response.StatusCode != 200 {
-		return fmt.Errorf("error updating mattermost config: status code = %d, message = %s", response.StatusCode, response.Error.Message)
 	}
 
 	mlog.Info("Mattermost configuration complete")

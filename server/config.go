@@ -28,10 +28,8 @@ type MatterwickConfig struct {
 	ProvisionerServer string
 	AWSAPIKey         string
 	DNSNameTestServer string
-	AWSEmailAccessKey string
-	AWSEmailSecretKey string
-	AWSEmailEndpoint  string
 
+	CloudGroupID               string
 	SetupSpinmintMessage       string
 	SetupSpinmintFailedMessage string
 	DestroyedSpinmintMessage   string
