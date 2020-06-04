@@ -14,7 +14,6 @@ import (
 )
 
 func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
-	onwer := event.GetRepo().GetOwner().GetLogin()
 	repoName := event.GetRepo().GetName()
 	prNumber := event.GetNumber()
 	label := event.GetLabel().GetName()
