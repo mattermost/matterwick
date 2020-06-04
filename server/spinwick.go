@@ -25,6 +25,13 @@ import (
 )
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool) {
+
+	if pr.State == "closed" {
+		mlog.Info("PR is closed/merged, will not create a test server", mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number))
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "PR is closed/merged not creating a SpinWick Test server")
+		return
+	}
+
 	request := s.createSpinWick(pr, size, withLicense)
 	if request.Error != nil {
 		if request.Aborted {
