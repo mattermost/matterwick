@@ -32,6 +32,12 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		return
 	}
 
+	if withLicense {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
+	} else {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new SpinWick test server using Mattermost Cloud.")
+	}
+
 	request := s.createSpinWick(pr, size, withLicense)
 	if request.Error != nil {
 		if request.Aborted {
