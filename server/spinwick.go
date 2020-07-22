@@ -5,11 +5,13 @@ package server
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +24,13 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"github.com/pkg/errors"
+
+	// K8s packages for CWS
+	core "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool) {
@@ -32,38 +41,121 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		return
 	}
 
-	if withLicense {
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
-	} else {
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new SpinWick test server using Mattermost Cloud.")
+	// for Mattermost webapp and mattermost server, use legacy spinwick setup
+	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
+		if withLicense {
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
+		} else {
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new SpinWick test server using Mattermost Cloud.")
+		}
+
+		request := s.createSpinWick(pr, size, withLicense)
+		if request.Error != nil {
+			if request.Aborted {
+				mlog.Warn("Aborted creation of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			} else {
+				mlog.Error("Failed to create SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			}
+			comments, err := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
+			if err != nil {
+				mlog.Error("Error getting comments", mlog.Err(err))
+			} else {
+				s.removeOldComments(comments, pr)
+			}
+			for _, label := range pr.Labels {
+				if s.isSpinWickLabel(label) {
+					s.removeLabel(pr.RepoOwner, pr.RepoName, pr.Number, label)
+				}
+			}
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.SetupSpinmintFailedMessage)
+
+			if request.ReportError {
+				additionalFields := map[string]string{
+					"Installation ID": request.InstallationID,
+				}
+				s.logPrettyErrorToMattermost("[ SpinWick ] Creation Failed", pr, request.Error, additionalFields)
+			}
+		}
+	} else if pr.RepoName == "github-webhooks" {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test customer web server")
+		mlog.Info("This is a github-webhooks test")
+		request := s.createCWSSpinWick(pr)
+
+		if request.Error != nil {
+			return
+		}
 	}
 
-	request := s.createSpinWick(pr, size, withLicense)
-	if request.Error != nil {
-		if request.Aborted {
-			mlog.Warn("Aborted creation of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		} else {
-			mlog.Error("Failed to create SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		}
-		comments, err := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
-		if err != nil {
-			mlog.Error("Error getting comments", mlog.Err(err))
-		} else {
-			s.removeOldComments(comments, pr)
-		}
-		for _, label := range pr.Labels {
-			if s.isSpinWickLabel(label) {
-				s.removeLabel(pr.RepoOwner, pr.RepoName, pr.Number, label)
-			}
-		}
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.SetupSpinmintFailedMessage)
+}
 
-		if request.ReportError {
-			additionalFields := map[string]string{
-				"Installation ID": request.InstallationID,
-			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Creation Failed", pr, request.Error, additionalFields)
-		}
+func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
+	request := &spinwick.Request{
+		InstallationID: "n/a",
+		Error:          nil,
+		ReportError:    false,
+		Aborted:        false,
+	}
+	var kubeconfig *string
+	if home := homedir.HomeDir(); home != "" { // check if machine has home directory.
+		// read kubeconfig flag. if not provided use config file $HOME/.kube/config
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	} else {
+		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	}
+	flag.Parse()
+
+	// build configuration from the config file.
+	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	if err != nil {
+		panic(err)
+	}
+	// create kubernetes clientset. this clientset can be used to create,delete,patch,list etc for the kubernetes resources
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err)
+	}
+
+	// build the pod defination we want to deploy
+	pod := getPodObject()
+
+	// now create the pod in kubernetes cluster using the clientset
+	pod, err = clientset.CoreV1().Pods(pod.Namespace).Create(pod)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Pod created successfully...")
+
+	// Connect to kubernetes with the kubernetes client
+	// Check for existence of a pod running this PR's version of CWS
+	// Load a template manifest and populate values
+	// Apply the template manifest
+	// Call out to route53 in order to add a DNS entry
+
+	return request
+}
+
+func getPodObject() *core.Pod {
+	return &core.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-test-pod",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app": "demo",
+			},
+		},
+		Spec: core.PodSpec{
+			Containers: []core.Container{
+				{
+					Name:            "busybox",
+					Image:           "busybox",
+					ImagePullPolicy: core.PullIfNotPresent,
+					Command: []string{
+						"sleep",
+						"3600",
+					},
+				},
+			},
+		},
 	}
 }
 

@@ -24,6 +24,10 @@ WORKDIR /matterwick/
 
 RUN  apk update && apk add ca-certificates
 
+RUN apk add --no-cache python py-pip
+
+RUN pip install awscli
+
 COPY --from=build /matterwick/build/_output/bin/matterwick /matterwick/matterwick
 COPY --from=build /matterwick/build/bin /usr/local/bin
 
