@@ -4,19 +4,26 @@ go 1.14
 
 require (
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
+	github.com/golang/protobuf v1.3.3 // indirect
 	github.com/google/go-github/v28 v28.1.1
+	
 	github.com/gorilla/mux v1.7.4
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
+	github.com/jetstack/cert-manager v0.14.0 // indirect
+	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattermost/ldap v3.0.4+incompatible // indirect
-	github.com/mattermost/mattermost-cloud v0.18.2
+	github.com/mattermost/mattermost-cloud v0.22.0
 	github.com/mattermost/mattermost-server/v5 v5.20.0-rc4
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron/v3 v3.0.0
-	github.com/stretchr/testify v1.5.1
+	github.com/stretchr/testify v1.6.1
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/sys v0.0.0-20200212091648-12a6c2dcc1e4 // indirect
 	k8s.io/api v0.17.7
 	k8s.io/apimachinery v0.17.7
 	k8s.io/client-go v12.0.0+incompatible
+	k8s.io/utils v0.0.0-20200124190032-861946025e34 // indirect
+	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
 replace (
@@ -45,4 +52,5 @@ replace (
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.17.7
 	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.17.7
 	k8s.io/sample-controller => k8s.io/sample-controller v0.17.7
+    github.com/googleapis/gnostic => github.com/googleapis/gnostic v0.4.0
 )

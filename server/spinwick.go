@@ -4,10 +4,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
-	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,10 +27,9 @@ import (
 	"github.com/pkg/errors"
 
 	// K8s packages for CWS
-	core "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/mattermost/mattermost-cloud/internal/tools/k8s"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/util/homedir"
 )
 
@@ -95,34 +95,41 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		ReportError:    false,
 		Aborted:        false,
 	}
-	var kubeconfig *string
-	if home := homedir.HomeDir(); home != "" { // check if machine has home directory.
-		// read kubeconfig flag. if not provided use config file $HOME/.kube/config
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
-	flag.Parse()
+	// var kubeconfig *string
 
+	kc := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), nil)
+	// kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+
+	file := k8s.ManifestFile{
+		Path:            "templates/cws/cws_deployment.yaml",
+		DeployNamespace: "default",
+	}
+
+	err := kc.CreateFromFile(file, "test")
+	if err != nil {
+		mlog.Error("Error creating pod")
+		return request
+	}
+	// flag.Parse()
 	// build configuration from the config file.
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		panic(err)
-	}
+	// config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	// if err != nil {
+	// 	panic(err)
+	// }
 	// create kubernetes clientset. this clientset can be used to create,delete,patch,list etc for the kubernetes resources
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err)
-	}
+	// clientset, err := kubernetes.NewForConfig(config)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	// build the pod defination we want to deploy
-	pod := getPodObject()
+	// pod := getPodObject()
 
 	// now create the pod in kubernetes cluster using the clientset
-	pod, err = clientset.CoreV1().Pods(pod.Namespace).Create(pod)
-	if err != nil {
-		panic(err)
-	}
+	// pod, err = clientset.CoreV1().Pods(pod.Namespace).Create(pod)
+	// if err != nil {
+	// 	panic(err)
+	// }
 	fmt.Println("Pod created successfully...")
 
 	// Connect to kubernetes with the kubernetes client
@@ -134,30 +141,128 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	return request
 }
 
-func getPodObject() *core.Pod {
-	return &core.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-test-pod",
-			Namespace: "default",
-			Labels: map[string]string{
-				"app": "demo",
-			},
-		},
-		Spec: core.PodSpec{
-			Containers: []core.Container{
-				{
-					Name:            "busybox",
-					Image:           "busybox",
-					ImagePullPolicy: core.PullIfNotPresent,
-					Command: []string{
-						"sleep",
-						"3600",
-					},
-				},
-			},
-		},
+// CreateFromFile will create the Kubernetes resources in the provided file.
+//
+// The current behavior leads to the create being attempted on all resources in
+// the provided file. An error is returned if any of the create actions failed.
+// This process equates to running `kubectl create -f FILENAME`.
+func CreateFromFile(file string, installationName string) error {
+	data, err := ioutil.ReadFile(file)
+	if err != nil {
+		return err
 	}
+
+	var failures int
+	resources := bytes.Split(data, []byte("---"))
+	for _, resource := range resources {
+		if len(resource) == 0 {
+			continue
+		}
+		decode := scheme.Codecs.UniversalDeserializer().Decode
+
+		obj, _, err := decode(resource, nil, nil)
+		if err != nil {
+			mlog.Error("unable to decode k8s resource")
+			failures++
+			continue
+		}
+
+		// if installationName != "" && reflect.TypeOf(obj) == reflect.TypeOf(&networkingv1.NetworkPolicy{}) {
+		// 	kc.updateLabelsNetworkPolicy(obj.(*networkingv1.NetworkPolicy), installationName)
+		// }
+
+		// result, err := createFileResource(file, obj)
+		if err != nil {
+			mlog.Error("unable to create/update k8s resource")
+			failures++
+			continue
+		}
+
+		mlog.Info("Resource %q created!", result.GetName())
+	}
+
+	if failures > 0 {
+		return fmt.Errorf("encountered %d failures trying to update resources", failures)
+	}
+
+	return nil
 }
+
+// func (kc *KubeClient) createFileResource(deployNamespace string, obj interface{}) (metav1.Object, error) {
+// 	switch o := obj.(type) {
+// 	case *apiv1.ServiceAccount:
+// 		return kc.createOrUpdateServiceAccount(deployNamespace, obj.(*apiv1.ServiceAccount))
+// 	case *appsv1.Deployment:
+// 		return kc.createOrUpdateDeploymentV1(deployNamespace, obj.(*appsv1.Deployment))
+// 	case *appsbetav1.Deployment:
+// 		return kc.createOrUpdateDeploymentBetaV1(deployNamespace, obj.(*appsbetav1.Deployment))
+// 	case *appsv1beta2.Deployment:
+// 		return kc.createOrUpdateDeploymentBetaV2(deployNamespace, obj.(*appsv1beta2.Deployment))
+// 	case *rbacv1.RoleBinding:
+// 		return kc.createOrUpdateRoleBindingV1(deployNamespace, obj.(*rbacv1.RoleBinding))
+// 	case *rbacbetav1.RoleBinding:
+// 		return kc.createOrUpdateRoleBindingBetaV1(deployNamespace, obj.(*rbacbetav1.RoleBinding))
+// 	case *rbacv1.ClusterRole:
+// 		return kc.createOrUpdateClusterRoleV1(obj.(*rbacv1.ClusterRole))
+// 	case *rbacbetav1.ClusterRole:
+// 		return kc.createOrUpdateClusterRoleBetaV1(obj.(*rbacbetav1.ClusterRole))
+// 	case *rbacv1.Role:
+// 		return kc.createOrUpdateRoleV1(obj.(*rbacv1.Role))
+// 	case *rbacbetav1.Role:
+// 		return kc.createOrUpdateRoleBetaV1(obj.(*rbacbetav1.Role))
+// 	case *rbacv1.ClusterRoleBinding:
+// 		return kc.createOrUpdateClusterRoleBindingV1(obj.(*rbacv1.ClusterRoleBinding))
+// 	case *rbacbetav1.ClusterRoleBinding:
+// 		return kc.createOrUpdateClusterRoleBindingBetaV1(obj.(*rbacbetav1.ClusterRoleBinding))
+// 	case *apixv1beta1.CustomResourceDefinition:
+// 		return kc.createOrUpdateCustomResourceDefinition(obj.(*apixv1beta1.CustomResourceDefinition))
+// 	case *mmv1alpha1.ClusterInstallation:
+// 		return kc.createOrUpdateClusterInstallation(deployNamespace, obj.(*mmv1alpha1.ClusterInstallation))
+// 	case *apiv1.Secret:
+// 		return kc.CreateOrUpdateSecret(deployNamespace, obj.(*apiv1.Secret))
+// 	case *apiv1.ConfigMap:
+// 		return kc.createOrUpdateConfigMap(deployNamespace, obj.(*apiv1.ConfigMap))
+// 	case *apiv1.Service:
+// 		return kc.createOrUpdateService(deployNamespace, obj.(*apiv1.Service))
+// 	case *appsv1.StatefulSet:
+// 		return kc.createOrUpdateStatefulSet(deployNamespace, obj.(*appsv1.StatefulSet))
+// 	case *appsv1.DaemonSet:
+// 		return kc.createOrUpdateDaemonSetV1(deployNamespace, obj.(*appsv1.DaemonSet))
+// 	case *policyv1beta1.PodDisruptionBudget:
+// 		return kc.createOrUpdatePodDisruptionBudgetBetaV1(deployNamespace, obj.(*policyv1beta1.PodDisruptionBudget))
+// 	case *networkingv1.NetworkPolicy:
+// 		return kc.createOrUpdateNetworkPolicyV1(deployNamespace, obj.(*networkingv1.NetworkPolicy))
+// 	case *apiregistrationv1beta1.APIService:
+// 		return kc.createOrUpdateAPIServer(obj.(*apiregistrationv1beta1.APIService))
+// 	default:
+// 		return nil, fmt.Errorf("Error: unsupported k8s manifest type %T", o)
+// 	}
+// }
+
+// func getPodObject() *core.Pod {
+// 	return &core.Pod{
+// 		ObjectMeta: metav1.ObjectMeta{
+// 			Name:      "my-test-pod",
+// 			Namespace: "default",
+// 			Labels: map[string]string{
+// 				"app": "demo",
+// 			},
+// 		},
+// 		Spec: core.PodSpec{
+// 			Containers: []core.Container{
+// 				{
+// 					Name:            "busybox",
+// 					Image:           "busybox",
+// 					ImagePullPolicy: core.PullIfNotPresent,
+// 					Command: []string{
+// 						"sleep",
+// 						"3600",
+// 					},
+// 				},
+// 			},
+// 		},
+// 	}
+// }
 
 // createSpinwick creates a SpinWick with the following behavior:
 // - no cloud installation found = installation is created
@@ -385,12 +490,14 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
 
-	upgradeRequest := &cloudModel.UpdateInstallationRequest{
-		Version: s.Builds.getInstallationVersion(pr),
-		Image:   image,
+	installationVersion := s.Builds.getInstallationVersion(pr)
+
+	upgradeRequest := &cloudModel.PatchInstallationRequest{
+		Version: &installationVersion,
+		Image:   &image,
 	}
 	if withLicense {
-		upgradeRequest.License = s.Config.SpinWickHALicense
+		upgradeRequest.License = &s.Config.SpinWickHALicense
 	}
 
 	// Final upgrade check
@@ -404,13 +511,13 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get installation")).ShouldReportError()
 	}
-	if installation.Version == upgradeRequest.Version {
+	if installation.Version == *upgradeRequest.Version {
 		return request.WithError(errors.New("another process already updated the installation version. Aborting")).IntentionalAbort()
 	}
 
 	mlog.Info("Provisioning Server - Upgrade request", mlog.String("SHA", pr.Sha))
 
-	err = cloudClient.UpgradeInstallation(request.InstallationID, upgradeRequest)
+	_, err = cloudClient.UpdateInstallation(request.InstallationID, upgradeRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to make upgrade request to provisioning server")).ShouldReportError()
 	}

@@ -23,8 +23,13 @@ ENV MATTERWICK=/matterwick/matterwick \
 WORKDIR /matterwick/
 
 RUN  apk update && apk add ca-certificates
+ENV KUBECONFIG=/.kube/config
+RUN apk add --no-cache python py-pip curl
 
-RUN apk add --no-cache python py-pip
+# install kubectl
+RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl && \
+    chmod +x ./kubectl && \
+    mv ./kubectl /usr/local/bin/kubectl
 
 RUN pip install awscli
 
