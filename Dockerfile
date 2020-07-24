@@ -36,6 +36,8 @@ RUN pip install awscli
 COPY --from=build /matterwick/build/_output/bin/matterwick /matterwick/matterwick
 COPY --from=build /matterwick/build/bin /usr/local/bin
 
+COPY ./templates /matterwick/templates
+
 RUN  /usr/local/bin/user_setup
 
 EXPOSE 8077

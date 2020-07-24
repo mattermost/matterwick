@@ -4,16 +4,16 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
@@ -27,9 +27,10 @@ import (
 	"github.com/pkg/errors"
 
 	// K8s packages for CWS
-
-	"github.com/mattermost/mattermost-cloud/internal/tools/k8s"
-	"k8s.io/client-go/kubernetes/scheme"
+	"github.com/mattermost/mattermost-cloud/k8s"
+	log "github.com/sirupsen/logrus"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/homedir"
 )
 
@@ -78,8 +79,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		}
 	} else if pr.RepoName == "github-webhooks" {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test customer web server")
-		mlog.Info("This is a github-webhooks test")
-		request := s.createCWSSpinWick(pr)
+		request := s.createKubeSpinWick(pr)
 
 		if request.Error != nil {
 			return
@@ -88,48 +88,55 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 
 }
 
-func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
 		ReportError:    false,
 		Aborted:        false,
 	}
-	// var kubeconfig *string
 
-	kc := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), nil)
-	// kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	logger := log.WithField("test", "test2")
+	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
 
-	file := k8s.ManifestFile{
-		Path:            "templates/cws/cws_deployment.yaml",
-		DeployNamespace: "default",
-	}
+	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+	namespace, err := getOrCreateNamespace(kc, namespaceName)
 
-	err := kc.CreateFromFile(file, "test")
 	if err != nil {
-		mlog.Error("Error creating pod")
+		request.Error = err
+		mlog.Error("Error ocurred whilst creating namespace", mlog.Err(err))
 		return request
 	}
-	// flag.Parse()
-	// build configuration from the config file.
-	// config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// create kubernetes clientset. this clientset can be used to create,delete,patch,list etc for the kubernetes resources
-	// clientset, err := kubernetes.NewForConfig(config)
-	// if err != nil {
-	// 	panic(err)
-	// }
 
-	// build the pod defination we want to deploy
-	// pod := getPodObject()
+	deployment := Deployment{namespace.GetName(), "137b77f", "/matterwick/templates/cws-templates/cws_deployment" + namespace.GetName() + ".yaml"}
 
-	// now create the pod in kubernetes cluster using the clientset
-	// pod, err = clientset.CoreV1().Pods(pod.Namespace).Create(pod)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	template, err := template.ParseFiles("/matterwick/templates/cws-templates/cws_deployment.tmpl")
+	if err != nil {
+		mlog.Error("Error loading deployment template ", mlog.Err(err))
+	}
+
+	file, err := os.Create(deployment.DeployFilePath)
+	if err != nil {
+		mlog.Error("Error creating deployment file ", mlog.Err(err))
+	}
+
+	err = template.Execute(file, deployment)
+	if err != nil {
+		mlog.Error("Error executing template ", mlog.Err(err))
+	}
+	file.Close()
+
+	request.InstallationID = namespace.GetName()
+
+	deployFile := k8s.ManifestFile{
+		Path:            deployment.DeployFilePath,
+		DeployNamespace: deployment.Namespace,
+	}
+	err = kc.CreateFromFile(deployFile, "")
+	if err != nil {
+		mlog.Error("Error creating pod", mlog.Err(err))
+		return request
+	}
 	fmt.Println("Pod created successfully...")
 
 	// Connect to kubernetes with the kubernetes client
@@ -140,129 +147,6 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	return request
 }
-
-// CreateFromFile will create the Kubernetes resources in the provided file.
-//
-// The current behavior leads to the create being attempted on all resources in
-// the provided file. An error is returned if any of the create actions failed.
-// This process equates to running `kubectl create -f FILENAME`.
-func CreateFromFile(file string, installationName string) error {
-	data, err := ioutil.ReadFile(file)
-	if err != nil {
-		return err
-	}
-
-	var failures int
-	resources := bytes.Split(data, []byte("---"))
-	for _, resource := range resources {
-		if len(resource) == 0 {
-			continue
-		}
-		decode := scheme.Codecs.UniversalDeserializer().Decode
-
-		obj, _, err := decode(resource, nil, nil)
-		if err != nil {
-			mlog.Error("unable to decode k8s resource")
-			failures++
-			continue
-		}
-
-		// if installationName != "" && reflect.TypeOf(obj) == reflect.TypeOf(&networkingv1.NetworkPolicy{}) {
-		// 	kc.updateLabelsNetworkPolicy(obj.(*networkingv1.NetworkPolicy), installationName)
-		// }
-
-		// result, err := createFileResource(file, obj)
-		if err != nil {
-			mlog.Error("unable to create/update k8s resource")
-			failures++
-			continue
-		}
-
-		mlog.Info("Resource %q created!", result.GetName())
-	}
-
-	if failures > 0 {
-		return fmt.Errorf("encountered %d failures trying to update resources", failures)
-	}
-
-	return nil
-}
-
-// func (kc *KubeClient) createFileResource(deployNamespace string, obj interface{}) (metav1.Object, error) {
-// 	switch o := obj.(type) {
-// 	case *apiv1.ServiceAccount:
-// 		return kc.createOrUpdateServiceAccount(deployNamespace, obj.(*apiv1.ServiceAccount))
-// 	case *appsv1.Deployment:
-// 		return kc.createOrUpdateDeploymentV1(deployNamespace, obj.(*appsv1.Deployment))
-// 	case *appsbetav1.Deployment:
-// 		return kc.createOrUpdateDeploymentBetaV1(deployNamespace, obj.(*appsbetav1.Deployment))
-// 	case *appsv1beta2.Deployment:
-// 		return kc.createOrUpdateDeploymentBetaV2(deployNamespace, obj.(*appsv1beta2.Deployment))
-// 	case *rbacv1.RoleBinding:
-// 		return kc.createOrUpdateRoleBindingV1(deployNamespace, obj.(*rbacv1.RoleBinding))
-// 	case *rbacbetav1.RoleBinding:
-// 		return kc.createOrUpdateRoleBindingBetaV1(deployNamespace, obj.(*rbacbetav1.RoleBinding))
-// 	case *rbacv1.ClusterRole:
-// 		return kc.createOrUpdateClusterRoleV1(obj.(*rbacv1.ClusterRole))
-// 	case *rbacbetav1.ClusterRole:
-// 		return kc.createOrUpdateClusterRoleBetaV1(obj.(*rbacbetav1.ClusterRole))
-// 	case *rbacv1.Role:
-// 		return kc.createOrUpdateRoleV1(obj.(*rbacv1.Role))
-// 	case *rbacbetav1.Role:
-// 		return kc.createOrUpdateRoleBetaV1(obj.(*rbacbetav1.Role))
-// 	case *rbacv1.ClusterRoleBinding:
-// 		return kc.createOrUpdateClusterRoleBindingV1(obj.(*rbacv1.ClusterRoleBinding))
-// 	case *rbacbetav1.ClusterRoleBinding:
-// 		return kc.createOrUpdateClusterRoleBindingBetaV1(obj.(*rbacbetav1.ClusterRoleBinding))
-// 	case *apixv1beta1.CustomResourceDefinition:
-// 		return kc.createOrUpdateCustomResourceDefinition(obj.(*apixv1beta1.CustomResourceDefinition))
-// 	case *mmv1alpha1.ClusterInstallation:
-// 		return kc.createOrUpdateClusterInstallation(deployNamespace, obj.(*mmv1alpha1.ClusterInstallation))
-// 	case *apiv1.Secret:
-// 		return kc.CreateOrUpdateSecret(deployNamespace, obj.(*apiv1.Secret))
-// 	case *apiv1.ConfigMap:
-// 		return kc.createOrUpdateConfigMap(deployNamespace, obj.(*apiv1.ConfigMap))
-// 	case *apiv1.Service:
-// 		return kc.createOrUpdateService(deployNamespace, obj.(*apiv1.Service))
-// 	case *appsv1.StatefulSet:
-// 		return kc.createOrUpdateStatefulSet(deployNamespace, obj.(*appsv1.StatefulSet))
-// 	case *appsv1.DaemonSet:
-// 		return kc.createOrUpdateDaemonSetV1(deployNamespace, obj.(*appsv1.DaemonSet))
-// 	case *policyv1beta1.PodDisruptionBudget:
-// 		return kc.createOrUpdatePodDisruptionBudgetBetaV1(deployNamespace, obj.(*policyv1beta1.PodDisruptionBudget))
-// 	case *networkingv1.NetworkPolicy:
-// 		return kc.createOrUpdateNetworkPolicyV1(deployNamespace, obj.(*networkingv1.NetworkPolicy))
-// 	case *apiregistrationv1beta1.APIService:
-// 		return kc.createOrUpdateAPIServer(obj.(*apiregistrationv1beta1.APIService))
-// 	default:
-// 		return nil, fmt.Errorf("Error: unsupported k8s manifest type %T", o)
-// 	}
-// }
-
-// func getPodObject() *core.Pod {
-// 	return &core.Pod{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      "my-test-pod",
-// 			Namespace: "default",
-// 			Labels: map[string]string{
-// 				"app": "demo",
-// 			},
-// 		},
-// 		Spec: core.PodSpec{
-// 			Containers: []core.Container{
-// 				{
-// 					Name:            "busybox",
-// 					Image:           "busybox",
-// 					ImagePullPolicy: core.PullIfNotPresent,
-// 					Command: []string{
-// 						"sleep",
-// 						"3600",
-// 					},
-// 				},
-// 			},
-// 		},
-// 	}
-// }
 
 // createSpinwick creates a SpinWick with the following behavior:
 // - no cloud installation found = installation is created
@@ -417,25 +301,69 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense bool) {
 	// other repos we are not updating
-	if pr.RepoName != "mattermost-server" && pr.RepoName != "mattermost-webapp" {
-		return
+	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
+
+		request := s.updateSpinWick(pr, withLicense)
+		if request.Error != nil {
+			if request.Aborted {
+				mlog.Warn("Aborted update of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			} else {
+				mlog.Error("Failed to update SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			}
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.SetupSpinmintFailedMessage)
+			if request.ReportError {
+				additionalFields := map[string]string{
+					"Installation ID": request.InstallationID,
+				}
+				s.logPrettyErrorToMattermost("[ SpinWick ] Update Failed", pr, request.Error, additionalFields)
+			}
+		}
+	} else {
+		s.updateKubeSpinWick(pr)
+	}
+}
+
+func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
+	request := &spinwick.Request{
+		InstallationID: "n/a",
+		Error:          nil,
+		ReportError:    false,
+		Aborted:        false,
+	}
+	logger := log.WithField("test", "test2")
+
+	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+
+	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	namespaceExists, err := namespaceExists(kc, namespaceName)
+
+	if err != nil {
+		request.Error = err
+		return request
 	}
 
-	request := s.updateSpinWick(pr, withLicense)
-	if request.Error != nil {
-		if request.Aborted {
-			mlog.Warn("Aborted update of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		} else {
-			mlog.Error("Failed to update SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		}
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.SetupSpinmintFailedMessage)
-		if request.ReportError {
-			additionalFields := map[string]string{
-				"Installation ID": request.InstallationID,
-			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Update Failed", pr, request.Error, additionalFields)
-		}
+	if !namespaceExists {
+		return request.WithError(fmt.Errorf("No namespace found with name %s", namespaceName)).ShouldReportError()
 	}
+
+	// ce27890
+	deployClient := kc.Clientset.AppsV1().Deployments(namespaceName)
+	deployment, err := deployClient.Get("cws-test", metav1.GetOptions{})
+	if err != nil && !k8sErrors.IsNotFound(err) {
+		return request
+	}
+
+	for idx, _ := range deployment.Spec.Template.Spec.Containers {
+		deployment.Spec.Template.Spec.Containers[idx].Image = "mattermost/cws-test:ce27890"
+	}
+
+	for idx, _ := range deployment.Spec.Template.Spec.InitContainers {
+		deployment.Spec.Template.Spec.InitContainers[idx].Image = "mattermost/cws-test:ce27890"
+	}
+
+	_, err = deployClient.Update(deployment)
+
+	return request
 }
 
 // updateSpinWick updates a SpinWick with the following behavior:
@@ -548,20 +476,78 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 }
 
 func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
-	request := s.destroySpinWick(pr)
-	if request.Error != nil {
-		if request.Aborted {
-			mlog.Warn("Aborted deletion of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		} else {
-			mlog.Error("Failed to delete SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
-		}
-		if request.ReportError {
-			additionalFields := map[string]string{
-				"Installation ID": request.InstallationID,
+	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
+		request := s.destroySpinWick(pr)
+		if request.Error != nil {
+			if request.Aborted {
+				mlog.Warn("Aborted deletion of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			} else {
+				mlog.Error("Failed to delete SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
 			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Destroy Failed", pr, request.Error, additionalFields)
+			if request.ReportError {
+				additionalFields := map[string]string{
+					"Installation ID": request.InstallationID,
+				}
+				s.logPrettyErrorToMattermost("[ SpinWick ] Destroy Failed", pr, request.Error, additionalFields)
+			}
+		}
+	} else {
+		request := s.destroyKubeSpinWick(pr)
+		if request.Error != nil {
+			if request.Aborted {
+				mlog.Warn("Aborted deletion of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			} else {
+				mlog.Error("Failed to delete SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			}
+			if request.ReportError {
+				additionalFields := map[string]string{
+					"Installation ID": request.InstallationID,
+				}
+				s.logPrettyErrorToMattermost("[ SpinWick ] Destroy Failed", pr, request.Error, additionalFields)
+			}
 		}
 	}
+}
+
+func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
+	mlog.Info("Received request to destroy kubernetes namespace")
+	request := &spinwick.Request{
+		InstallationID: "n/a",
+		Error:          nil,
+		ReportError:    false,
+		Aborted:        false,
+	}
+
+	logger := log.WithField("test", "test2")
+
+	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+
+	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	namespaceExists, err := namespaceExists(kc, namespaceName)
+
+	if err != nil {
+		request.Error = err
+		return request
+	}
+
+	if !namespaceExists {
+		request.InstallationID = ""
+		return request
+	}
+	if err != nil {
+		request.Error = err
+		mlog.Error("Error ocurred whilst deleting namespace", mlog.Err(err))
+		return request
+	}
+
+	err = deleteNamespace(kc, namespaceName)
+	if err != nil {
+		mlog.Error("Error occured whilst deleting namespace", mlog.Err(err))
+		request.Error = err
+		return request
+	}
+	mlog.Info("Kube namespace " + namespaceName + " has been destroyed")
+	return request
 }
 
 // destroySpinwick destroys a SpinWick with the following behavior:
