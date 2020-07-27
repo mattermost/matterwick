@@ -111,7 +111,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	if overLimit {
 		return
 	}
-	mlog.Info("TEST")
+
 	buf, _ := ioutil.ReadAll(r.Body)
 
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)

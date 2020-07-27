@@ -11,6 +11,24 @@ import (
 	"github.com/pkg/errors"
 )
 
+type CWS struct {
+	DATABASE                    string
+	CWS_PAYMENT_URL             string
+	CWS_PAYMENT_TOKEN           string
+	CWS_SITEURL                 string
+	CWS_SMTP_USERNAME           string
+	CWS_SMTP_PASSWORD           string
+	CWS_SMTP_SERVER             string
+	CWS_SMTP_PORT               string
+	CWS_SMTP_SERVERTIMEOUT      string
+	CWS_SMTP_CONNECTIONSECURITY string
+	CWS_EMAIL_REPLYTONAME       string
+	CWS_EMAIL_REPLYTOADDRESS    string
+	CWS_EMAIL_BCCADDRESSES      string
+	CWS_CLOUD_URL               string
+	DOCKER_HUB_CREDENTIALS      string
+}
+
 // MatterwickConfig defines all config for to run the server
 type MatterwickConfig struct {
 	ListenAddress       string
@@ -50,6 +68,8 @@ type MatterwickConfig struct {
 		FileLevel     string
 		FileLocation  string
 	}
+
+	CWS CWS
 }
 
 func findConfigFile(fileName string) string {

@@ -11,6 +11,7 @@ type Deployment struct {
 	Namespace      string
 	ImageTag       string
 	DeployFilePath string
+	Environment    CWS
 }
 
 func namespaceExists(kc *k8s.KubeClient, namespaceName string) (bool, error) {

@@ -77,7 +77,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 				s.logPrettyErrorToMattermost("[ SpinWick ] Creation Failed", pr, request.Error, additionalFields)
 			}
 		}
-	} else if pr.RepoName == "github-webhooks" {
+	} else if pr.RepoName == "github-webhooks" || pr.RepoName == "customer-web-server" {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test customer web server")
 		request := s.createKubeSpinWick(pr)
 
@@ -108,9 +108,27 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request
 	}
 
-	deployment := Deployment{namespace.GetName(), "137b77f", "/matterwick/templates/cws-templates/cws_deployment" + namespace.GetName() + ".yaml"}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
 
-	template, err := template.ParseFiles("/matterwick/templates/cws-templates/cws_deployment.tmpl")
+	version := ""
+	image := "mattermost/cws-test"
+
+	reg, errDocker := s.Builds.dockerRegistryClient(s)
+	if errDocker != nil {
+		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
+	}
+
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	if errImage != nil {
+		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	}
+
+	version = s.Builds.getInstallationVersion(prNew)
+
+	deployment := Deployment{namespace.GetName(), version, "/matterwick/templates/cws/cws_deployment" + namespace.GetName() + ".yaml", s.Config.CWS}
+
+	template, err := template.ParseFiles("/matterwick/templates/cws/cws_deployment.tmpl")
 	if err != nil {
 		mlog.Error("Error loading deployment template ", mlog.Err(err))
 	}
@@ -134,10 +152,16 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	err = kc.CreateFromFile(deployFile, "")
 	if err != nil {
-		mlog.Error("Error creating pod", mlog.Err(err))
+		mlog.Error("Error deploying from manifest", mlog.Err(err))
 		return request
 	}
-	fmt.Println("Pod created successfully...")
+
+	err = os.Remove(deployment.DeployFilePath)
+
+	if err != nil {
+		mlog.Error("Error removing deployment file", mlog.Err(err))
+	}
+	mlog.Info("Deployment created successfully. Cleanup complete")
 
 	// Connect to kubernetes with the kubernetes client
 	// Check for existence of a pod running this PR's version of CWS
@@ -332,9 +356,8 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	logger := log.WithField("test", "test2")
 
-	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
-
 	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
 	namespaceExists, err := namespaceExists(kc, namespaceName)
 
 	if err != nil {
@@ -346,6 +369,24 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(fmt.Errorf("No namespace found with name %s", namespaceName)).ShouldReportError()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+
+	version := ""
+	image := "mattermost/cws-test"
+
+	reg, errDocker := s.Builds.dockerRegistryClient(s)
+	if errDocker != nil {
+		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
+	}
+
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	if errImage != nil {
+		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	}
+
+	version = s.Builds.getInstallationVersion(prNew)
+
 	// ce27890
 	deployClient := kc.Clientset.AppsV1().Deployments(namespaceName)
 	deployment, err := deployClient.Get("cws-test", metav1.GetOptions{})
@@ -354,11 +395,11 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	for idx, _ := range deployment.Spec.Template.Spec.Containers {
-		deployment.Spec.Template.Spec.Containers[idx].Image = "mattermost/cws-test:ce27890"
+		deployment.Spec.Template.Spec.Containers[idx].Image = image + ":" + version
 	}
 
 	for idx, _ := range deployment.Spec.Template.Spec.InitContainers {
-		deployment.Spec.Template.Spec.InitContainers[idx].Image = "mattermost/cws-test:ce27890"
+		deployment.Spec.Template.Spec.InitContainers[idx].Image = image + ":" + version
 	}
 
 	_, err = deployClient.Update(deployment)

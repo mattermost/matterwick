@@ -1,0 +1,208 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: portal-x
+    app.kubernetes.io/name: cws-test
+  name: cws-test
+  namespace: {{ .Namespace }}
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: portal-x
+      app.kubernetes.io/name: cws-test
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: portal-x
+        app.kubernetes.io/name: cws-test
+    spec:
+      containers:
+      - args:
+        - server
+        - --debug
+        - --database
+        - $(DATABASE)
+        envFrom:
+        - secretRef:
+            name: customer-web-server-secret
+        image: mattermost/cws-test:{{ .ImageTag }}
+        imagePullPolicy: Always
+        name: cws-main
+        ports:
+        - containerPort: 8076
+          name: api
+          protocol: TCP
+        - containerPort: 8077
+          name: internal
+          protocol: TCP
+        resources: {}
+      imagePullSecrets:
+      - name: customer-web-server-gitlab-image
+      initContainers:
+      - args:
+        - schema
+        - migrate
+        - --database
+        - $(DATABASE)
+        envFrom:
+        - secretRef:
+            name: customer-web-server-secret
+        image: mattermost/cws-test:{{ .ImageTag }}
+        imagePullPolicy: Always
+        name: customer-web-server-init-database
+      restartPolicy: Always
+      schedulerName: default-scheduler
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: customer-web-server-secret
+  namespace: {{ .Namespace }}
+type: Opaque
+stringData:
+  DATABASE: {{ .Environment.DATABASE }}
+  CWS_PAYMENT_URL: {{ .Environment.CWS_PAYMENT_URL }}
+  CWS_PAYMENT_TOKEN: {{ .Environment.CWS_PAYMENT_TOKEN }}
+  CWS_SITEURL: {{ .Environment.CWS_SITEURL }}
+  CWS_SMTP_USERNAME: {{ .Environment.CWS_SMTP_USERNAME }}
+  CWS_SMTP_PASSWORD: {{ .Environment.CWS_SMTP_PASSWORD }}
+  CWS_SMTP_SERVER: {{ .Environment.CWS_SMTP_SERVER }}
+  CWS_SMTP_PORT: "{{ .Environment.CWS_SMTP_PORT }}"
+  CWS_SMTP_SERVERTIMEOUT: "{{ .Environment.CWS_SMTP_SERVERTIMEOUT }}"
+  CWS_SMTP_CONNECTIONSECURITY: {{ .Environment.CWS_SMTP_CONNECTIONSECURITY }}
+  CWS_EMAIL_REPLYTONAME: {{ .Environment.CWS_EMAIL_REPLYTONAME }}
+  CWS_EMAIL_REPLYTOADDRESS: {{ .Environment.CWS_EMAIL_REPLYTOADDRESS }}
+  CWS_EMAIL_BCCADDRESSES: {{ .Environment.CWS_EMAIL_BCCADDRESSES }}
+  CWS_CLOUD_URL: {{ .Environment.CWS_CLOUD_URL }}
+---
+apiVersion: v1
+data:
+  .dockerconfigjson: {{ .Environment.DOCKER_HUB_CREDENTIALS }}
+kind: Secret
+metadata:
+  name: customer-web-server-gitlab-image
+  namespace: {{ .Namespace }}
+type: kubernetes.io/dockerconfigjson
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: {{ .Namespace }}
+  labels:
+    app: postgres
+data:
+  POSTGRES_DB: xcws
+  POSTGRES_USER: xcws
+  POSTGRES_PASSWORD: xcws!934XCWS
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: postgres-pv-volume
+  labels:
+    type: local
+    app: postgres
+spec:
+  storageClassName: gp2
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/mnt/data"
+
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-pv-claim
+  namespace: {{ .Namespace }}
+  labels:
+    app: postgres
+spec:
+  storageClassName: gp2
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/component: db
+    app.kubernetes.io/name: postgres
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: db
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: db
+        app.kubernetes.io/name: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:10.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgredb
+      volumes:
+        - name: postgredb
+          persistentVolumeClaim:
+            claimName: postgres-pv-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/component: db
+    app.kubernetes.io/name: postgres
+spec:
+  type: NodePort
+  ports:
+   - port: 5432
+  selector:
+    app.kubernetes.io/component: db
+    app.kubernetes.io/name: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cws-service
+  namespace: {{ .Namespace }}
+spec:
+  ports:
+  - name: api
+    port: 8076
+    protocol: TCP
+    targetPort: api
+  selector:
+    app.kubernetes.io/name: cws-test
+  sessionAffinity: None
+  type: ClusterIP
