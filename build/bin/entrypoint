@@ -9,6 +9,7 @@ if ! whoami &>/dev/null; then
   fi
 fi
 
+# Validate that any passed in AWS credentials will allow us to access EKS clusters
 if [ -n "$CLUSTER_NAME" -a -n "$AWS_REGION" -a -n "$AWS_ACCESS_KEY_ID" -a -n "$AWS_SECRET_ACCESS_KEY" ]; then
   echo "✅ environment variables present"
   echo "--> Updating kubeconfig for access to \"${CLUSTER_NAME}\" in region \"${AWS_REGION}\""

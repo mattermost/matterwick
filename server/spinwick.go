@@ -49,7 +49,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		Aborted:        false,
 	}
 
-	// for Mattermost webapp and mattermost server, use legacy spinwick setup
+	// for Mattermost webapp and mattermost server, business as usual
 	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
 		if withLicense {
 			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
@@ -108,7 +108,6 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	if err != nil {
 		request.Error = err
-		mlog.Error("Error ocurred whilst creating namespace", mlog.Err(err))
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating namespace")).ShouldReportError()
 	}
 
@@ -144,7 +143,6 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	file, err := os.Create(deployment.DeployFilePath)
 	if err != nil {
-		mlog.Error("Error creating deployment file ", mlog.Err(err))
 		return request.WithError(errors.Wrap(err, "Error creating deployment file")).ShouldReportError()
 	}
 
@@ -162,14 +160,12 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	err = kc.CreateFromFile(deployFile, "")
 	if err != nil {
-		mlog.Error("Error deploying from manifest", mlog.Err(err))
 		return request.WithError(errors.Wrap(err, "Error deploying from manifest template")).ShouldReportError()
 	}
 
 	err = os.Remove(deployment.DeployFilePath)
 
 	if err != nil {
-		mlog.Error("Error removing deployment file", mlog.Err(err))
 		return request.WithError(errors.Wrap(err, "Error creating deployment file")).ShouldReportError()
 	}
 	mlog.Info("Deployment created successfully. Cleanup complete")
