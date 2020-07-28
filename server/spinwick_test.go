@@ -27,6 +27,25 @@ func TestMakeSpinWickID(t *testing.T) {
 	}
 }
 
+func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
+	tests := []struct {
+		repoName string
+		prNumber int
+		result   string
+	}{
+		{"mattermost-server-webapp-fusion-reactor-test-really-long", 8888, "mswfrtrl"},
+		{"mattermostserverwebappfusionreactortestreallylong", 88, "matt"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.repoName, func(t *testing.T) {
+			id := makeSpinWickID(tc.repoName, tc.prNumber)
+			assert.Contains(t, id, tc.result)
+			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
+		})
+	}
+}
+
 func TestIsSpinWickLabel(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
