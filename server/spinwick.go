@@ -173,7 +173,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	lbURL, _ := waitForIPAssignment(kc, deployment)
 
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
-	commentsToDelete := []string{"Creating a SpinWick test customer web server"}
+	commentsToDelete := []string{"Creating a SpinWick test CWS"}
 	if errComments != nil {
 		mlog.Error("pr_error", mlog.Err(err))
 	} else {
