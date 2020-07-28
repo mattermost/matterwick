@@ -24,6 +24,7 @@ spec:
       labels:
         app.kubernetes.io/component: portal-x
         app.kubernetes.io/name: cws-test
+        app: cws-test
     spec:
       containers:
       - args:
@@ -206,3 +207,22 @@ spec:
     app.kubernetes.io/name: cws-test
   sessionAffinity: None
   type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cws-test-service
+  namespace: {{ .Namespace }}
+spec:
+  type: LoadBalancer
+  selector:
+    app: cws-test
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8076
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 8076

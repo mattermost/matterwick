@@ -163,12 +163,20 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	mlog.Info("Deployment created successfully. Cleanup complete")
 
-	// Connect to kubernetes with the kubernetes client
-	// Check for existence of a pod running this PR's version of CWS
-	// Load a template manifest and populate values
-	// Apply the template manifest
-	// Call out to route53 in order to add a DNS entry
+	lbURL, _ := waitForIPAssignment(kc, deployment)
 
+	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
+	commentsToDelete := []string{"Creating a SpinWick test customer web server"}
+	if errComments != nil {
+		mlog.Error("pr_error", mlog.Err(err))
+	} else {
+		s.removeCommentsWithSpecificMessages(comments, commentsToDelete, pr)
+	}
+	spinwickURL := fmt.Sprintf("http://%s", lbURL)
+	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\n", spinwickURL)
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
+
+	request.InstallationID = deployment.Namespace
 	return request
 }
 
@@ -588,6 +596,16 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request
 	}
 	mlog.Info("Kube namespace " + namespaceName + " has been destroyed")
+
+	// Old comments created by MatterWick user will be deleted here.
+	s.commentLock.Lock()
+	defer s.commentLock.Unlock()
+	comments, _, err := newGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
+	}
+	s.removeOldComments(comments, pr)
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Spinwick Kubernetes namespace "+namespaceName+" has been destroyed")
 	return request
 }
 

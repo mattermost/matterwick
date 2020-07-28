@@ -116,6 +116,8 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Please wait while a new kubernetes cluster is created for your SpinWick",
 		"Mattermost test server updated with git commit",
 		"Enterprise Edition Image not available",
+		"CWS test server created!",
+		"Creating a SpinWick test customer web server",
 	}
 
 	mlog.Info("Removing old Matterwick comments")
