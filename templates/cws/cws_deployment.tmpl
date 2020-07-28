@@ -70,24 +70,24 @@ metadata:
   namespace: {{ .Namespace }}
 type: Opaque
 stringData:
-  DATABASE: {{ .Environment.DATABASE }}
-  CWS_PAYMENT_URL: {{ .Environment.CWS_PAYMENT_URL }}
-  CWS_PAYMENT_TOKEN: {{ .Environment.CWS_PAYMENT_TOKEN }}
-  CWS_SITEURL: {{ .Environment.CWS_SITEURL }}
-  CWS_SMTP_USERNAME: {{ .Environment.CWS_SMTP_USERNAME }}
-  CWS_SMTP_PASSWORD: {{ .Environment.CWS_SMTP_PASSWORD }}
-  CWS_SMTP_SERVER: {{ .Environment.CWS_SMTP_SERVER }}
-  CWS_SMTP_PORT: "{{ .Environment.CWS_SMTP_PORT }}"
-  CWS_SMTP_SERVERTIMEOUT: "{{ .Environment.CWS_SMTP_SERVERTIMEOUT }}"
-  CWS_SMTP_CONNECTIONSECURITY: {{ .Environment.CWS_SMTP_CONNECTIONSECURITY }}
-  CWS_EMAIL_REPLYTONAME: {{ .Environment.CWS_EMAIL_REPLYTONAME }}
-  CWS_EMAIL_REPLYTOADDRESS: {{ .Environment.CWS_EMAIL_REPLYTOADDRESS }}
-  CWS_EMAIL_BCCADDRESSES: {{ .Environment.CWS_EMAIL_BCCADDRESSES }}
-  CWS_CLOUD_URL: {{ .Environment.CWS_CLOUD_URL }}
+  DATABASE: {{ .Environment.Database }}
+  CWS_PAYMENT_URL: {{ .Environment.CWSPaymentURL }}
+  CWS_PAYMENT_TOKEN: {{ .Environment.CWSPaymentToken }}
+  CWS_SITEURL: {{ .Environment.CWSSiteURL }}
+  CWS_SMTP_USERNAME: {{ .Environment.CWSSMTPUsername }}
+  CWS_SMTP_PASSWORD: {{ .Environment.CWSSMTPPassword }}
+  CWS_SMTP_SERVER: {{ .Environment.CWSSMTPServer }}
+  CWS_SMTP_PORT: "{{ .Environment.CWSSMTPPort }}"
+  CWS_SMTP_SERVERTIMEOUT: "{{ .Environment.CWSSMTPServerTimeout }}"
+  CWS_SMTP_CONNECTIONSECURITY: {{ .Environment.CWSSMTPConnectionSecurity }}
+  CWS_EMAIL_REPLYTONAME: {{ .Environment.CWSEmailReplyToName }}
+  CWS_EMAIL_REPLYTOADDRESS: {{ .Environment.CWSEmailReplyToAddress }}
+  CWS_EMAIL_BCCADDRESSES: {{ .Environment.CWSEmailBCCAddress }}
+  CWS_CLOUD_URL: {{ .Environment.CWSCloudURL }}
 ---
 apiVersion: v1
 data:
-  .dockerconfigjson: {{ .Environment.DOCKER_HUB_CREDENTIALS }}
+  .dockerconfigjson: {{ .Environment.DockerHubCredentials }}
 kind: Secret
 metadata:
   name: customer-web-server-gitlab-image

@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Deployment contains information needed to create a deployment in Kubernetes
 type Deployment struct {
 	Namespace      string
 	ImageTag       string

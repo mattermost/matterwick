@@ -421,11 +421,11 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "Attempted to update a deployment that does not exist")).ShouldReportError()
 	}
 
-	for idx, _ := range deployment.Spec.Template.Spec.Containers {
+	for idx := range deployment.Spec.Template.Spec.Containers {
 		deployment.Spec.Template.Spec.Containers[idx].Image = image + ":" + version
 	}
 
-	for idx, _ := range deployment.Spec.Template.Spec.InitContainers {
+	for idx := range deployment.Spec.Template.Spec.InitContainers {
 		deployment.Spec.Template.Spec.InitContainers[idx].Image = image + ":" + version
 	}
 
