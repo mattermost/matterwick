@@ -583,30 +583,14 @@ func checkMMPing(ctx context.Context, client *mattermostModel.Client4) error {
 	}
 }
 
-// Given a string, returns an abbreviation of that string
-// All repositories under the mattermost organization follow a pattern of words-separated-by-dashes (I checked)
-// If there are no '-' characters, the first 4 characters of the repository name are returned to avoid collisions
-func getRepoNameAbbreviation(repoName string) string {
-	abbreviation := ""
-	segments := strings.Split(repoName, "-")
-	for _, segment := range segments {
-		abbreviation = abbreviation + string(segment[0])
-	}
-
-	//If there were no - separators in the repoName, use the first 4 characters
-	if len(abbreviation) == 1 {
-		return repoName[0:4]
-	}
-
-	return abbreviation
-}
-
 func makeSpinWickID(repoName string, prNumber int) string {
 	domainName := ".test.mattermost.cloud"
 	spinWickID := strings.ToLower(fmt.Sprintf("%s-pr-%d", repoName, prNumber))
-	// DNS names in MM cloud have a character limit
-	if len(spinWickID+domainName) > 63 {
-		spinWickID = strings.ToLower(fmt.Sprintf("%s-pr-%d", getRepoNameAbbreviation(repoName), prNumber))
+	// DNS names in MM cloud have a character limit. The number of characters in the domain - 64 will be how many we need to trim
+	numCharactersToTrim := len(spinWickID+domainName) - 64
+	if numCharactersToTrim > 0 {
+		// trim the last numCharactersToTrim characters off of the repoName and overwrite spinWickID
+		spinWickID = strings.ToLower(fmt.Sprintf("%s-pr-%d", repoName[:(len(repoName)-numCharactersToTrim)], prNumber))
 	}
 	return spinWickID
 }
