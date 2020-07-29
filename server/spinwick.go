@@ -78,7 +78,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		ReportError:    false,
 		Aborted:        false,
 	}
-	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
+	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -206,7 +206,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
 
-	spinwickURL := fmt.Sprintf("https://%s.%s", makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
+	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
 	err = s.initializeMattermostTestServer(spinwickURL, pr.Number)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
@@ -253,7 +253,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		Aborted:        false,
 	}
 
-	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
+	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	id, image, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -341,7 +341,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr)
 	}
 
-	mmURL := fmt.Sprintf("https://%s.%s", makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
+	mmURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
 	msg := fmt.Sprintf("Mattermost test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, mmURL)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
@@ -377,7 +377,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 		Aborted:        false,
 	}
 
-	ownerID := makeSpinWickID(pr.RepoName, pr.Number)
+	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -583,8 +583,8 @@ func checkMMPing(ctx context.Context, client *mattermostModel.Client4) error {
 	}
 }
 
-func makeSpinWickID(repoName string, prNumber int) string {
-	domainName := ".test.mattermost.cloud"
+func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
+	domainName := s.Config.DNSNameTestServer
 	spinWickID := strings.ToLower(fmt.Sprintf("%s-pr-%d", repoName, prNumber))
 	// DNS names in MM cloud have a character limit. The number of characters in the domain - 64 will be how many we need to trim
 	numCharactersToTrim := len(spinWickID+domainName) - 64

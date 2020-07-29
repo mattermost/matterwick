@@ -9,6 +9,15 @@ import (
 )
 
 func TestMakeSpinWickID(t *testing.T) {
+	spinwickLabel := "spinwick"
+	spinwickHALabel := "spinwick ha"
+	s := &Server{
+		Config: &MatterwickConfig{
+			SetupSpinWick:     spinwickLabel,
+			SetupSpinWickHA:   spinwickHALabel,
+			DNSNameTestServer: ".test.mattermost.cloud",
+		},
+	}
 	tests := []struct {
 		repoName string
 		prNumber int
@@ -20,7 +29,7 @@ func TestMakeSpinWickID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.repoName, func(t *testing.T) {
-			id := makeSpinWickID(tc.repoName, tc.prNumber)
+			id := s.makeSpinWickID(tc.repoName, tc.prNumber)
 			assert.Contains(t, id, tc.repoName)
 			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
 		})
@@ -28,6 +37,15 @@ func TestMakeSpinWickID(t *testing.T) {
 }
 
 func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
+	spinwickLabel := "spinwick"
+	spinwickHALabel := "spinwick ha"
+	s := &Server{
+		Config: &MatterwickConfig{
+			SetupSpinWick:     spinwickLabel,
+			SetupSpinWickHA:   spinwickHALabel,
+			DNSNameTestServer: ".test.mattermost.cloud",
+		},
+	}
 	tests := []struct {
 		repoName string
 		prNumber int
@@ -39,7 +57,7 @@ func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.repoName, func(t *testing.T) {
-			id := makeSpinWickID(tc.repoName, tc.prNumber)
+			id := s.makeSpinWickID(tc.repoName, tc.prNumber)
 			assert.Contains(t, id, tc.result)
 			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
 			assert.Equal(t, id, fmt.Sprintf("%s-pr-%d", tc.result, tc.prNumber))
