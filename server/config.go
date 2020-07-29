@@ -60,6 +60,9 @@ type MatterwickConfig struct {
 	MattermostWebhookURL    string
 	MattermostWebhookFooter string
 
+	KubeClusterName   string
+	KubeClusterRegion string
+
 	LogSettings struct {
 		EnableConsole bool
 		ConsoleJSON   bool

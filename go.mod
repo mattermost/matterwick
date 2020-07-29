@@ -3,6 +3,7 @@ module github.com/mattermost/matterwick
 go 1.14
 
 require (
+	github.com/aws/aws-sdk-go v1.33.14
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
 	github.com/golang/protobuf v1.3.3 // indirect
 	github.com/google/go-github/v28 v28.1.1
@@ -11,7 +12,7 @@ require (
 	github.com/jetstack/cert-manager v0.14.0 // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattermost/ldap v3.0.4+incompatible // indirect
-	github.com/mattermost/mattermost-cloud v0.22.1-0.20200724130959-329cb3ad7d46
+	github.com/mattermost/mattermost-cloud v0.22.1-0.20200729180038-1244555393ce
 	github.com/mattermost/mattermost-server/v5 v5.20.0-rc4
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron/v3 v3.0.0
@@ -23,6 +24,7 @@ require (
 	k8s.io/apimachinery v0.17.7
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/utils v0.0.0-20200124190032-861946025e34 // indirect
+	sigs.k8s.io/aws-iam-authenticator v0.5.1
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 

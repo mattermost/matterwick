@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -31,7 +30,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/homedir"
 )
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool) {
@@ -101,7 +99,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	logger := log.WithField("PR", pr.RepoName+"/!"+string(pr.Number))
-	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	kc := s.newClient(logger)
 
 	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
 	namespace, err := getOrCreateNamespace(kc, namespaceName)
@@ -378,7 +376,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	logger := log.WithField("PR", pr.RepoName+"/!"+string(pr.Number))
 
-	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	kc := s.newClient(logger)
 	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
 	namespaceExists, err := namespaceExists(kc, namespaceName)
 
@@ -589,7 +587,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
 
-	kc, err := k8s.New(filepath.Join(homedir.HomeDir(), ".kube", "config"), logger)
+	kc := s.newClient(logger)
 	namespaceExists, err := namespaceExists(kc, namespaceName)
 
 	if err != nil {
