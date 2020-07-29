@@ -56,7 +56,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		}
 
 		request = s.createSpinWick(pr, size, withLicense)
-	} else if pr.RepoName == "github-webhooks" || pr.RepoName == "customer-web-server" {
+	} else if pr.RepoName == "customer-web-server" {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test CWS")
 		request = s.createKubeSpinWick(pr)
 	}
@@ -161,11 +161,8 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "Error deploying from manifest template")).ShouldReportError()
 	}
 
-	err = os.Remove(deployment.DeployFilePath)
+	defer os.Remove(deployment.DeployFilePath)
 
-	if err != nil {
-		return request.WithError(errors.Wrap(err, "Error creating deployment file")).ShouldReportError()
-	}
 	mlog.Info("Deployment created successfully. Cleanup complete")
 
 	lbURL, _ := waitForIPAssignment(kc, deployment)
@@ -347,7 +344,7 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense bool) {
 	}
 	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
 		request = s.updateSpinWick(pr, withLicense)
-	} else {
+	} else if pr.RepoName == "customer-web-server" {
 		request = s.updateKubeSpinWick(pr)
 	}
 
@@ -555,7 +552,7 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
 
 	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
 		request = s.destroySpinWick(pr)
-	} else {
+	} else if pr.RepoName == "customer-web-server" {
 		request = s.destroyKubeSpinWick(pr)
 	}
 
