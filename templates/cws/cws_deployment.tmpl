@@ -14,11 +14,6 @@ spec:
     matchLabels:
       app.kubernetes.io/component: portal-x
       app.kubernetes.io/name: cws-test
-  strategy:
-    rollingUpdate:
-      maxSurge: 25%
-      maxUnavailable: 1
-    type: RollingUpdate
   template:
     metadata:
       labels:
@@ -30,6 +25,7 @@ spec:
       - args:
         - server
         - --debug
+        - --dev
         - --database
         - $(DATABASE)
         envFrom:
@@ -61,7 +57,6 @@ spec:
         imagePullPolicy: Always
         name: customer-web-server-init-database
       restartPolicy: Always
-      schedulerName: default-scheduler
 ---
 apiVersion: v1
 kind: Secret
@@ -116,7 +111,7 @@ metadata:
 spec:
   storageClassName: gp2
   capacity:
-    storage: 5Gi
+    storage: 1Gi
   accessModes:
     - ReadWriteMany
   hostPath:
@@ -136,7 +131,7 @@ spec:
     - ReadWriteMany
   resources:
     requests:
-      storage: 5Gi
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -191,22 +186,6 @@ spec:
   selector:
     app.kubernetes.io/component: db
     app.kubernetes.io/name: postgres
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: cws-service
-  namespace: {{ .Namespace }}
-spec:
-  ports:
-  - name: api
-    port: 8076
-    protocol: TCP
-    targetPort: api
-  selector:
-    app.kubernetes.io/name: cws-test
-  sessionAffinity: None
-  type: ClusterIP
 ---
 apiVersion: v1
 kind: Service
