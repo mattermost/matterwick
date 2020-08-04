@@ -30,9 +30,7 @@ func namespaceExists(kc *k8s.KubeClient, namespaceName string) (bool, error) {
 	_, err := kc.Clientset.CoreV1().Namespaces().Get(namespaceName, metav1.GetOptions{})
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		return false, err
-	}
-
-	if err != nil && k8sErrors.IsNotFound(err) {
+	} else if err != nil && k8sErrors.IsNotFound(err) {
 		return false, nil
 	}
 	return true, nil

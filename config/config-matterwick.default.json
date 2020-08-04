@@ -20,6 +20,8 @@
   "DestroyedSpinmintMessage": "",
   "MattermostWebhookURL": "",
   "MattermostWebhookFooter": "",
+  "KubeClusterName": "",
+  "KubeClusterRegion": "",
   "LogSettings": {
     "EnableConsole": true,
     "ConsoleLevel": "DEBUG",

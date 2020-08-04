@@ -46,9 +46,10 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		ReportError:    false,
 		Aborted:        false,
 	}
-
-	// for Mattermost webapp and mattermost server, business as usual
-	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
+	if pr.RepoName == "customer-web-server" {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test CWS")
+		request = s.createKubeSpinWick(pr)
+	} else {
 		if withLicense {
 			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
 		} else {
@@ -56,9 +57,6 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		}
 
 		request = s.createSpinWick(pr, size, withLicense)
-	} else if pr.RepoName == "customer-web-server" {
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test CWS")
-		request = s.createKubeSpinWick(pr)
 	}
 
 	if request.Error != nil {
@@ -342,10 +340,11 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense bool) {
 		ReportError:    false,
 		Aborted:        false,
 	}
-	if pr.RepoName == "mattermost-server" || pr.RepoName == "mattermost-webapp" {
-		request = s.updateSpinWick(pr, withLicense)
-	} else if pr.RepoName == "customer-web-server" {
+
+	if pr.RepoName == "customer-web-server" {
 		request = s.updateKubeSpinWick(pr)
+	} else {
+		request = s.updateSpinWick(pr, withLicense)
 	}
 
 	if request.Error != nil {
@@ -427,7 +426,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	_, err = deployClient.Update(deployment)
 
 	if err != nil {
-		return request.WithError(errors.Wrap(err, "Error occurred while updating deployment with latest image")).ShouldReportError()
+		return request.WithError(errors.Wrap(err, "failed while updating deployment with latest image")).ShouldReportError()
 	}
 
 	return request
@@ -550,10 +549,10 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
 		Aborted:        false,
 	}
 
-	if pr.RepoName == "mattermost-webapp" || pr.RepoName == "mattermost-server" {
-		request = s.destroySpinWick(pr)
-	} else if pr.RepoName == "customer-web-server" {
+	if pr.RepoName == "customer-web-server" {
 		request = s.destroyKubeSpinWick(pr)
+	} else {
+		request = s.destroySpinWick(pr)
 	}
 
 	if request.Error != nil {
@@ -598,7 +597,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	err = deleteNamespace(kc, namespaceName)
 	if err != nil {
-		mlog.Error("Error occured whilst deleting namespace", mlog.Err(err))
+		mlog.Error("Failed while deleting namespace", mlog.Err(err))
 		request.Error = err
 		return request
 	}
