@@ -102,7 +102,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "Error occurred while getting Kube Client"))
 	}
 
-	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
 	namespace, err := getOrCreateNamespace(kc, namespaceName)
 
 	if err != nil {
@@ -379,7 +379,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred while getting Kube Client"))
 	}
-	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
 	namespaceExists, err := namespaceExists(kc, namespaceName)
 
 	if err != nil {
@@ -587,7 +587,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	logger := log.WithField("PR", pr.RepoName+"/!"+string(pr.Number))
 
-	namespaceName := makeSpinWickID(pr.RepoName, pr.Number)
+	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
 
 	kc, err := s.newClient(logger)
 	if err != nil {
