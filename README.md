@@ -2,6 +2,15 @@
 
 GitHub Bot that handle the creation of the Cloud test server for Pull Requests in Mattermost Org.
 
+### Deployment Configuration
+
+In order to utilize Kubernetes Spinwick creation, matteriwck must be able to access the following 2 **environment** variables:
+```
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+```
+You can find how to generate these by following the documentation [https://aws.amazon.com/premiumsupport/knowledge-center/create-access-key/](here)
+
 ### Local Development
 
 To run Matterwick locally:
