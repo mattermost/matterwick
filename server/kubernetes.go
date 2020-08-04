@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"log"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/eks"
 	"github.com/mattermost/mattermost-cloud/k8s"
 	"github.com/mattermost/mattermost-server/v5/mlog"
+	"github.com/pkg/errors"
 	logrus "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -112,7 +114,11 @@ func newKubeClient(cluster *eks.Cluster, logger logrus.FieldLogger) (*k8s.KubeCl
 	return kc, nil
 }
 
-func (s *Server) newClient(logger logrus.FieldLogger) *k8s.KubeClient {
+func (s *Server) newClient(logger logrus.FieldLogger) (*k8s.KubeClient, error) {
+	if !isAwsConfigDefined() {
+		return nil, errors.Errorf("AWS Config not defined. Unable to authenticate with EKS")
+	}
+
 	name := s.Config.KubeClusterName
 	region := s.Config.KubeClusterRegion
 	sess := session.Must(session.NewSession(&aws.Config{
@@ -128,5 +134,12 @@ func (s *Server) newClient(logger logrus.FieldLogger) *k8s.KubeClient {
 		log.Fatalf("Error calling DescribeCluster: %v", err)
 	}
 	kc, err := newKubeClient(result.Cluster, logger)
-	return kc
+	return kc, nil
+}
+
+func isAwsConfigDefined() bool {
+	_, awsSecretKey := os.LookupEnv("AWS_SECRET_ACCESS_KEY")
+	_, awsAccessKeyID := os.LookupEnv("AWS_ACCESS_KEY_ID")
+
+	return awsSecretKey && awsAccessKeyID
 }

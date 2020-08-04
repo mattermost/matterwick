@@ -56,6 +56,10 @@ func New(config *MatterwickConfig) *Server {
 		StartTime:       time.Now(),
 	}
 
+	if !isAwsConfigDefined() {
+		mlog.Error("Missing environment credentials for AWS Access: AWS_SECRET_ACCESS_KEY, AWS_ACCESS_KEY_ID")
+	}
+
 	s.Builds = &Builds{}
 	if os.Getenv(buildOverride) != "" {
 		mlog.Warn("Using mocked build tools")
