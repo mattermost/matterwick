@@ -700,6 +700,8 @@ github.com/mattermost/mattermost-cloud v0.22.1-0.20200724130959-329cb3ad7d46 h1:
 github.com/mattermost/mattermost-cloud v0.22.1-0.20200724130959-329cb3ad7d46/go.mod h1:MqjRm5Jw2AvxSDjD9ThU2dxC2RMbeOEEFdp+NhWuzOo=
 github.com/mattermost/mattermost-cloud v0.22.1-0.20200729180038-1244555393ce h1:JvhFHEvSgF+QEAGGV6biq1N6hlI/bHZ7DiCcqBXnjYk=
 github.com/mattermost/mattermost-cloud v0.22.1-0.20200729180038-1244555393ce/go.mod h1:MqjRm5Jw2AvxSDjD9ThU2dxC2RMbeOEEFdp+NhWuzOo=
+github.com/mattermost/mattermost-cloud v0.23.1 h1:ATGSmc+B6Wcn6C1qIdYwN/e99m95pgHR0jqh2NbzIQY=
+github.com/mattermost/mattermost-cloud v0.23.1/go.mod h1:MqjRm5Jw2AvxSDjD9ThU2dxC2RMbeOEEFdp+NhWuzOo=
 github.com/mattermost/mattermost-operator v1.1.1 h1:756c1pCm9nn1gWMGyI3sZdato4Q7rMQSGyY1rqY3EF4=
 github.com/mattermost/mattermost-operator v1.1.1/go.mod h1:AgR/ItHHlYSWBGm8rEC9N41V9Uy2eyZIPjFf2+U8Zco=
 github.com/mattermost/mattermost-operator v1.4.0 h1:pRZxA+sfywp7emDCtvwfQcmqs3P1EbjTuO/NKev+Mro=

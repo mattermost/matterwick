@@ -12,7 +12,7 @@ require (
 	github.com/jetstack/cert-manager v0.14.0 // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattermost/ldap v3.0.4+incompatible // indirect
-	github.com/mattermost/mattermost-cloud v0.22.1-0.20200729180038-1244555393ce
+	github.com/mattermost/mattermost-cloud v0.23.1
 	github.com/mattermost/mattermost-server/v5 v5.20.0-rc4
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron/v3 v3.0.0
