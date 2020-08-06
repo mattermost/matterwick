@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"log"
 	"os"
@@ -43,7 +44,7 @@ func getOrCreateNamespace(kc *k8s.KubeClient, namespaceName string) (*corev1.Nam
 	if err != nil && k8sErrors.IsNotFound(err) {
 		return kc.CreateOrUpdateNamespace(namespaceName)
 	}
-	
+
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		return nil, err
 	}
@@ -61,26 +62,23 @@ func deleteNamespace(kc *k8s.KubeClient, nameSpaceName string) error {
 }
 
 func waitForIPAssignment(kc *k8s.KubeClient, deployment Deployment) (string, error) {
-	mlog.Info("Waiting for external IP to be assigned")
-	IP := ""
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	for {
-		if IP != "" {
-			break
-		} else {
-			log.Printf("No IP for now.\n")
+		select {
+		case <-ctx.Done():
+			return "", errors.New("Timed out waiting for IP Assignment")
+		case <-time.After(30 * time.Second):
+			lb, _ := kc.Clientset.CoreV1().Services(deployment.Namespace).Get("cws-test-service", metav1.GetOptions{})
+
+			if len(lb.Status.LoadBalancer.Ingress) > 0 {
+				return lb.Status.LoadBalancer.Ingress[0].Hostname, nil
+			}
+
+			mlog.Info("No IP found yet.. Waiting..")
 		}
-
-		lb, _ := kc.Clientset.CoreV1().Services(deployment.Namespace).Get("cws-test-service", metav1.GetOptions{})
-
-		if len(lb.Status.LoadBalancer.Ingress) > 0 {
-			IP = lb.Status.LoadBalancer.Ingress[0].Hostname
-		}
-
-		time.Sleep(1 * time.Second)
 	}
-
-	return IP, nil
-
 }
 
 func newKubeClient(cluster *eks.Cluster, logger logrus.FieldLogger) (*k8s.KubeClient, error) {
