@@ -40,13 +40,14 @@ func namespaceExists(kc *k8s.KubeClient, namespaceName string) (bool, error) {
 
 func getOrCreateNamespace(kc *k8s.KubeClient, namespaceName string) (*corev1.Namespace, error) {
 	namespace, err := kc.Clientset.CoreV1().Namespaces().Get(namespaceName, metav1.GetOptions{})
+	if err != nil && k8sErrors.IsNotFound(err) {
+		return kc.CreateOrUpdateNamespace(namespaceName)
+	}
+	
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		return nil, err
 	}
 
-	if err != nil && k8sErrors.IsNotFound(err) {
-		return kc.CreateOrUpdateNamespace(namespaceName)
-	}
 	return namespace, nil
 }
 
