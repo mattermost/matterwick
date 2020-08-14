@@ -20,6 +20,8 @@
   "DestroyedSpinmintMessage": "",
   "MattermostWebhookURL": "",
   "MattermostWebhookFooter": "",
+  "KubeClusterName": "",
+  "KubeClusterRegion": "",
   "LogSettings": {
     "EnableConsole": true,
     "ConsoleLevel": "DEBUG",
@@ -29,5 +31,22 @@
     "FileJSON": true,
     "FileFormat": "",
     "FileLocation": ""
+  },
+  "CWS": {
+      "DATABASE": "",
+      "CWS_PAYMENT_URL": "",
+      "CWS_PAYMENT_TOKEN": "",
+      "CWS_SITEURL": "",
+      "CWS_SMTP_USERNAME": "",
+      "CWS_SMTP_PASSWORD": "",
+      "CWS_SMTP_SERVER": "",
+      "CWS_SMTP_PORT": "",
+      "CWS_SMTP_SERVERTIMEOUT": "",
+      "CWS_SMTP_CONNECTIONSECURITY": "",
+      "CWS_EMAIL_REPLYTONAME": "",
+      "CWS_EMAIL_REPLYTOADDRESS": "",
+      "CWS_EMAIL_BCCADDRESSES": "",
+      "CWS_CLOUD_URL": "",
+      "DOCKER_HUB_CREDENTIALS": ""
   }
 }

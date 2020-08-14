@@ -26,6 +26,7 @@ RUN  apk update && apk add ca-certificates
 
 COPY --from=build /matterwick/build/_output/bin/matterwick /matterwick/matterwick
 COPY --from=build /matterwick/build/bin /usr/local/bin
+COPY --from=build /matterwick/templates /matterwick/templates
 
 RUN  /usr/local/bin/user_setup
 

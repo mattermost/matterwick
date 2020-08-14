@@ -11,6 +11,25 @@ import (
 	"github.com/pkg/errors"
 )
 
+// CWS contains all configuration for the Customer Web Server
+type CWS struct {
+	Database                  string
+	CWSPaymentURL             string
+	CWSPaymentToken           string
+	CWSSiteURL                string
+	CWSSMTPUsername           string
+	CWSSMTPPassword           string
+	CWSSMTPServer             string
+	CWSSMTPPort               string
+	CWSSMTPServerTimeout      string
+	CWSSMTPConnectionSecurity string
+	CWSEmailReplyToName       string
+	CWSEmailReplyToAddress    string
+	CWSEmailBCCAddress        string
+	CWSCloudURL               string
+	DockerHubCredentials      string
+}
+
 // MatterwickConfig defines all config for to run the server
 type MatterwickConfig struct {
 	ListenAddress       string
@@ -41,6 +60,9 @@ type MatterwickConfig struct {
 	MattermostWebhookURL    string
 	MattermostWebhookFooter string
 
+	KubeClusterName   string
+	KubeClusterRegion string
+
 	LogSettings struct {
 		EnableConsole bool
 		ConsoleJSON   bool
@@ -50,6 +72,8 @@ type MatterwickConfig struct {
 		FileLevel     string
 		FileLocation  string
 	}
+
+	CWS CWS
 }
 
 func findConfigFile(fileName string) string {
