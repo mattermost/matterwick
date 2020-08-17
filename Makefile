@@ -1,6 +1,6 @@
 ## Docker Build Versions
-DOCKER_BUILD_IMAGE = golang:1.14.2
-DOCKER_BASE_IMAGE = alpine:3.11.3
+DOCKER_BUILD_IMAGE = golang:1.14.6
+DOCKER_BASE_IMAGE = alpine:3.12
 MATTERWICK_IMAGE ?= mattermost/matterwick:test
 
 
