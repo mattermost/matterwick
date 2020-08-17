@@ -131,7 +131,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	deployment := Deployment{
 		namespace.GetName(),
 		version,
-		"/matterwick/templates/cws/cws_deployment" + namespace.GetName() + ".yaml",
+		"/tmp/cws_deployment" + namespace.GetName() + ".yaml",
 		s.Config.CWS,
 	}
 
@@ -158,11 +158,10 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		DeployNamespace: deployment.Namespace,
 	}
 	err = kc.CreateFromFile(deployFile, "")
+	defer os.Remove(deployment.DeployFilePath)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error deploying from manifest template")).ShouldReportError()
 	}
-
-	defer os.Remove(deployment.DeployFilePath)
 
 	mlog.Info("Deployment created successfully. Cleanup complete")
 
