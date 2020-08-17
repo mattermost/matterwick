@@ -24,6 +24,7 @@ import (
 // Deployment contains information needed to create a deployment in Kubernetes
 type Deployment struct {
 	Namespace      string
+	PR             int
 	ImageTag       string
 	DeployFilePath string
 	Environment    CWS

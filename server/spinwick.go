@@ -129,10 +129,11 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	version = s.Builds.getInstallationVersion(prNew)
 
 	deployment := Deployment{
-		namespace.GetName(),
-		version,
-		"/tmp/cws_deployment" + namespace.GetName() + ".yaml",
-		s.Config.CWS,
+		Namespace:      namespace.GetName(),
+		ImageTag:       version,
+		PR:             pr.Number,
+		DeployFilePath: "/tmp/cws_deployment" + namespace.GetName() + ".yaml",
+		Environment:    s.Config.CWS,
 	}
 
 	template, err := template.ParseFiles("/matterwick/templates/cws/cws_deployment.tmpl")

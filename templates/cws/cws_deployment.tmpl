@@ -103,12 +103,13 @@ data:
 kind: PersistentVolume
 apiVersion: v1
 metadata:
-  name: postgres-pv-volume
+  name: postgres-pv-volume-{{ .PR }}
   labels:
     type: local
     app: postgres
 spec:
   storageClassName: gp2
+  persistentVolumeReclaimPolicy: Delete
   capacity:
     storage: 1Gi
   accessModes:
