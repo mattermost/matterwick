@@ -61,7 +61,7 @@ func deleteNamespace(kc *k8s.KubeClient, nameSpaceName string) error {
 	return nil
 }
 
-func waitForIPAssignment(kc *k8s.KubeClient, deployment Deployment) (string, error) {
+func waitForIPAssignment(kc *k8s.KubeClient, namespace string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -70,7 +70,7 @@ func waitForIPAssignment(kc *k8s.KubeClient, deployment Deployment) (string, err
 		case <-ctx.Done():
 			return "", errors.New("Timed out waiting for IP Assignment")
 		case <-time.After(30 * time.Second):
-			lb, _ := kc.Clientset.CoreV1().Services(deployment.Namespace).Get("cws-test-service", metav1.GetOptions{})
+			lb, _ := kc.Clientset.CoreV1().Services(namespace).Get("cws-test-service", metav1.GetOptions{})
 
 			if len(lb.Status.LoadBalancer.Ingress) > 0 {
 				return lb.Status.LoadBalancer.Ingress[0].Hostname, nil
