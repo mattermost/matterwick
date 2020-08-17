@@ -103,7 +103,7 @@ data:
 kind: PersistentVolume
 apiVersion: v1
 metadata:
-  name: postgres-pv-volume
+  name: postgres-pv-volume-{{ .PR }}
   labels:
     type: local
     app: postgres
