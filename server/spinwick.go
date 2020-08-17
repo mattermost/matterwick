@@ -165,10 +165,10 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	mlog.Info("Deployment created successfully. Cleanup complete")
 
-	lbURL, _ := waitForIPAssignment(kc, deployment)
+	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace)
 
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
-	commentsToDelete := []string{"Creating a SpinWick test CWS"}
+	commentsToDelete := []string{"Creating a SpinWick test CWS", "Spinwick Kubernetes namespace"}
 	if errComments != nil {
 		mlog.Error("pr_error", mlog.Err(err))
 	} else {
@@ -392,6 +392,16 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	request.InstallationID = namespaceName
 
+	// Remove old message to reduce the amount of similar messages and avoid confusion
+	serverNewCommitMessages := []string{
+		"New commit detected.",
+	}
+	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
+	if errComments != nil {
+		mlog.Error("pr_error", mlog.Err(err))
+	} else {
+		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
+	}
 	// Now that we know this namespace exists, notify via comment that we are attempting to upgrade the deployment
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected. SpinWick will upgrade if the updated docker image is available.")
 
@@ -433,6 +443,19 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed while updating deployment with latest image")).ShouldReportError()
 	}
+
+	// Remove old message to reduce the amount of similar messages and avoid confusion
+	if errComments == nil {
+		serverUpdateMessage := []string{
+			"CWS test server updated",
+		}
+		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr)
+	}
+
+	lbURL, _ := waitForIPAssignment(kc, namespaceName)
+	spinwickURL := fmt.Sprintf("http://%s", lbURL)
+	msg := fmt.Sprintf("CWS test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, spinwickURL)
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	return request
 }
