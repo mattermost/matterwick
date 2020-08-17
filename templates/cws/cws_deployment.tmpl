@@ -109,6 +109,7 @@ metadata:
     app: postgres
 spec:
   storageClassName: gp2
+  persistentVolumeReclaimPolicy: Delete
   capacity:
     storage: 1Gi
   accessModes:
