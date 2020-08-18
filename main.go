@@ -12,7 +12,6 @@ import (
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/server"
 	"github.com/pkg/errors"
-	"github.com/robfig/cron/v3"
 )
 
 func main() {
@@ -34,10 +33,6 @@ func main() {
 	s.Start()
 	defer s.Stop()
 
-	c := cron.New()
-	// c.AddFunc("@daily", s.CheckPRActivity)
-
-	c.Start()
 	sig := make(chan os.Signal)
 	signal.Notify(sig, os.Interrupt, os.Kill)
 	<-sig
