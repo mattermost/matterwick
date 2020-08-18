@@ -296,8 +296,8 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		DNS:       fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:      size,
 		Affinity:  "multitenant",
-		Database:  "aws-multitenant-rds",
-		Filestore: "aws-s3",
+		Database:  cloudModel.InstallationDatabaseMultiTenantRDSPostgres,
+		Filestore: cloudModel.InstallationFilestoreAwsS3,
 	}
 	if withLicense {
 		installationRequest.License = s.Config.SpinWickHALicense
