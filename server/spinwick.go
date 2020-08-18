@@ -290,12 +290,14 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	// }
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
-		OwnerID:  ownerID,
-		Version:  version,
-		Image:    image,
-		DNS:      fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
-		Size:     size,
-		Affinity: "multitenant",
+		OwnerID:   ownerID,
+		Version:   version,
+		Image:     image,
+		DNS:       fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
+		Size:      size,
+		Affinity:  "multitenant",
+		Database:  "aws-multitenant-rds",
+		Filestore: "aws-s3",
 	}
 	if withLicense {
 		installationRequest.License = s.Config.SpinWickHALicense
