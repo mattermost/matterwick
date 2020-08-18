@@ -53,17 +53,22 @@ func getOrCreateNamespace(kc *k8s.KubeClient, namespaceName string) (*corev1.Nam
 	return namespace, nil
 }
 
-func deleteNamespace(kc *k8s.KubeClient, nameSpaceName string) error {
-	namespace := []string{nameSpaceName}
-	err := kc.DeleteNamespaces(namespace)
-	if err != nil {
-		return err
+func deleteNamespace(kc *k8s.KubeClient, namespace string) error {
+	policy := metav1.DeletePropagationForeground
+	gracePeriod := int64(0)
+	deleteOpts := &metav1.DeleteOptions{
+		GracePeriodSeconds: &gracePeriod,
+		PropagationPolicy:  &policy,
 	}
+	err := kc.Clientset.CoreV1().Namespaces().Delete(namespace, deleteOpts)
+	if err != nil {
+		return errors.Wrapf(err, "failed to delete the namespace %s", namespace)
+	}
+
 	return nil
 }
 
 func waitForIPAssignment(kc *k8s.KubeClient, namespace string) (string, error) {
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for {

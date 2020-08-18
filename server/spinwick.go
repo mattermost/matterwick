@@ -644,7 +644,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
 	s.removeOldComments(comments, pr)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Spinwick Kubernetes namespace "+namespaceName+" has been destroyed")
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Spinwick CWS test server has been destroyed.")
 	return request
 }
 

@@ -118,6 +118,8 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Enterprise Edition Image not available",
 		"CWS test server created!",
 		"Creating a SpinWick test customer web server",
+		"Spinwick CWS test server has been destroyed",
+		"CWS test server updated",
 	}
 
 	mlog.Info("Removing old Matterwick comments")
