@@ -5,21 +5,18 @@ go 1.14
 require (
 	github.com/aws/aws-sdk-go v1.33.14
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
-	github.com/golang/protobuf v1.3.3 // indirect
 	github.com/google/go-github/v28 v28.1.1
 	github.com/gorilla/mux v1.7.4
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
-	github.com/jetstack/cert-manager v0.14.0 // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattermost/ldap v3.0.4+incompatible // indirect
-	github.com/mattermost/mattermost-cloud v0.23.1
-	github.com/mattermost/mattermost-server/v5 v5.20.0-rc4
+	github.com/mattermost/mattermost-cloud v0.25.0
+	github.com/mattermost/mattermost-server/v5 v5.26.0
 	github.com/pkg/errors v0.9.1
-	github.com/robfig/cron/v3 v3.0.0
 	github.com/sirupsen/logrus v1.6.0
 	github.com/stretchr/testify v1.6.1
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	golang.org/x/sys v0.0.0-20200212091648-12a6c2dcc1e4 // indirect
+	gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d // indirect
 	k8s.io/api v0.17.7
 	k8s.io/apimachinery v0.17.7
 	k8s.io/client-go v12.0.0+incompatible
