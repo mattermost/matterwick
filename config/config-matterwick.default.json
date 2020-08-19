@@ -47,6 +47,7 @@
       "CWSEmailReplyToAddress": "",
       "CWSEmailBCCAddress": "",
       "CWSCloudURL": "",
+      "CWSStripeKey": "",
       "DockerHubCredentials": ""
   }
 }
