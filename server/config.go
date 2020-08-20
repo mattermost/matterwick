@@ -28,6 +28,7 @@ type CWS struct {
 	CWSEmailBCCAddress        string
 	CWSCloudURL               string
 	CWSStripeKey              string
+	CWSCloudDNSDomain         string
 	DockerHubCredentials      string
 }
 
