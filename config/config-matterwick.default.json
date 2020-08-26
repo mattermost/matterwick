@@ -49,8 +49,8 @@
       "CWSCloudURL": "",
       "CWSStripeKey": "",
       "CWSCloudDNSDomain": "",
-      "CWS_LICENSE_GENERATOR_URL": "",
-      "CWS_LICENSE_GENERATOR_KEY": "",
+      "CWSLicenseGeneratorUrl": "",
+      "CWSLicenseGeneratorKey": "",
       "DockerHubCredentials": ""
   }
 }
