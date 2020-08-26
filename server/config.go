@@ -29,6 +29,8 @@ type CWS struct {
 	CWSCloudURL               string
 	CWSStripeKey              string
 	CWSCloudDNSDomain         string
+	CWSLicenseGeneratorURL    string
+	CWSLicenseGeneratorKey    string
 	DockerHubCredentials      string
 }
 
