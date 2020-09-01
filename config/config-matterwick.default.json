@@ -37,6 +37,7 @@
       "CWSPaymentURL": "",
       "CWSPaymentToken": "",
       "CWSSiteURL": "",
+      "CWSCloudBetaCode": "",
       "CWSSMTPUsername": "",
       "CWSSMTPPassword": "",
       "CWSSMTPServer": "",

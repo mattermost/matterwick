@@ -17,6 +17,7 @@ type CWS struct {
 	CWSPaymentURL             string
 	CWSPaymentToken           string
 	CWSSiteURL                string
+	CWSCloudBetaCode          string
 	CWSSMTPUsername           string
 	CWSSMTPPassword           string
 	CWSSMTPServer             string
