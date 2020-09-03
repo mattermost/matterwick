@@ -34,8 +34,6 @@
   },
   "CWS": {
       "Database": "",
-      "CWSPaymentURL": "",
-      "CWSPaymentToken": "",
       "CWSSiteURL": "",
       "CWSSMTPUsername": "",
       "CWSSMTPPassword": "",
