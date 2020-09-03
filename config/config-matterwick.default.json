@@ -34,8 +34,6 @@
   },
   "CWS": {
       "Database": "",
-      "CWSPaymentURL": "",
-      "CWSPaymentToken": "",
       "CWSSiteURL": "",
       "CWSSMTPUsername": "",
       "CWSSMTPPassword": "",
@@ -50,6 +48,8 @@
       "CWSStripeKey": "",
       "CWSCloudDNSDomain": "",
       "CWSCloudGroupID": "",
+      "CWSBlapiURL": "",
+      "CWSBlapiToken": "",
       "CWSLicenseGeneratorUrl": "",
       "CWSLicenseGeneratorKey": "",
       "DockerHubCredentials": ""

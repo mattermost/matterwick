@@ -14,8 +14,6 @@ import (
 // CWS contains all configuration for the Customer Web Server
 type CWS struct {
 	Database                  string
-	CWSPaymentURL             string
-	CWSPaymentToken           string
 	CWSSiteURL                string
 	CWSSMTPUsername           string
 	CWSSMTPPassword           string
@@ -30,6 +28,8 @@ type CWS struct {
 	CWSStripeKey              string
 	CWSCloudDNSDomain         string
 	CWSCloudGroupID           string
+	CWSBlapiURL               string
+	CWSBlapiToken             string
 	CWSLicenseGeneratorURL    string
 	CWSLicenseGeneratorKey    string
 	DockerHubCredentials      string
