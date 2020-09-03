@@ -30,6 +30,8 @@ type CWS struct {
 	CWSStripeKey              string
 	CWSCloudDNSDomain         string
 	CWSCloudGroupID           string
+	CWSBlapiURL               string
+	CWSBlapiToken             string
 	CWSLicenseGeneratorURL    string
 	CWSLicenseGeneratorKey    string
 	DockerHubCredentials      string

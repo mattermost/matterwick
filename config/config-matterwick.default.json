@@ -50,6 +50,8 @@
       "CWSStripeKey": "",
       "CWSCloudDNSDomain": "",
       "CWSCloudGroupID": "",
+      "CWSBlapiURL": "",
+      "CWSBlapiToken": "",
       "CWSLicenseGeneratorUrl": "",
       "CWSLicenseGeneratorKey": "",
       "DockerHubCredentials": ""
