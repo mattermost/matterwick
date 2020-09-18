@@ -131,7 +131,6 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	deployment := Deployment{
 		Namespace:      namespace.GetName(),
 		ImageTag:       version,
-		PR:             pr.Number,
 		DeployFilePath: "/tmp/cws_deployment" + namespace.GetName() + ".yaml",
 		Environment:    s.Config.CWS,
 	}
