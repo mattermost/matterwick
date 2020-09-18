@@ -108,24 +108,6 @@ data:
   POSTGRES_USER: xcws
   POSTGRES_PASSWORD: xcws!934XCWS
 ---
-kind: PersistentVolume
-apiVersion: v1
-metadata:
-  name: postgres-pv-volume-{{ .PR }}
-  labels:
-    type: local
-    app: postgres
-spec:
-  storageClassName: gp2
-  persistentVolumeReclaimPolicy: Delete
-  capacity:
-    storage: 1Gi
-  accessModes:
-    - ReadWriteMany
-  hostPath:
-    path: "/mnt/data"
-
----
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
@@ -136,7 +118,7 @@ metadata:
 spec:
   storageClassName: gp2
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
@@ -172,7 +154,7 @@ spec:
             - configMapRef:
                 name: postgres-config
           volumeMounts:
-            - mountPath: /var/lib/postgresql/data
+            - mountPath: /cws/postgresql
               name: postgredb
       volumes:
         - name: postgredb
