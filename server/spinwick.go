@@ -32,7 +32,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool) {
+const (
+	cwsRepoName       = "customer-web-server"
+	cwsImage          = "mattermost/cws-test"
+	mattermostEEImage = "mattermost/mattermost-enterprise-edition"
+)
+
+func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) {
 
 	if pr.State == "closed" {
 		mlog.Info("PR is closed/merged, will not create a test server", mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number))
@@ -46,17 +52,20 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		ReportError:    false,
 		Aborted:        false,
 	}
-	if pr.RepoName == "customer-web-server" {
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a SpinWick test CWS")
+	if pr.RepoName == cwsRepoName {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a CWS SpinWick test server")
 		request = s.createKubeSpinWick(pr)
 	} else {
+		var commitMsg string
 		if withLicense {
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new HA SpinWick test server using Mattermost Cloud.")
+			commitMsg = "Creating a new HA SpinWick test server using Mattermost Cloud.")
+		} else if withCloudInfra {
+			commitMsg = "Creating a new SpinWick test cloud server with CWS using Mattermost Cloud.")
 		} else {
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a new SpinWick test server using Mattermost Cloud.")
+			commitMsg = "Creating a new SpinWick test server using Mattermost Cloud.")
 		}
-
-		request = s.createSpinWick(pr, size, withLicense)
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, commitcommitMsg)
+		request = s.createSpinWick(pr, size, withLicense, withCloudInfra)
 	}
 
 	if request.Error != nil {
@@ -114,7 +123,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	defer cancel()
 
 	version := ""
-	image := "mattermost/cws-test"
+	image := cwsImage
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
 	if errDocker != nil {
@@ -187,7 +196,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = installation is created
 // - cloud installation found = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool) *spinwick.Request {
+func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -221,7 +230,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	defer cancel()
 	// set the version to master
 	version := "master"
-	image := "mattermost/mattermost-enterprise-edition"
+	image := mattermostEEImage
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
 	if errDocker != nil {
@@ -880,7 +889,7 @@ func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 }
 
 func (s *Server) isSpinWickLabel(label string) bool {
-	return label == s.Config.SetupSpinWick || label == s.Config.SetupSpinWickHA
+	return label == s.Config.SetupSpinWick || label == s.Config.SetupSpinWickHA || label == s.Config.SetupSpinWickWithCWS
 }
 
 func (s *Server) isSpinWickLabelInLabels(labels []string) bool {

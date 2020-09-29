@@ -39,9 +39,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			mlog.Info("PR received SpinWick label", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWick:
-				s.handleCreateSpinWick(pr, "miniSingleton", false)
+				s.handleCreateSpinWick(pr, "miniSingleton", false, false)
 			case s.Config.SetupSpinWickHA:
-				s.handleCreateSpinWick(pr, "miniHA", true)
+				s.handleCreateSpinWick(pr, "miniHA", true, false)
+			case s.Config.SetupSpinWickWithCWS:
+				s.handleCreateSpinWick(pr, "miniSingleton", true, true)
 			default:
 				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", label))
 			}

@@ -46,12 +46,14 @@ type MatterwickConfig struct {
 	Org                 string
 	Username            string
 
-	SetupSpinWick     string
-	SetupSpinWickHA   string
-	SpinWickHALicense string
-	ProvisionerServer string
-	AWSAPIKey         string
-	DNSNameTestServer string
+	SetupSpinWick        string
+	SetupSpinWickHA      string
+	SetupSpinWickWithCWS string
+	SpinWickHALicense    string
+	SpinWickCloudLicense string
+	ProvisionerServer    string
+	AWSAPIKey            string
+	DNSNameTestServer    string
 
 	CloudGroupID               string
 	SetupSpinmintMessage       string
