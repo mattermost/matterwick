@@ -2,10 +2,11 @@ package spinwick
 
 // Request tracks information about a given SpinWick request.
 type Request struct {
-	InstallationID string
-	Error          error
-	ReportError    bool
-	Aborted        bool
+	InstallationID  string
+	InstallationDNS string
+	Error           error
+	ReportError     bool
+	Aborted         bool
 }
 
 // WithInstallationID updates the installation ID of a Request.

@@ -15,6 +15,7 @@ import (
 	"text/template"
 	"time"
 
+	cwsModel "github.com/mattermost/customer-web-server/model"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
@@ -54,18 +55,24 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 	}
 	if pr.RepoName == cwsRepoName {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a CWS SpinWick test server")
-		request = s.createKubeSpinWick(pr)
+		request = s.createCWSSpinWick(pr)
+	} else if withCloudInfra {
+		s.sendGitHubComment(
+			pr.RepoOwner,
+			pr.RepoName,
+			pr.Number,
+			"Creating a new SpinWick test cloud server with CWS using Mattermost Cloud.",
+		)
+		request = s.createCloudSpinWickWithCWS(pr, size)
 	} else {
 		var commitMsg string
 		if withLicense {
-			commitMsg = "Creating a new HA SpinWick test server using Mattermost Cloud.")
-		} else if withCloudInfra {
-			commitMsg = "Creating a new SpinWick test cloud server with CWS using Mattermost Cloud.")
+			commitMsg = "Creating a new HA SpinWick test server using Mattermost Cloud."
 		} else {
-			commitMsg = "Creating a new SpinWick test server using Mattermost Cloud.")
+			commitMsg = "Creating a new SpinWick test server using Mattermost Cloud."
 		}
-		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, commitcommitMsg)
-		request = s.createSpinWick(pr, size, withLicense, withCloudInfra)
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, commitMsg)
+		request = s.createSpinWick(pr, size, withLicense, nil)
 	}
 
 	if request.Error != nil {
@@ -97,7 +104,34 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 
 }
 
-func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) *spinwick.Request {
+	request := &spinwick.Request{
+		InstallationID: "n/a",
+		Error:          nil,
+		ReportError:    false,
+		Aborted:        false,
+	}
+	request = s.createCWSSpinWick(pr)
+	if request.Error != nil {
+		return request.WithError(errors.Wrap(request.Error, "Error occurred while creating the CWS test server"))
+	}
+	signupResp, apiKey, err := s.initializeCWSTestServer(request.InstallationDNS, pr.Number)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "Error occurred while configuring the CWS test server"))
+	}
+	envVars := cloudModel.EnvVarMap{
+		"MM_CLOUDSETTINGS_CWSURL": {Value: request.InstallationDNS},
+		"MM_CUSTOMER_ID":          {Value: signupResp.Customer.ID},
+		"MM_CLOUD_API_KEY":        {Value: apiKey},
+	}
+	request = s.createSpinWick(pr, size, true, envVars)
+	if request.Error != nil {
+		return request.WithError(errors.Wrap(request.Error, "Error occurred while creating cloud spinwick test server"))
+	}
+	return request
+}
+
+func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -189,6 +223,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	request.InstallationID = deployment.Namespace
+	request.InstallationDNS = spinwickURL
 	return request
 }
 
@@ -196,7 +231,7 @@ func (s *Server) createKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = installation is created
 // - cloud installation found = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) *spinwick.Request {
+func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool, envVars cloudModel.EnvVarMap) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -309,6 +344,9 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 	if withLicense {
 		installationRequest.License = s.Config.SpinWickHALicense
+	}
+	if envVars != nil && len(envVars) > 0 {
+		installationRequest.MattermostEnv = envVars
 	}
 
 	// TODO: (cpanato) Remove this when the above code comment is fixed
@@ -770,6 +808,24 @@ func makeRequest(method, url string, payload io.Reader) (*http.Response, error) 
 	return resp, nil
 }
 
+func (s *Server) initializeCWSTestServer(cwsDNS string, prNumber int) (*cwsModel.SignUpResponse, string, error) {
+	client := cwsModel.NewClient(cwsDNS)
+	req := &cwsModel.SignUpRequest{
+		Email:    "sysadmin@example.mattermost.com",
+		Password: "Sys@dmin123",
+		Cloud:    true,
+	}
+	response, err := client.SignUp(req)
+	if err != nil {
+		return nil, "", err
+	}
+	apiKey, err := client.GetCustomerAPIKey(response.Customer.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	return response, apiKey, nil
+}
+
 func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) error {
 	mlog.Info("Initializing Mattermost installation")
 
@@ -839,6 +895,7 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	if response.StatusCode != 201 {
 		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
 	}
+	client.PatchConfig()
 
 	mlog.Info("Mattermost configuration complete")
 
