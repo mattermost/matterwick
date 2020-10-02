@@ -23,7 +23,7 @@ import (
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
 
-	"github.com/google/go-github/v28/github"
+	"github.com/google/go-github/v32/github"
 	"github.com/pkg/errors"
 
 	// K8s packages for CWS
@@ -473,7 +473,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	version = s.Builds.getInstallationVersion(prNew)
 
 	deployClient := kc.Clientset.AppsV1().Deployments(namespaceName)
-	deployment, err := deployClient.Get("cws-test", metav1.GetOptions{})
+	deployment, err := deployClient.Get(context.Background(), "cws-test", metav1.GetOptions{})
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		mlog.Info("Attempted to update a deployment that does not exist")
 		return request.WithError(errors.Wrap(err, "Attempted to update a deployment that does not exist")).ShouldReportError()
@@ -487,7 +487,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		deployment.Spec.Template.Spec.InitContainers[idx].Image = image + ":" + version
 	}
 
-	_, err = deployClient.Update(deployment)
+	_, err = deployClient.Update(context.Background(), deployment, metav1.UpdateOptions{})
 
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed while updating deployment with latest image")).ShouldReportError()

@@ -10,7 +10,7 @@ import (
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
 
-	"github.com/google/go-github/v28/github"
+	"github.com/google/go-github/v32/github"
 )
 
 func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
