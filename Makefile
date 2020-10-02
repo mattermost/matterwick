@@ -29,6 +29,8 @@ build-image:  ## Build the docker image for matterwick
 	docker build \
 	--build-arg DOCKER_BUILD_IMAGE=$(DOCKER_BUILD_IMAGE) \
 	--build-arg DOCKER_BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+	--build-arg GITHUB_USERNAME=$(GITHUB_USERNAME) \
+	--build-arg GITHUB_TOKEN=$(GITHUB_TOKEN) \
 	. -f Dockerfile -t $(MATTERWICK_IMAGE) \
 	--no-cache
 
