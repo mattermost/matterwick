@@ -20,6 +20,7 @@ func PullRequestEventFromJSON(data io.Reader) *github.PullRequestEvent {
 	decoder := json.NewDecoder(data)
 	var event github.PullRequestEvent
 	if err := decoder.Decode(&event); err != nil {
+		mlog.Error("error parsing pull request event from JSON", mlog.Err(err))
 		return nil
 	}
 
@@ -31,6 +32,7 @@ func IssueCommentEventFromJSON(data io.Reader) *github.IssueCommentEvent {
 	decoder := json.NewDecoder(data)
 	var event github.IssueCommentEvent
 	if err := decoder.Decode(&event); err != nil {
+		mlog.Error("error parsing issue comment from JSON", mlog.Err(err))
 		return nil
 	}
 
@@ -42,6 +44,7 @@ func PingEventFromJSON(data io.Reader) *github.PingEvent {
 	decoder := json.NewDecoder(data)
 	var event github.PingEvent
 	if err := decoder.Decode(&event); err != nil {
+		mlog.Error("error parsing ping event from JSON", mlog.Err(err))
 		return nil
 	}
 
