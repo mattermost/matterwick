@@ -62,9 +62,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 			if s.isSpinWickHALabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true)
+				s.handleUpdateSpinWick(pr, true, false)
+			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
+				s.handleUpdateSpinWick(pr, true, true)
 			} else {
-				s.handleUpdateSpinWick(pr, false)
+				s.handleUpdateSpinWick(pr, false, false)
 			}
 		}
 	case "closed":

@@ -32,9 +32,12 @@ import (
 )
 
 const (
-	cwsRepoName       = "customer-web-server"
-	cwsImage          = "mattermost/cws-test"
-	mattermostEEImage = "mattermost/mattermost-enterprise-edition"
+	cwsRepoName          = "customer-web-server"
+	cwsImage             = "mattermost/cws-test"
+	mattermostEEImage    = "mattermost/mattermost-enterprise-edition"
+	mattermostTeamImage  = "mattermost/mattermost-team-edition"
+	mattermostWebAppRepo = "mattermost-webapp"
+	mattermostServerRepo = "mattermost-server"
 )
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) {
@@ -111,10 +114,9 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		ReportError:    false,
 		Aborted:        false,
 	}
-	uniqueID := pr.RepoName + "-" + pr.Sha[0:7]
 	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
-	workspaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
-	spinwickURL := fmt.Sprintf("https://%s.%s", workspaceName, s.Config.DNSNameTestServer)
+	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
+	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
 	password := "Cws@User123"
 	req := &cwsModel.SignUpRequest{
@@ -126,7 +128,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating CWS user")).ShouldReportError()
 	}
-	installation, err := client.CreateInstallation(response.Customer.ID, workspaceName, pr.Sha[0:7])
+	installation, err := client.CreateInstallation(response.Customer.ID, uniqueID, pr.Sha[0:7])
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
@@ -284,7 +286,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
 	// if is server or webapp then set version to the PR git commit hash
-	if pr.RepoName == "mattermost-webapp" {
+	if pr.RepoName == mattermostWebAppRepo {
 		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
 
 		// Waiting for Enterprise Image
@@ -294,7 +296,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		}
 
 		version = s.Builds.getInstallationVersion(prNew)
-	} else if pr.RepoName == "mattermost-server" {
+	} else if pr.RepoName == mattermostServerRepo {
 		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
 
 		ctxEnterprise, cancelEnterprise := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -310,7 +312,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 			mlog.Warn("Did not find the EE image, fallback to TE", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
 			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
 			//fallback to TE
-			image = "mattermost/mattermost-team-edition"
+			image = mattermostTeamImage
 			ctxTeam, cancelTeam := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancelTeam()
 			prNew, errImage = s.Builds.waitForImage(ctxTeam, s, reg, pr, image)
@@ -392,7 +394,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	return request
 }
 
-func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense bool) {
+func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) {
 	// other repos we are not updating
 	request := &spinwick.Request{
 		InstallationID: "n/a",
@@ -401,10 +403,10 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense bool) {
 		Aborted:        false,
 	}
 
-	if pr.RepoName == "customer-web-server" {
+	if pr.RepoName == cwsRepoName {
 		request = s.updateKubeSpinWick(pr)
 	} else {
-		request = s.updateSpinWick(pr, withLicense)
+		request = s.updateSpinWick(pr, withLicense, withCloudInfra)
 	}
 
 	if request.Error != nil {
@@ -467,7 +469,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	defer cancel()
 
 	version := ""
-	image := "mattermost/cws-test"
+	image := cwsImage
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
 	if errDocker != nil {
@@ -522,7 +524,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = error is returned
 // - cloud installation found and updated = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwick.Request {
+func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -530,15 +532,25 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		Aborted:        false,
 	}
 
-	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	id, image, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, ownerID)
+	var ownerID string
+	var err error
+	if withCloudInfra {
+		ownerID, err = s.getOwnerIDFromCWS(pr.RepoName, pr.Number)
+		if err != nil {
+			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
+		}
+	} else {
+		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
+	}
+
+	installationID, image, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
-	if id == "" {
+	if installationID == "" {
 		return request.WithError(fmt.Errorf("no installation found with owner %s", ownerID)).ShouldReportError()
 	}
-	request.InstallationID = id
+	request.InstallationID = installationID
 
 	mlog.Info("Sleeping a bit to wait for the build process to start", mlog.Int("pr", pr.Number), mlog.String("sha", pr.Sha))
 	time.Sleep(60 * time.Second)
@@ -576,7 +588,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense bool) *spinwi
 		Version: &installationVersion,
 		Image:   &image,
 	}
-	if withLicense {
+	if withLicense && !withCloudInfra {
 		upgradeRequest.License = &s.Config.SpinWickHALicense
 	}
 
@@ -632,7 +644,7 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
 		Aborted:        false,
 	}
 
-	if pr.RepoName == "customer-web-server" {
+	if pr.RepoName == cwsRepoName {
 		request = s.destroyKubeSpinWick(pr)
 	} else {
 		request = s.destroySpinWick(pr)
@@ -913,6 +925,26 @@ func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 	return spinWickID
 }
 
+func (s *Server) getOwnerIDFromCWS(repoName string, prNumber int) (string, error) {
+	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	uniqueID := s.makeSpinWickID(repoName, prNumber)
+	_, err := client.Login(&cwsModel.LoginRequest{
+		Email:    fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
+		Password: "Cws@User123",
+	})
+	if err != nil {
+		return "", err
+	}
+	customers, err := client.GetMyCustomers()
+	if err != nil {
+		return "", err
+	}
+	if len(customers) < 1 {
+		return "", errors.New("user don't have any customer")
+	}
+	return fmt.Sprintf("cws-%s", customers[0].ID), nil
+}
+
 func (s *Server) isSpinWickLabel(label string) bool {
 	return label == s.Config.SetupSpinWick || label == s.Config.SetupSpinWickHA || label == s.Config.SetupSpinWickWithCWS
 }
@@ -930,6 +962,15 @@ func (s *Server) isSpinWickLabelInLabels(labels []string) bool {
 func (s *Server) isSpinWickHALabel(labels []string) bool {
 	for _, label := range labels {
 		if label == s.Config.SetupSpinWickHA {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) isSpinWickCloudWithCWSLabel(labels []string) bool {
+	for _, label := range labels {
+		if label == s.Config.SetupSpinWickWithCWS {
 			return true
 		}
 	}
