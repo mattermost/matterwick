@@ -102,6 +102,8 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 
 }
 
+// createCloudSpinwickWithCWS will use the defined CWSCloudInstance to create a new user/customer and
+// instantiate a new MM cloud installation
 func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
@@ -109,24 +111,60 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		ReportError:    false,
 		Aborted:        false,
 	}
-	request = s.createCWSSpinWick(pr)
-	if request.Error != nil {
-		return request.WithError(errors.Wrap(request.Error, "Error occurred while creating the CWS test server"))
+	uniqueID := pr.RepoName + "-" + pr.Sha[0:7]
+	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
+	workspaceName := fmt.Sprintf("pr-%s", uniqueID)
+	spinwickURL := fmt.Sprintf("https://%s.%s", workspaceName, s.Config.DNSNameTestServer)
+	username := fmt.Sprintf("user_%s@example.mattermost.com", uniqueID)
+	password := "Cws@User123"
+	req := &cwsModel.SignUpRequest{
+		Email:    username,
+		Password: password,
+		Cloud:    true,
 	}
-	signupResp, apiKey, err := s.initializeCWSTestServer(request.InstallationDNS, pr.Number)
+	response, err := client.SignUp(req)
 	if err != nil {
-		return request.WithError(errors.Wrap(err, "Error occurred while configuring the CWS test server"))
+		return request.WithError(errors.Wrap(err, "Error occurred whilst creating CWS user")).ShouldReportError()
 	}
-	envVars := cloudModel.EnvVarMap{
-		"MM_CLOUDSETTINGS_CWSURL": {Value: request.InstallationDNS},
-		"MM_CUSTOMER_ID":          {Value: signupResp.Customer.ID},
-		"MM_CLOUD_API_KEY":        {Value: apiKey},
+	installation, err := client.CreateInstallation(response.Customer.ID, workspaceName, pr.Sha[0:7])
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
-	request = s.createSpinWick(pr, size, true, envVars)
-	if request.Error != nil {
-		return request.WithError(errors.Wrap(request.Error, "Error occurred while creating cloud spinwick test server"))
+	mlog.Debug("Installation creation started...", mlog.String("id", installation.ID), mlog.String("state", installation.State))
+	request.InstallationID = installation.ID
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			err := internalClient.DeleteInstallationInternal(installation.ID)
+			if err != nil {
+				mlog.Error("Error deleting non-stable installation", mlog.String("id", installation.ID), mlog.Err(err))
+			}
+			return request.WithError(errors.Wrap(ctx.Err(), "Timeout whilst creating installation")).ShouldReportError()
+		case <-time.After(30 * time.Second):
+			inst, err := internalClient.GetInstallationInternal(installation.ID)
+			if err != nil {
+				mlog.Debug("Error getting installation info", mlog.Err(err))
+				continue
+			}
+			switch inst.State {
+			case cloudModel.InstallationStateStable:
+				userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | %s | %s |", username, password)
+				msg := fmt.Sprintf("Mattermost test server with CWS created! :tada:\n\nAccess here: %s\n\n%s", spinwickURL, userTable)
+				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
+				return request
+			case cloudModel.InstallationStateCreationFailed:
+				err := internalClient.DeleteInstallationInternal(installation.ID)
+				if err != nil {
+					mlog.Error("Error deleting failed installation", mlog.String("id", installation.ID), mlog.Err(err))
+				}
+				return request.WithError(errors.New("installation creation failed")).ShouldReportError()
+			}
+			mlog.Debug("Installation not ready.. Waiting..")
+		}
 	}
-	return request
 }
 
 func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
