@@ -6,9 +6,7 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -223,7 +221,6 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	request.InstallationID = deployment.Namespace
-	request.InstallationDNS = spinwickURL
 	return request
 }
 
@@ -792,40 +789,6 @@ func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRe
 	}
 }
 
-func makeRequest(method, url string, payload io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, url, payload)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return resp, nil
-}
-
-func (s *Server) initializeCWSTestServer(cwsDNS string, prNumber int) (*cwsModel.SignUpResponse, string, error) {
-	client := cwsModel.NewClient(cwsDNS)
-	req := &cwsModel.SignUpRequest{
-		Email:    "sysadmin@example.mattermost.com",
-		Password: "Sys@dmin123",
-		Cloud:    true,
-	}
-	response, err := client.SignUp(req)
-	if err != nil {
-		return nil, "", err
-	}
-	apiKey, err := client.GetCustomerAPIKey(response.Customer.ID)
-	if err != nil {
-		return nil, "", err
-	}
-	return response, apiKey, nil
-}
-
 func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) error {
 	mlog.Info("Initializing Mattermost installation")
 
@@ -895,7 +858,6 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	if response.StatusCode != 201 {
 		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
 	}
-	client.PatchConfig()
 
 	mlog.Info("Mattermost configuration complete")
 
