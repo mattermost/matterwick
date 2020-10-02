@@ -32,6 +32,8 @@
     "FileFormat": "",
     "FileLocation": ""
   },
+  "CWSPublicAPIAddress": "",
+  "CWSInternalAPIAddress": "",
   "CWS": {
       "Database": "",
       "CWSSiteURL": "",

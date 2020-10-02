@@ -80,7 +80,9 @@ type MatterwickConfig struct {
 		FileLocation  string
 	}
 
-	CWS CWS
+	CWSPublicAPIAddress   string
+	CWSInternalAPIAddress string
+	CWS                   CWS
 }
 
 func findConfigFile(fileName string) string {
