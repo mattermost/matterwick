@@ -636,7 +636,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	return request
 }
 
-func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
+func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -647,7 +647,7 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest) {
 	if pr.RepoName == cwsRepoName {
 		request = s.destroyKubeSpinWick(pr)
 	} else {
-		request = s.destroySpinWick(pr)
+		request = s.destroySpinWick(pr, withCloud)
 	}
 
 	if request.Error != nil {
@@ -718,7 +718,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = empty ID string and no error
 // - cloud installation found and deleted = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) destroySpinWick(pr *model.PullRequest, withCloudInfra bool) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -726,7 +726,16 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 		Aborted:        false,
 	}
 
-	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
+	var ownerID string
+	var err error
+	if withCloudInfra {
+		ownerID, err = s.getOwnerIDFromCWS(pr.RepoName, pr.Number)
+		if err != nil {
+			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
+		}
+	} else {
+		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
+	}
 	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()

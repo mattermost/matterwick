@@ -55,7 +55,12 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		}
 		if s.isSpinWickLabel(label) {
 			mlog.Info("PR SpinWick label was removed", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
-			s.handleDestroySpinWick(pr)
+			switch *event.Label.Name {
+			case s.Config.SetupSpinWickWithCWS:
+				s.handleDestroySpinWick(pr, true)
+			case s.Config.SetupSpinWickHA, s.Config.SetupSpinWick:
+				s.handleDestroySpinWick(pr, false)
+			}
 		}
 	case "synchronize":
 		mlog.Info("PR has a new commit", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
@@ -72,7 +77,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	case "closed":
 		mlog.Info("PR was closed", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 		if s.isSpinWickLabelInLabels(pr.Labels) {
-			s.handleDestroySpinWick(pr)
+			if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
+				s.handleDestroySpinWick(pr, true)
+			} else {
+				s.handleDestroySpinWick(pr, false)
+			}
 		}
 	}
 
