@@ -114,7 +114,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		ReportError:    false,
 		Aborted:        false,
 	}
-	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+
 	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
@@ -124,11 +124,30 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		Password: password,
 		Cloud:    true,
 	}
-	response, err := client.SignUp(req)
+
+	// We try to login with an existing account and get the customer ID to create the installation
+	// if there isn't an existing user, we create a new one
+	var customerID string
+	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	_, err := client.Login(&cwsModel.LoginRequest{Email: username, Password: password})
 	if err != nil {
-		return request.WithError(errors.Wrap(err, "Error occurred whilst creating CWS user")).ShouldReportError()
+		response, err := client.SignUp(req)
+		if err != nil {
+			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
+		}
+		customerID = response.Customer.ID
+	} else {
+		customers, err := client.GetMyCustomers()
+		if err != nil {
+			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
+		}
+		if len(customers) < 1 {
+			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
+		}
+		customerID = customers[0].ID
 	}
-	installation, err := client.CreateInstallation(response.Customer.ID, uniqueID, pr.Sha[0:7])
+
+	installation, err := client.CreateInstallation(customerID, uniqueID, pr.Sha[0:7])
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
@@ -535,7 +554,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	var ownerID string
 	var err error
 	if withCloudInfra {
-		ownerID, err = s.getOwnerIDFromCWS(pr.RepoName, pr.Number)
+		ownerID, err = s.getCustomerIDFromCWS(pr.RepoName, pr.Number)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
 		}
@@ -729,7 +748,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, withCloudInfra bool) *sp
 	var ownerID string
 	var err error
 	if withCloudInfra {
-		ownerID, err = s.getOwnerIDFromCWS(pr.RepoName, pr.Number)
+		ownerID, err = s.getCustomerIDFromCWS(pr.RepoName, pr.Number)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
 		}
@@ -934,7 +953,7 @@ func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 	return spinWickID
 }
 
-func (s *Server) getOwnerIDFromCWS(repoName string, prNumber int) (string, error) {
+func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, error) {
 	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
 	uniqueID := s.makeSpinWickID(repoName, prNumber)
 	_, err := client.Login(&cwsModel.LoginRequest{
