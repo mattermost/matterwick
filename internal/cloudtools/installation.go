@@ -9,11 +9,8 @@ import (
 // GetInstallationIDFromOwnerID returns the ID of an installation that matches
 // a given OwnerID. Multiple matches will return an error. No match will return
 // an empty ID and no error.
-func GetInstallationIDFromOwnerID(serverURL, awsAPIKey, ownerID string) (string, string, error) {
-	headers := map[string]string{
-		"x-api-key": awsAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(serverURL, headers)
+func GetInstallationIDFromOwnerID(serverURL, ownerID string) (string, string, error) {
+	cloudClient := cloudModel.NewClient(serverURL)
 	installations, err := cloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 		OwnerID:                     ownerID,
 		Page:                        0,

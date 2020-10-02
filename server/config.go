@@ -52,7 +52,6 @@ type MatterwickConfig struct {
 	SpinWickHALicense    string
 	SpinWickCloudLicense string
 	ProvisionerServer    string
-	AWSAPIKey            string
 	DNSNameTestServer    string
 
 	CloudGroupID               string
