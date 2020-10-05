@@ -147,7 +147,18 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		customerID = customers[0].ID
 	}
 
-	installation, err := client.CreateInstallation(customerID, uniqueID, pr.Sha[0:7])
+	// Check for existing installations so we can abort the creation process if it exists
+	installation, err := s.getActiveInstallationUsingCWS(client)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "Error trying to get existing installations")).ShouldReportError()
+	}
+	if installation != nil {
+		return request.WithInstallationID(installation.ID).
+			WithError(fmt.Errorf("Already found a installation belonging to %s", customerID)).
+			IntentionalAbort()
+	}
+
+	installation, err = client.CreateInstallation(customerID, uniqueID, pr.Sha[0:7])
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
@@ -665,8 +676,10 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
 
 	if pr.RepoName == cwsRepoName {
 		request = s.destroyKubeSpinWick(pr)
+	} else if withCloud {
+		request = s.destroyCloudSpinWickWithCWS(pr)
 	} else {
-		request = s.destroySpinWick(pr, withCloud)
+		request = s.destroySpinWick(pr)
 	}
 
 	if request.Error != nil {
@@ -733,11 +746,10 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	return request
 }
 
-// destroySpinwick destroys a SpinWick with the following behavior:
-// - no cloud installation found = empty ID string and no error
-// - cloud installation found and deleted = actual ID string and no error
-// - any errors = error is returned
-func (s *Server) destroySpinWick(pr *model.PullRequest, withCloudInfra bool) *spinwick.Request {
+// destroyCloudSpinWickWithCWS destroys the Spinwick installation for the passed PR
+// using CWS so we can get rid of the installation but also for all the intermediate
+// metadata
+func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -745,16 +757,64 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, withCloudInfra bool) *sp
 		Aborted:        false,
 	}
 
-	var ownerID string
-	var err error
-	if withCloudInfra {
-		ownerID, err = s.getCustomerIDFromCWS(pr.RepoName, pr.Number)
-		if err != nil {
-			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
-		}
-	} else {
-		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
+	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
+	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
+	password := "Cws@User123"
+
+	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
+	publicClient := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	_, err := publicClient.Login(&cwsModel.LoginRequest{Email: username, Password: password})
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "error trying to login in the public CWS server")).ShouldReportError()
 	}
+
+	installation, err := s.getActiveInstallationUsingCWS(publicClient)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "Error trying to get existing installations")).ShouldReportError()
+	}
+	if installation == nil {
+		return request.WithError(errors.New("there isn't any installation for that PR")).ShouldReportError()
+	}
+
+	request.InstallationID = installation.ID
+
+	mlog.Info("Found installation. Starting deletion...", mlog.String("id", installation.ID))
+	err = internalClient.DeleteInstallationInternal(installation.ID)
+	if err != nil {
+		return request.WithInstallationID(installation.ID).
+			WithError(errors.Wrap(err, "error trying to initiate the installation deletion for the PR ")).
+			ShouldReportError()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	s.waitForInstallationIsDeleted(ctx, pr, request)
+
+	// Old comments created by MatterWick user will be deleted here.
+	s.commentLock.Lock()
+	defer s.commentLock.Unlock()
+	comments, _, err := newGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
+	}
+	s.removeOldComments(comments, pr)
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.DestroyedSpinmintMessage)
+	return request
+}
+
+// destroySpinwick destroys a SpinWick with the following behavior:
+// - no cloud installation found = empty ID string and no error
+// - cloud installation found and deleted = actual ID string and no error
+// - any errors = error is returned
+func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
+	request := &spinwick.Request{
+		InstallationID: "n/a",
+		Error:          nil,
+		ReportError:    false,
+		Aborted:        false,
+	}
+
+	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -827,8 +887,45 @@ func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRe
 					return
 				}
 			case cloudModel.InstallationStateCreationNoCompatibleClusters:
-				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "No Kubernetes clusters available at the moment, please contact the Mattermost Cloud Team or wait a bit.")
+				s.sendGitHubComment(
+					pr.RepoOwner,
+					pr.RepoName,
+					pr.Number,
+					"No Kubernetes clusters available at the moment, please contact the Mattermost Cloud Team or wait a bit.")
 				request.WithError(errors.New("no k8s clusters available")).IntentionalAbort()
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.PullRequest, request *spinwick.Request) {
+	channel, err := s.requestCloudWebhookChannel(request.InstallationID)
+	if err != nil {
+		request.WithError(err).ShouldReportError()
+		return
+	}
+	defer s.removeCloudWebhookChannel(request.InstallationID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			request.WithError(errors.New("timed out waiting for the mattermost installation to be deleted")).ShouldReportError()
+			return
+		case payload := <-channel:
+			if payload.ID != request.InstallationID {
+				continue
+			}
+
+			mlog.Info("Installation changed state",
+				mlog.String("installation", request.InstallationID),
+				mlog.String("state", payload.NewState))
+
+			switch payload.NewState {
+			case cloudModel.InstallationStateDeleted:
+				return
+			case cloudModel.InstallationStateDeletionFailed:
+				request.WithError(errors.New("the installation deletion failed")).ShouldReportError()
 				return
 			}
 		}
@@ -1021,4 +1118,28 @@ func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComm
 			}
 		}
 	}
+}
+
+func (s *Server) getActiveInstallationUsingCWS(client *cwsModel.Client) (*cwsModel.Installation, error) {
+	installations, err := client.GetInstallations()
+	if err != nil {
+		return nil, errors.Wrap(err, "Error trying to get existing installations")
+	}
+	if len(installations) < 1 {
+		return nil, nil
+	}
+
+	for _, installation := range installations {
+		switch installation.State {
+		case cloudModel.InstallationStateDeletionRequested,
+			cloudModel.InstallationStateDeletionInProgress,
+			cloudModel.InstallationStateDeleted,
+			cloudModel.InstallationStateCreationFailed:
+			continue
+		default:
+			return installation, nil
+		}
+	}
+
+	return nil, nil
 }
