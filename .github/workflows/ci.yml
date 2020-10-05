@@ -22,21 +22,19 @@ jobs:
     - uses: actions/checkout@v2
 
     - name: Check Style
-      shell: bash
-        env:
-          GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
-          GITHUB_PASSWORD: ${{ secrets.GITHUB_PASSWORD }}
-        run: |
-          GOPRIVATE=github.com/mattermost/*
-          echo "machine github.com login ${GITHUB_USERNAME} password ${GITHUB_TOKEN}" > ~/.netrc
-          make check-style
+      env:
+        GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
+        GITHUB_PASSWORD: ${{ secrets.GITHUB_PASSWORD }}
+      run: |
+        GOPRIVATE=github.com/mattermost/*
+        echo "machine github.com login ${GITHUB_USERNAME} password ${GITHUB_TOKEN}" > ~/.netrc
+        make check-style
 
     - name: Tests
-      shell: bash
-        env:
-          GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
-          GITHUB_PASSWORD: ${{ secrets.GITHUB_PASSWORD }}
-        run: |
-          GOPRIVATE=github.com/mattermost/*
-          echo "machine github.com login ${GITHUB_USERNAME} password ${GITHUB_TOKEN}" > ~/.netrc
-          make test
+      env:
+        GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
+        GITHUB_PASSWORD: ${{ secrets.GITHUB_PASSWORD }}
+      run: |
+        GOPRIVATE=github.com/mattermost/*
+        echo "machine github.com login ${GITHUB_USERNAME} password ${GITHUB_TOKEN}" > ~/.netrc
+        make test
