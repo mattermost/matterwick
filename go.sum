@@ -812,12 +812,6 @@ github.com/markbates/inflect v1.0.4/go.mod h1:1fR9+pO2KHEO9ZRtto13gDwwZaAKstQzfe
 github.com/marstr/guid v0.0.0-20170427235115-8bdf7d1a087c/go.mod h1:74gB1z2wpxxInTG6yaqA7KrtM0NZ+RbrcqDvYHefzho=
 github.com/marstr/guid v1.1.0/go.mod h1:74gB1z2wpxxInTG6yaqA7KrtM0NZ+RbrcqDvYHefzho=
 github.com/mattermost/blubr v0.0.0-20200113232543-f0ce67760aeb/go.mod h1:Tk99160Gy8m4rJPKIgYZrYneLepPCx5KPB3rp9+iK00=
-github.com/mattermost/customer-web-server v0.0.0-20201001212604-1bf957dc21a4 h1:qExOGdEbWqpSahknK4rbt0VmwiimzdaBEdNhfZH13jA=
-github.com/mattermost/customer-web-server v0.0.0-20201001212604-1bf957dc21a4/go.mod h1:QwCbHkaeVk4L+EhxuM5SWEhLloLrj8s2DwKKbkr3pGw=
-github.com/mattermost/customer-web-server v0.0.0-20201002160835-c0012288b8e5 h1:1Hm4tKWrKCWFRoF/YcxGhVBYDF5gnd7DKwIYmBBohJU=
-github.com/mattermost/customer-web-server v0.0.0-20201002160835-c0012288b8e5/go.mod h1:QwCbHkaeVk4L+EhxuM5SWEhLloLrj8s2DwKKbkr3pGw=
-github.com/mattermost/customer-web-server v0.0.0-20201002161717-baeaabab6d1a h1:8H8HyPzzf9SsD9Iagx2LKq6AeqzZcVe9G9XgDggTDTo=
-github.com/mattermost/customer-web-server v0.0.0-20201002161717-baeaabab6d1a/go.mod h1:QwCbHkaeVk4L+EhxuM5SWEhLloLrj8s2DwKKbkr3pGw=
 github.com/mattermost/customer-web-server v0.0.0-20201002182017-9f2dc91ef88d h1:MaaZ/iJAxi8zW65xNaKIjCTgROn8/1LWYVwiZTu+1nE=
 github.com/mattermost/customer-web-server v0.0.0-20201002182017-9f2dc91ef88d/go.mod h1:QwCbHkaeVk4L+EhxuM5SWEhLloLrj8s2DwKKbkr3pGw=
 github.com/mattermost/go-i18n v1.11.0 h1:1hLKqn/ZvhZ80OekjVPGYcCrBfMz+YxNNgqS+beL7zE=
@@ -835,9 +829,6 @@ github.com/mattermost/mattermost-cloud v0.26.2-0.20200902175322-676bc178d470 h1:
 github.com/mattermost/mattermost-cloud v0.26.2-0.20200902175322-676bc178d470/go.mod h1:MfQxHSJqQDlvFFhGD3qEWV0a66JYJjSN9B/6FGkLTbQ=
 github.com/mattermost/mattermost-operator v1.6.1-0.20200818143941-8810bed9630a h1:SIGQ7OfipuZjujxDICWJKrOP4CvpIyo+TlGiZAS85PY=
 github.com/mattermost/mattermost-operator v1.6.1-0.20200818143941-8810bed9630a/go.mod h1:IDn3j82CD1G6yX+bfjy2g5+PYlT0byIuHhOWDv6h1ok=
-github.com/mattermost/mattermost-server v1.4.0 h1:bAN0zYgjyhXPy67VTiHLg+bu8mDJ2bhx109BKk2Ddos=
-github.com/mattermost/mattermost-server v4.10.10+incompatible h1:2179SKI2dFrAralei2sRUMLvxhCVSQ8IC8h9wD2/70I=
-github.com/mattermost/mattermost-server v4.10.10+incompatible/go.mod h1:5L6MjAec+XXQwMIt791Ganu45GKsSiM+I0tLR9wUj8Y=
 github.com/mattermost/mattermost-server/v5 v5.19.1/go.mod h1:10vIYDohcPNDMDk3XlRUjNO9nGk9fnFHEFeSIUYR82k=
 github.com/mattermost/mattermost-server/v5 v5.26.0 h1:pDZcD3J6pK3Hb01lNH7Fn3657NXB3Wnm4AK1b+6YgMg=
 github.com/mattermost/mattermost-server/v5 v5.26.0/go.mod h1:TVLwNQLSPNIkFOLoGHCGjZbSc2JEQf5PHUbQvneUSGM=

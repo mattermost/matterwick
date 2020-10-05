@@ -12,7 +12,6 @@ require (
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/mattermost/customer-web-server v0.0.0-20201002182017-9f2dc91ef88d
 	github.com/mattermost/mattermost-cloud v0.26.2-0.20200902175322-676bc178d470
-	github.com/mattermost/mattermost-server v4.10.10+incompatible
 	github.com/mattermost/mattermost-server/v5 v5.26.0
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.6.0
