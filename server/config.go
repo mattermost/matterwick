@@ -50,7 +50,6 @@ type MatterwickConfig struct {
 	SetupSpinWickHA      string
 	SetupSpinWickWithCWS string
 	SpinWickHALicense    string
-	SpinWickCloudLicense string
 	ProvisionerServer    string
 	AWSAPIKey            string
 	DNSNameTestServer    string
@@ -82,6 +81,7 @@ type MatterwickConfig struct {
 
 	CWSPublicAPIAddress   string
 	CWSInternalAPIAddress string
+	CWSUserPassword       string
 	CWS                   CWS
 }
 

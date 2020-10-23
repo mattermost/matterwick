@@ -118,7 +118,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
-	password := "Cws@User123"
+	password := s.Config.CWSUserPassword
 	req := &cwsModel.SignUpRequest{
 		Email:    username,
 		Password: password,
@@ -765,7 +765,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 
 	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
-	password := "Cws@User123"
+	password := s.Config.CWSUserPassword
 
 	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
 	publicClient := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
@@ -1064,7 +1064,7 @@ func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, er
 	uniqueID := s.makeSpinWickID(repoName, prNumber)
 	_, err := client.Login(&cwsModel.LoginRequest{
 		Email:    fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
-		Password: "Cws@User123",
+		Password: s.Config.CWSUserPassword,
 	})
 	if err != nil {
 		return "", err
