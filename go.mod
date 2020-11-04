@@ -3,22 +3,22 @@ module github.com/mattermost/matterwick
 go 1.14
 
 require (
-	github.com/aws/aws-sdk-go v1.34.7
+	github.com/aws/aws-sdk-go v1.34.26
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
 	github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c // indirect
 	github.com/google/go-github/v32 v32.1.0
 	github.com/gorilla/mux v1.7.4
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
 	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mattermost/customer-web-server v0.0.0-20201002182017-9f2dc91ef88d
-	github.com/mattermost/mattermost-cloud v0.26.2-0.20200902175322-676bc178d470
+	github.com/mattermost/customer-web-server v0.0.0-20201104103624-50966b6fa076
+	github.com/mattermost/mattermost-cloud v0.29.0
 	github.com/mattermost/mattermost-server/v5 v5.26.0
 	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.6.0
+	github.com/sirupsen/logrus v1.7.0
 	github.com/stretchr/testify v1.6.1
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	k8s.io/api v0.18.8
-	k8s.io/apimachinery v0.18.8
+	k8s.io/api v0.18.9
+	k8s.io/apimachinery v0.18.9
 	k8s.io/client-go v12.0.0+incompatible
 	sigs.k8s.io/aws-iam-authenticator v0.5.1
 )
