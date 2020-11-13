@@ -14,6 +14,8 @@ import (
 
 const defaultHTTPTimeout = time.Minute
 
+// CreateInstallationRequest needed parameters to create a new
+// installation in CWS
 type CreateInstallationRequest struct {
 	CustomerID             string
 	RequestedWorkspaceName string
@@ -22,26 +24,33 @@ type CreateInstallationRequest struct {
 	APILock                bool
 }
 
+// User model that represents a CWS user
 type User struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
 }
 
+// Customer model that represents a CWS customer
 type Customer struct {
 	ID        string `json:"id"`
 	CreatorID string `json:"creator_id"`
 }
 
+// SignupResponse model returned after the signup
+// is called succesfully
 type SignupResponse struct {
 	User     *User     `json:"user"`
 	Customer *Customer `json:"customer"`
 }
 
+// CreateInstallationResponse model returned after a
+// installation is created successfully
 type CreateInstallationResponse struct {
 	InstallationID string `json:"installationId"`
 	Token          string `json:"token"`
 }
 
+// Installation model that represents a CWS installation
 type Installation struct {
 	ID             string
 	State          string
@@ -53,12 +62,14 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// Client CWS client to perform actions the against CWS service
 type Client struct {
 	httpClient  *http.Client
 	publicURL   string
 	internalURL string
 }
 
+// NewClient returns a new CWS client
 func NewClient(publicAPIHost, internalAPIHost string) *Client {
 	return &Client{
 		httpClient:  &http.Client{Timeout: defaultHTTPTimeout},
@@ -79,6 +90,9 @@ func (c *Client) Login(email, password string) (*User, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "error trying to log into CWS API")
+		}
 		var user *User
 		err = json.Unmarshal(body, &user)
 		if err != nil {
@@ -89,6 +103,7 @@ func (c *Client) Login(email, password string) (*User, error) {
 	return nil, readAPIError(resp)
 }
 
+// SignUp sign up a new user in the CWS service
 func (c *Client) SignUp(email, password string) (*SignupResponse, error) {
 	parameters := fmt.Sprintf(`{"email": "%s", "password": "%s"}`, email, password)
 	resp, err := c.makeRequest(c.publicURL, "POST", "/api/v1/signup", []byte(parameters))
@@ -100,6 +115,9 @@ func (c *Client) SignUp(email, password string) (*SignupResponse, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "error trying to sign up into CWS API")
+		}
 		var signupResponse *SignupResponse
 		err = json.Unmarshal(body, &signupResponse)
 		if err != nil {
@@ -110,6 +128,8 @@ func (c *Client) SignUp(email, password string) (*SignupResponse, error) {
 	return nil, readAPIError(resp)
 }
 
+// GetMyCustomers returns the customers asociated to the logged
+// user
 func (c *Client) GetMyCustomers() ([]*Customer, error) {
 	resp, err := c.makeRequest(c.publicURL, "GET", "/api/v1/customers", nil)
 	if err != nil {
@@ -120,6 +140,9 @@ func (c *Client) GetMyCustomers() ([]*Customer, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "error trying to request my customers from CWS API")
+		}
 		var customers []*Customer
 		err = json.Unmarshal(body, &customers)
 		if err != nil {
@@ -130,6 +153,7 @@ func (c *Client) GetMyCustomers() ([]*Customer, error) {
 	return nil, readAPIError(resp)
 }
 
+// VerifyUser verifies the user passed a parameter
 func (c *Client) VerifyUser(userID string) error {
 	path := fmt.Sprintf("/api/v1/internal/users/%s/verify", userID)
 	resp, err := c.makeRequest(c.internalURL, "POST", path, nil)
@@ -144,6 +168,7 @@ func (c *Client) VerifyUser(userID string) error {
 	return readAPIError(resp)
 }
 
+// CreateInstallation creates a new installation in CWS using the parameters paseed in the installation request
 func (c *Client) CreateInstallation(installationRequest *CreateInstallationRequest) (*CreateInstallationResponse, error) {
 	requestBytes, err := json.Marshal(installationRequest)
 	if err != nil {
@@ -157,6 +182,9 @@ func (c *Client) CreateInstallation(installationRequest *CreateInstallationReque
 	switch resp.StatusCode {
 	case http.StatusOK:
 		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "error trying to create CWS installation")
+		}
 		var installationResponse *CreateInstallationResponse
 		err = json.Unmarshal(body, &installationResponse)
 		if err != nil {
@@ -167,6 +195,7 @@ func (c *Client) CreateInstallation(installationRequest *CreateInstallationReque
 	return nil, readAPIError(resp)
 }
 
+// DeleteInstallation deleted the installation passed as parameter
 func (c *Client) DeleteInstallation(installationID string) error {
 	//TODO Request to internal API
 	path := fmt.Sprintf("/api/v1/internal/installation/%s", installationID)
@@ -182,6 +211,7 @@ func (c *Client) DeleteInstallation(installationID string) error {
 	return readAPIError(resp)
 }
 
+// GetInstallations returns the installations associated that belongs to the logged user
 func (c *Client) GetInstallations() ([]*Installation, error) {
 	resp, err := c.makeRequest(c.internalURL, "POST", "/api/v1/installations", nil)
 	if err != nil {
@@ -191,6 +221,9 @@ func (c *Client) GetInstallations() ([]*Installation, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, errors.Wrap(err, "error trying to get CWS installation")
+		}
 		var installations []*Installation
 		err = json.Unmarshal(body, &installations)
 		if err != nil {
