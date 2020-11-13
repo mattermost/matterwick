@@ -82,7 +82,9 @@ type MatterwickConfig struct {
 	CWSPublicAPIAddress   string
 	CWSInternalAPIAddress string
 	CWSUserPassword       string
-	CWS                   CWS
+	CWSSpinwickGroupID    string
+
+	CWS CWS
 }
 
 func findConfigFile(fileName string) string {

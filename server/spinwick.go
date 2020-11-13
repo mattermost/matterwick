@@ -129,11 +129,16 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	// if there isn't an existing user, we create a new one
 	var customerID string
 	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
 	_, err := client.Login(&cwsModel.LoginRequest{Email: username, Password: password})
 	if err != nil {
 		response, err := client.SignUp(req)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
+		}
+		err = internalClient.VerifyUserInternal(response.User.ID)
+		if err != nil {
+			return request.WithError(errors.Wrap(err, "Error occurred verifying the new CWS user")).ShouldReportError()
 		}
 		customerID = response.Customer.ID
 	} else {
@@ -158,11 +163,21 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 			IntentionalAbort()
 	}
 
-	installation, err = client.CreateInstallation(customerID, uniqueID, pr.Sha[0:7])
+	// TODO REMOVE ONLY FOR TEST
+	pr.Sha = "a8833ef081d7187609f8d8ff4fa21a866e1af3a4"
+
+	createInstallationRequest := &cwsModel.CreateInstallationRequest{
+		CustomerID:             customerID,
+		RequestedWorkspaceName: uniqueID,
+		Version:                pr.Sha[0:7],
+		GroupID:                s.Config.CWSSpinwickGroupID,
+		APILock:                false,
+	}
+	createResponse, err := internalClient.CreateInstallationInternal(createInstallationRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
-	request.InstallationID = installation.ID
+	request.InstallationID = createResponse.InstallationID
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	s.waitForInstallationStable(ctx, pr, request)

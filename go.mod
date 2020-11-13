@@ -10,7 +10,7 @@ require (
 	github.com/gorilla/mux v1.7.4
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
 	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mattermost/customer-web-server v0.0.0-20201104103624-50966b6fa076
+	github.com/mattermost/customer-web-server v0.0.0-20201113160058-ae0e5acfce8d
 	github.com/mattermost/mattermost-cloud v0.29.0
 	github.com/mattermost/mattermost-server/v5 v5.26.0
 	github.com/pkg/errors v0.9.1
