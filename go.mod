@@ -6,17 +6,23 @@ require (
 	github.com/aws/aws-sdk-go v1.34.26
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
 	github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c // indirect
+	github.com/google/go-cmp v0.5.1 // indirect
 	github.com/google/go-github/v32 v32.1.0
 	github.com/gorilla/mux v1.7.4
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
 	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mattermost/customer-web-server v0.0.0-20201113160058-ae0e5acfce8d
+	github.com/mattermost/ldap v3.0.4+incompatible // indirect
 	github.com/mattermost/mattermost-cloud v0.29.0
 	github.com/mattermost/mattermost-server/v5 v5.26.0
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.7.0
 	github.com/stretchr/testify v1.6.1
+	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0 // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/sys v0.0.0-20201008064518-c1f3e3309c71 // indirect
+	golang.org/x/tools v0.0.0-20201008025239-9df69603baec // indirect
+	gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d // indirect
+	honnef.co/go/tools v0.0.1-2020.1.5 // indirect
 	k8s.io/api v0.18.9
 	k8s.io/apimachinery v0.18.9
 	k8s.io/client-go v12.0.0+incompatible

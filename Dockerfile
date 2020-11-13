@@ -3,15 +3,8 @@ ARG DOCKER_BUILD_IMAGE=golang:1.14.6
 ARG DOCKER_BASE_IMAGE=alpine:3.12
 
 FROM ${DOCKER_BUILD_IMAGE} AS build
-ARG GITHUB_USERNAME
-ARG GITHUB_TOKEN
 WORKDIR /matterwick/
 COPY . /matterwick/
-
-RUN echo "machine github.com login ${GITHUB_USERNAME} password ${GITHUB_TOKEN}" > ~/.netrc
-RUN cat ~/.netrc
-COPY go.mod go.sum ./
-RUN GOPRIVATE=github.com/mattermost/* go mod download && go mod verify
 
 RUN make build
 

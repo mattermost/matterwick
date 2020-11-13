@@ -13,11 +13,12 @@ import (
 	"text/template"
 	"time"
 
-	cwsModel "github.com/mattermost/customer-web-server/model"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
 	"github.com/mattermost/matterwick/internal/cloudtools"
+	"github.com/mattermost/matterwick/internal/cws"
+	cwsclient "github.com/mattermost/matterwick/internal/cws"
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
 
@@ -119,30 +120,24 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
 	password := s.Config.CWSUserPassword
-	req := &cwsModel.SignUpRequest{
-		Email:    username,
-		Password: password,
-		Cloud:    true,
-	}
 
 	// We try to login with an existing account and get the customer ID to create the installation
 	// if there isn't an existing user, we create a new one
 	var customerID string
-	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
-	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
-	_, err := client.Login(&cwsModel.LoginRequest{Email: username, Password: password})
+	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	_, err := cwsClient.Login(username, password)
 	if err != nil {
-		response, err := client.SignUp(req)
+		response, err := cwsClient.SignUp(username, password)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
 		}
-		err = internalClient.VerifyUserInternal(response.User.ID)
+		err = cwsClient.VerifyUser(response.User.ID)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "Error occurred verifying the new CWS user")).ShouldReportError()
 		}
 		customerID = response.Customer.ID
 	} else {
-		customers, err := client.GetMyCustomers()
+		customers, err := cwsClient.GetMyCustomers()
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
 		}
@@ -153,7 +148,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	}
 
 	// Check for existing installations so we can abort the creation process if it exists
-	installation, err := s.getActiveInstallationUsingCWS(client)
+	installation, err := s.getActiveInstallationUsingCWS(cwsClient)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error trying to get existing installations")).ShouldReportError()
 	}
@@ -166,14 +161,14 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	// TODO REMOVE ONLY FOR TEST
 	pr.Sha = "a8833ef081d7187609f8d8ff4fa21a866e1af3a4"
 
-	createInstallationRequest := &cwsModel.CreateInstallationRequest{
+	createInstallationRequest := &cws.CreateInstallationRequest{
 		CustomerID:             customerID,
 		RequestedWorkspaceName: uniqueID,
 		Version:                pr.Sha[0:7],
 		GroupID:                s.Config.CWSSpinwickGroupID,
 		APILock:                false,
 	}
-	createResponse, err := internalClient.CreateInstallationInternal(createInstallationRequest)
+	createResponse, err := cwsClient.CreateInstallation(createInstallationRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
@@ -782,14 +777,13 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
 	password := s.Config.CWSUserPassword
 
-	internalClient := cwsModel.NewClient(s.Config.CWSInternalAPIAddress)
-	publicClient := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
-	_, err := publicClient.Login(&cwsModel.LoginRequest{Email: username, Password: password})
+	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	_, err := cwsClient.Login(username, password)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "error trying to login in the public CWS server")).ShouldReportError()
 	}
 
-	installation, err := s.getActiveInstallationUsingCWS(publicClient)
+	installation, err := s.getActiveInstallationUsingCWS(cwsClient)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error trying to get existing installations")).ShouldReportError()
 	}
@@ -800,7 +794,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 	request.InstallationID = installation.ID
 
 	mlog.Info("Found installation. Starting deletion...", mlog.String("id", installation.ID))
-	err = internalClient.DeleteInstallationInternal(installation.ID)
+	err = cwsClient.DeleteInstallation(installation.ID)
 	if err != nil {
 		return request.WithInstallationID(installation.ID).
 			WithError(errors.Wrap(err, "error trying to initiate the installation deletion for the PR ")).
@@ -1075,16 +1069,16 @@ func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 }
 
 func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, error) {
-	client := cwsModel.NewClient(s.Config.CWSPublicAPIAddress)
+	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
 	uniqueID := s.makeSpinWickID(repoName, prNumber)
-	_, err := client.Login(&cwsModel.LoginRequest{
-		Email:    fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
-		Password: s.Config.CWSUserPassword,
-	})
+	_, err := cwsClient.Login(
+		fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
+		s.Config.CWSUserPassword,
+	)
 	if err != nil {
 		return "", err
 	}
-	customers, err := client.GetMyCustomers()
+	customers, err := cwsClient.GetMyCustomers()
 	if err != nil {
 		return "", err
 	}
@@ -1144,7 +1138,7 @@ func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComm
 	}
 }
 
-func (s *Server) getActiveInstallationUsingCWS(client *cwsModel.Client) (*cwsModel.Installation, error) {
+func (s *Server) getActiveInstallationUsingCWS(client *cws.Client) (*cws.Installation, error) {
 	installations, err := client.GetInstallations()
 	if err != nil {
 		return nil, errors.Wrap(err, "Error trying to get existing installations")
