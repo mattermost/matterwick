@@ -18,7 +18,6 @@ import (
 	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
 	"github.com/mattermost/matterwick/internal/cloudtools"
 	"github.com/mattermost/matterwick/internal/cws"
-	cwsclient "github.com/mattermost/matterwick/internal/cws"
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
 
@@ -124,7 +123,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	// We try to login with an existing account and get the customer ID to create the installation
 	// if there isn't an existing user, we create a new one
 	var customerID string
-	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
 	_, err := cwsClient.Login(username, password)
 	if err != nil {
 		response, err := cwsClient.SignUp(username, password)
@@ -777,7 +776,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
 	password := s.Config.CWSUserPassword
 
-	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
 	_, err := cwsClient.Login(username, password)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "error trying to login in the public CWS server")).ShouldReportError()
@@ -1069,7 +1068,7 @@ func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 }
 
 func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, error) {
-	cwsClient := cwsclient.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
 	uniqueID := s.makeSpinWickID(repoName, prNumber)
 	_, err := cwsClient.Login(
 		fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
