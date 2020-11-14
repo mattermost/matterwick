@@ -157,9 +157,6 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 			IntentionalAbort()
 	}
 
-	// TODO REMOVE ONLY FOR TEST
-	pr.Sha = "a8833ef081d7187609f8d8ff4fa21a866e1af3a4"
-
 	createInstallationRequest := &cws.CreateInstallationRequest{
 		CustomerID:             customerID,
 		RequestedWorkspaceName: uniqueID,
