@@ -5,7 +5,6 @@ ARG DOCKER_BASE_IMAGE=alpine:3.12
 FROM ${DOCKER_BUILD_IMAGE} AS build
 WORKDIR /matterwick/
 COPY . /matterwick/
-
 RUN make build
 
 # Final Image

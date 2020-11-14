@@ -22,9 +22,7 @@ jobs:
     - uses: actions/checkout@v2
 
     - name: Check Style
-      run: |
-        make check-style
+      run: make check-style
 
     - name: Tests
-      run: |
-        make test
+      run: make test
