@@ -31,7 +31,7 @@ type Deployment struct {
 }
 
 func namespaceExists(kc *k8s.KubeClient, namespaceName string) (bool, error) {
-	_, err := kc.Clientset.CoreV1().Namespaces().Get(namespaceName, metav1.GetOptions{})
+	_, err := kc.Clientset.CoreV1().Namespaces().Get(context.Background(), namespaceName, metav1.GetOptions{})
 	if err != nil && !k8sErrors.IsNotFound(err) {
 		return false, err
 	} else if err != nil && k8sErrors.IsNotFound(err) {
@@ -41,7 +41,7 @@ func namespaceExists(kc *k8s.KubeClient, namespaceName string) (bool, error) {
 }
 
 func getOrCreateNamespace(kc *k8s.KubeClient, namespaceName string) (*corev1.Namespace, error) {
-	namespace, err := kc.Clientset.CoreV1().Namespaces().Get(namespaceName, metav1.GetOptions{})
+	namespace, err := kc.Clientset.CoreV1().Namespaces().Get(context.Background(), namespaceName, metav1.GetOptions{})
 	if err != nil && k8sErrors.IsNotFound(err) {
 		return kc.CreateOrUpdateNamespace(namespaceName)
 	}
@@ -60,7 +60,7 @@ func deleteNamespace(kc *k8s.KubeClient, namespace string) error {
 		GracePeriodSeconds: &gracePeriod,
 		PropagationPolicy:  &policy,
 	}
-	err := kc.Clientset.CoreV1().Namespaces().Delete(namespace, deleteOpts)
+	err := kc.Clientset.CoreV1().Namespaces().Delete(context.Background(), namespace, *deleteOpts)
 	if err != nil {
 		return errors.Wrapf(err, "failed to delete the namespace %s", namespace)
 	}
@@ -76,7 +76,7 @@ func waitForIPAssignment(kc *k8s.KubeClient, namespace string) (string, error) {
 		case <-ctx.Done():
 			return "", errors.New("Timed out waiting for IP Assignment")
 		case <-time.After(30 * time.Second):
-			lb, _ := kc.Clientset.CoreV1().Services(namespace).Get("cws-test-service", metav1.GetOptions{})
+			lb, _ := kc.Clientset.CoreV1().Services(namespace).Get(context.Background(), "cws-test-service", metav1.GetOptions{})
 
 			if len(lb.Status.LoadBalancer.Ingress) > 0 {
 				return lb.Status.LoadBalancer.Ingress[0].Hostname, nil

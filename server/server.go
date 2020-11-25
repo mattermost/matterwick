@@ -20,7 +20,7 @@ import (
 	"github.com/mattermost/mattermost-server/v5/utils/fileutils"
 
 	"github.com/braintree/manners"
-	"github.com/google/go-github/v28/github"
+	"github.com/google/go-github/v32/github"
 	"github.com/gorilla/mux"
 )
 

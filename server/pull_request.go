@@ -10,7 +10,7 @@ import (
 	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
 
-	"github.com/google/go-github/v28/github"
+	"github.com/google/go-github/v32/github"
 )
 
 func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
@@ -39,9 +39,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			mlog.Info("PR received SpinWick label", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWick:
-				s.handleCreateSpinWick(pr, "miniSingleton", false)
+				s.handleCreateSpinWick(pr, "miniSingleton", false, false)
 			case s.Config.SetupSpinWickHA:
-				s.handleCreateSpinWick(pr, "miniHA", true)
+				s.handleCreateSpinWick(pr, "miniHA", true, false)
+			case s.Config.SetupSpinWickWithCWS:
+				s.handleCreateSpinWick(pr, "miniSingleton", true, true)
 			default:
 				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", label))
 			}
@@ -53,22 +55,33 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		}
 		if s.isSpinWickLabel(label) {
 			mlog.Info("PR SpinWick label was removed", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
-			s.handleDestroySpinWick(pr)
+			switch *event.Label.Name {
+			case s.Config.SetupSpinWickWithCWS:
+				s.handleDestroySpinWick(pr, true)
+			case s.Config.SetupSpinWickHA, s.Config.SetupSpinWick:
+				s.handleDestroySpinWick(pr, false)
+			}
 		}
 	case "synchronize":
 		mlog.Info("PR has a new commit", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 			if s.isSpinWickHALabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true)
+				s.handleUpdateSpinWick(pr, true, false)
+			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
+				s.handleUpdateSpinWick(pr, true, true)
 			} else {
-				s.handleUpdateSpinWick(pr, false)
+				s.handleUpdateSpinWick(pr, false, false)
 			}
 		}
 	case "closed":
 		mlog.Info("PR was closed", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 		if s.isSpinWickLabelInLabels(pr.Labels) {
-			s.handleDestroySpinWick(pr)
+			if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
+				s.handleDestroySpinWick(pr, true)
+			} else {
+				s.handleDestroySpinWick(pr, false)
+			}
 		}
 	}
 
@@ -120,6 +133,8 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Creating a SpinWick test customer web server",
 		"Spinwick CWS test server has been destroyed",
 		"CWS test server updated",
+		"Creating a new SpinWick test cloud server with CWS",
+		"Mattermost test server with CWS created",
 	}
 
 	mlog.Info("Removing old Matterwick comments")

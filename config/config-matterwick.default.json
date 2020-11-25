@@ -32,6 +32,10 @@
     "FileFormat": "",
     "FileLocation": ""
   },
+  "CWSPublicAPIAddress": "",
+  "CWSInternalAPIAddress": "",
+  "CWSUserPassword": "",
+  "CWSSpinwickGroupID": "",
   "CWS": {
       "Database": "",
       "CWSSiteURL": "",
