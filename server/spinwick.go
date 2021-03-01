@@ -422,7 +422,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
-	err = s.initializeMattermostTestServer(spinwickURL, pr.Number)
+	err = s.initializeMattermostTestServer(spinwickURL, installation.ID, pr.Number, cloudClient)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
 	}
@@ -946,7 +946,7 @@ func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.Pul
 	}
 }
 
-func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) error {
+func (s *Server) initializeMattermostTestServer(mmURL, installID string, prNumber int, cloudClient *cloudModel.Client) error {
 	mlog.Info("Initializing Mattermost installation")
 
 	wait := 600
@@ -1014,6 +1014,25 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	_, response = client.AddTeamMember(firstTeam.Id, testUser.Id)
 	if response.StatusCode != 201 {
 		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	}
+
+	clusterInstallations, err := cloudClient.GetClusterInstallations(&cloudModel.GetClusterInstallationsRequest{
+		InstallationID: installID,
+		Page:           0,
+		PerPage:        100,
+		IncludeDeleted: false,
+	})
+	if err != nil {
+		return errors.Wrap(err, "unable to get cluster installations")
+	}
+
+	if len(clusterInstallations) == 0 {
+		return fmt.Errorf("no cluster installations found for installation %s", installID)
+	}
+
+	_, err = cloudClient.RunMattermostCLICommandOnClusterInstallation(clusterInstallations[0].ID, []string{"sampledata"})
+	if err != nil {
+		mlog.Error(errors.Wrapf(err, "Unable to finish generating test data for cloud installation %s", installID).Error())
 	}
 
 	mlog.Info("Mattermost configuration complete")
