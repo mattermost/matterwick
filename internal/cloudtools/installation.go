@@ -15,12 +15,14 @@ func GetInstallationIDFromOwnerID(serverURL, awsAPIKey, ownerID string) (string,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(serverURL, headers)
 	installations, err := cloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
-		OwnerID:                     ownerID,
-		Page:                        0,
-		PerPage:                     100,
+		OwnerID: ownerID,
+		Paging: cloudModel.Paging{
+			Page:           0,
+			PerPage:        100,
+			IncludeDeleted: false,
+		},
 		IncludeGroupConfig:          false,
 		IncludeGroupConfigOverrides: false,
-		IncludeDeleted:              false,
 	})
 	if err != nil {
 		return "", "", err

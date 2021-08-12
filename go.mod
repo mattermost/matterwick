@@ -3,29 +3,27 @@ module github.com/mattermost/matterwick
 go 1.14
 
 require (
-	github.com/aws/aws-sdk-go v1.34.26
+	github.com/aws/aws-sdk-go v1.36.7
 	github.com/braintree/manners v0.0.0-20160418043613-82a8879fc5fd
+	github.com/docker/distribution v2.7.1+incompatible // indirect
 	github.com/docker/spdystream v0.0.0-20181023171402-6480d4af844c // indirect
-	github.com/google/go-cmp v0.5.1 // indirect
+	github.com/gofrs/flock v0.7.1 // indirect
 	github.com/google/go-github/v32 v32.1.0
-	github.com/gorilla/mux v1.7.4
+	github.com/gorilla/mux v1.8.0
 	github.com/heroku/docker-registry-client v0.0.0-20190909225348-afc9e1acc3d5
-	github.com/kr/pretty v0.2.0 // indirect
-	github.com/mattermost/ldap v3.0.4+incompatible // indirect
-	github.com/mattermost/mattermost-cloud v0.29.0
+	github.com/mattermost/mattermost-cloud v0.46.0
 	github.com/mattermost/mattermost-server/v5 v5.26.0
+	github.com/opencontainers/image-spec v1.0.2-0.20190823105129-775207bd45b6 // indirect
 	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.7.0
-	github.com/stretchr/testify v1.6.1
+	github.com/sirupsen/logrus v1.8.1
+	github.com/stretchr/testify v1.7.0
 	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0 // indirect
-	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
-	golang.org/x/sys v0.0.0-20201008064518-c1f3e3309c71 // indirect
-	golang.org/x/tools v0.0.0-20201008025239-9df69603baec // indirect
-	gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d // indirect
+	golang.org/x/oauth2 v0.0.0-20201208152858-08078c50e5b5
 	honnef.co/go/tools v0.0.1-2020.1.5 // indirect
-	k8s.io/api v0.18.9
-	k8s.io/apimachinery v0.18.9
+	k8s.io/api v0.20.6
+	k8s.io/apimachinery v0.20.6
 	k8s.io/client-go v12.0.0+incompatible
+	k8s.io/kube-aggregator v0.18.9 // indirect
 	sigs.k8s.io/aws-iam-authenticator v0.5.1
 )
 
