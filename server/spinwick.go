@@ -156,11 +156,24 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 			WithError(fmt.Errorf("Already found a installation belonging to %s", customerID)).
 			IntentionalAbort()
 	}
+	reg, errDocker := s.Builds.dockerRegistryClient(s)
+	if errDocker != nil {
+		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
+	}
 
+	image := mattermostEEImage
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	if errImage != nil {
+		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	}
+
+	version := s.Builds.getInstallationVersion(prNew)
 	createInstallationRequest := &cws.CreateInstallationRequest{
 		CustomerID:             customerID,
 		RequestedWorkspaceName: uniqueID,
-		Version:                pr.Sha[0:7],
+		Version:                version,
 		GroupID:                s.Config.CWSSpinwickGroupID,
 		APILock:                false,
 	}
@@ -169,8 +182,6 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
 	request.InstallationID = createResponse.InstallationID
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
 	s.waitForInstallationStable(ctx, pr, request)
 	if request.Error != nil {
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
