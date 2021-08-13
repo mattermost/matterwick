@@ -400,7 +400,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		DNS:       fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:      size,
 		Affinity:  "multitenant",
-		Database:  cloudModel.InstallationDatabaseMultiTenantRDSPostgres,
+		Database:  cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
 		Filestore: cloudModel.InstallationFilestoreAwsS3,
 	}
 	if withLicense {
