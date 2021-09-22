@@ -32,6 +32,7 @@ type CWS struct {
 	CWSBlapiToken             string
 	CWSLicenseGeneratorURL    string
 	CWSLicenseGeneratorKey    string
+	CWSDisableRenewalChecks   string
 	DockerHubCredentials      string
 }
 
