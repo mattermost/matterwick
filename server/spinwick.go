@@ -34,8 +34,8 @@ import (
 const (
 	cwsRepoName          = "customer-web-server"
 	cwsImage             = "mattermost/cws-test"
-	mattermostEEImage    = "mattermost/mattermost-enterprise-edition"
-	mattermostTeamImage  = "mattermost/mattermost-team-edition"
+	mattermostEEImage    = "mattermost/mm-ee-test"
+	mattermostTeamImage  = "mattermost/mm-te-test"
 	mattermostWebAppRepo = "mattermost-webapp"
 	mattermostServerRepo = "mattermost-server"
 )
