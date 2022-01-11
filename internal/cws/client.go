@@ -28,6 +28,7 @@ type CreateInstallationRequest struct {
 	CustomerID             string `json:"customer_id"`
 	RequestedWorkspaceName string `json:"workspace_name"`
 	Version                string `json:"version"`
+	Image                  string `json:"image"`
 	GroupID                string `json:"group_id"`
 	APILock                bool   `json:"api_lock"`
 }

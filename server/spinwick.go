@@ -174,6 +174,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		CustomerID:             customerID,
 		RequestedWorkspaceName: uniqueID,
 		Version:                version,
+		Image:                  image,
 		GroupID:                s.Config.CWSSpinwickGroupID,
 		APILock:                false,
 	}
