@@ -45,7 +45,13 @@ func (s *Server) uploadPluginIfNecessary(mmClient *mattermostModel.Client4, pr *
 	mlog.Debug("Getting artifacts URL")
 
 	workflowID := workflowData["workflow-id"]
-	artifactURL, err := getArtifactURLForJob(workflowID, "plugin-ci/build")
+
+	jobName := "plugin-ci/build"
+	if pr.RepoName == "mattermost-plugin-playbooks" {
+		jobName = "build"
+	}
+
+	artifactURL, err := getArtifactURLForJob(workflowID, jobName)
 	if err != nil {
 		return err
 	}
