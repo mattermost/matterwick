@@ -434,7 +434,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
-	err = s.initializeMattermostTestServer(spinwickURL, pr.Number)
+	err = s.initializeMattermostTestServer(spinwickURL, pr)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
 	}
@@ -958,7 +958,7 @@ func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.Pul
 	}
 }
 
-func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) error {
+func (s *Server) initializeMattermostTestServer(mmURL string, pr *model.PullRequest) error {
 	mlog.Info("Initializing Mattermost installation")
 
 	wait := 600
@@ -998,7 +998,7 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 		return fmt.Errorf("error logging in with initial mattermost user: status code = %d, message = %s", response.StatusCode, response.Error.Message)
 	}
 
-	teamName := fmt.Sprintf("pr%d", prNumber)
+	teamName := fmt.Sprintf("pr%d", pr.Number)
 	team := &mattermostModel.Team{
 		Name:        teamName,
 		DisplayName: teamName,
@@ -1026,6 +1026,11 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 	_, response = client.AddTeamMember(firstTeam.Id, testUser.Id)
 	if response.StatusCode != 201 {
 		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	}
+
+	err = s.uploadPluginIfNecessary(client, pr)
+	if err != nil {
+		return errors.Wrap(err, "error deploying plugin for PR")
 	}
 
 	mlog.Info("Mattermost configuration complete")
