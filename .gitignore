@@ -39,3 +39,5 @@ Session.vim
 
 .agignore
 /config/config-matterwick.json
+
+/.idea
