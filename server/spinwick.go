@@ -38,6 +38,8 @@ const (
 	mattermostTeamImage  = "mattermost/mm-te-test"
 	mattermostWebAppRepo = "mattermost-webapp"
 	mattermostServerRepo = "mattermost-server"
+
+	defaultMultiTenantAnnotation = "multi-tenant"
 )
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) {
@@ -395,14 +397,15 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	// }
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
-		OwnerID:   ownerID,
-		Version:   version,
-		Image:     image,
-		DNS:       fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
-		Size:      size,
-		Affinity:  "multitenant",
-		Database:  cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
-		Filestore: cloudModel.InstallationFilestoreAwsS3,
+		OwnerID:     ownerID,
+		Version:     version,
+		Image:       image,
+		DNS:         fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
+		Size:        size,
+		Affinity:    "multitenant",
+		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
+		Filestore:   cloudModel.InstallationFilestoreAwsS3,
+		Annotations: []string{defaultMultiTenantAnnotation},
 	}
 	if withLicense {
 		installationRequest.License = s.Config.SpinWickHALicense
