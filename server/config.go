@@ -13,27 +13,31 @@ import (
 
 // CWS contains all configuration for the Customer Web Server
 type CWS struct {
-	Database                  string
-	CWSSiteURL                string
-	CWSSMTPUsername           string
-	CWSSMTPPassword           string
-	CWSSMTPServer             string
-	CWSSMTPPort               string
-	CWSSMTPServerTimeout      string
-	CWSSMTPConnectionSecurity string
-	CWSEmailReplyToName       string
-	CWSEmailReplyToAddress    string
-	CWSEmailBCCAddress        string
-	CWSCloudURL               string
-	CWSStripeKey              string
-	CWSCloudDNSDomain         string
-	CWSCloudGroupID           string
-	CWSBlapiURL               string
-	CWSBlapiToken             string
-	CWSLicenseGeneratorURL    string
-	CWSLicenseGeneratorKey    string
-	CWSDisableRenewalChecks   string
-	DockerHubCredentials      string
+	Database                   string
+	CWSSiteURL                 string
+	CWSSMTPUsername            string
+	CWSSMTPPassword            string
+	CWSSMTPServer              string
+	CWSSMTPPort                string
+	CWSSMTPServerTimeout       string
+	CWSSMTPConnectionSecurity  string
+	CWSEmailReplyToName        string
+	CWSEmailReplyToAddress     string
+	CWSEmailBCCAddress         string
+	CWSCloudURL                string
+	CWSStripeKey               string
+	CWSCloudDNSDomain          string
+	CWSCloudGroupID            string
+	CWSBlapiURL                string
+	CWSBlapiToken              string
+	CWSLicenseGeneratorURL     string
+	CWSLicenseGeneratorKey     string
+	CWSDisableRenewalChecks    string
+	CWSSplitKey                string
+	CWSSplitServerID           string
+	CloudDefaultProductID      string
+	CloudDefaultTrialProductID string
+	DockerHubCredentials       string
 }
 
 // MatterwickConfig defines all config for to run the server

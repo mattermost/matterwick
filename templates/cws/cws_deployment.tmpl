@@ -25,6 +25,10 @@ stringData:
   CWS_LICENSE_GENERATOR_URL: {{ .Environment.CWSLicenseGeneratorURL }}
   CWS_LICENSE_GENERATOR_KEY: {{ .Environment.CWSLicenseGeneratorKey }}
   CWS_DISABLE_RENEWAL_CHECKS: "{{ .Environment.CWSDisableRenewalChecks }}"
+  CWS_SPLIT_KEY: "{{ .Environment.CWSSplitKey }}"
+  CWS_SPLIT_SERVER_ID: "{{ .Environment.CWSSplitServerID }}"
+  CLOUD_DEFAULT_PRODUCT_ID: "{{ .Environment.CloudDefaultProductID }}"
+  CLOUD_DEFAULT_TRIAL_PRODUCT_ID: "{{ .Environment.CloudDefaultTrialProductID }}"
 
 ---
 apiVersion: v1

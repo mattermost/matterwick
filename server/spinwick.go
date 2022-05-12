@@ -243,6 +243,8 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		Environment:    s.Config.CWS,
 	}
 
+	deployment.Environment.CWSSplitServerID = namespace.GetName()
+
 	template, err := template.ParseFiles("/matterwick/templates/cws/cws_deployment.tmpl")
 	if err != nil {
 		mlog.Error("Error loading deployment template ", mlog.Err(err))
