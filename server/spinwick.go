@@ -286,7 +286,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
-	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit Server ID: %s", spinwickURL, deployment.Environment.CWSSplitServerID)
+	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s", spinwickURL, deployment.Environment.CWSSplitServerID)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	request.InstallationID = deployment.Namespace
