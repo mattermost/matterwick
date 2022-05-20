@@ -57,6 +57,10 @@
       "CWSLicenseGeneratorUrl": "",
       "CWSLicenseGeneratorKey": "",
       "CWSDisableRenewalChecks": "",
-      "DockerHubCredentials": ""
+      "DockerHubCredentials": "",
+      "CWSSplitKey": "",
+      "CWSSplitServerID": "",
+      "CloudDefaultProductID": "",
+      "CloudDefaultTrialProductID": ""
   }
 }
