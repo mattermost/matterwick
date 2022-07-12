@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -29,11 +30,14 @@ import (
 	log "github.com/sirupsen/logrus"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
 	cwsRepoName          = "customer-web-server"
 	cwsImage             = "mattermost/cws-test"
+	cwsDeploymentName    = "cws-test"
+	cwsSecretName        = "customer-web-server-secret"
 	mattermostEEImage    = "mattermost/mm-ee-test"
 	mattermostTeamImage  = "mattermost/mm-te-test"
 	mattermostWebAppRepo = "mattermost-webapp"
@@ -276,6 +280,31 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	mlog.Info("Deployment created successfully. Cleanup complete")
 
 	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace)
+
+	base64lbURL := base64.StdEncoding.EncodeToString([]byte("http://" + lbURL))
+	// Update the SiteURL now that we have it
+	_, err = kc.Clientset.CoreV1().Secrets(namespaceName).Patch(
+		ctx,
+		cwsSecretName,
+		types.JSONPatchType,
+		[]byte(`[{"op": "replace", "path": "/data/CWS_SITEURL", "value": "`+base64lbURL+`"}]`),
+		metav1.PatchOptions{},
+	)
+	if err != nil {
+		mlog.Error("Unable to update CWS_SITEURL secret", mlog.Err(err))
+	} else {
+		// patch the deployment to force new pods that will be aware of the new secrets.
+		_, err := kc.Clientset.AppsV1().Deployments(namespaceName).Patch(
+			ctx,
+			cwsDeploymentName,
+			types.MergePatchType,
+			[]byte(`[{"op":"add","path":"/spec/template/metadata/labels/date","value":"`+time.Now().Format(time.RFC3339)+`"}]`),
+			metav1.PatchOptions{},
+		)
+		if err != nil {
+			mlog.Error("Unable to refresh the deployment", mlog.Err(err))
+		}
+	}
 
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	commentsToDelete := []string{"Creating a SpinWick test CWS", "Spinwick Kubernetes namespace"}
