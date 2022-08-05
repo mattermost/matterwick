@@ -297,7 +297,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		_, err := kc.Clientset.AppsV1().Deployments(namespaceName).Patch(
 			ctx,
 			cwsDeploymentName,
-			types.MergePatchType,
+			types.JSONPatchType,
 			[]byte(`[{"op":"add","path":"/spec/template/metadata/labels/date","value":"`+time.Now().Format(time.RFC3339)+`"}]`),
 			metav1.PatchOptions{},
 		)
