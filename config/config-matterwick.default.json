@@ -27,7 +27,7 @@
     "ConsoleLevel": "DEBUG",
     "ConsoleJSON": true,
     "EnableFile": false,
-    "FileLevel": "INFO",
+    "FileLevel": "DEBUG",
     "FileJSON": true,
     "FileFormat": "",
     "FileLocation": ""
