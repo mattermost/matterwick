@@ -281,13 +281,30 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace)
 
+	headers := map[string]string{
+		"x-api-key": s.Config.AWSAPIKey,
+	}
+	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient.CreateWebhook(&cloudModel.CreateWebhookRequest{
+		// We use the namespace as the owner so it's easily fetched later
+		OwnerID: namespace.GetName(),
+		URL:     fmt.Sprintf("http://cws-test-service.%s:8077/api/v1/internal/webhook", namespace.GetName()),
+	})
+
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+
+	secret, err := cwsClient.RegisterStripeWebhook(fmt.Sprintf("http://%s", lbURL), namespace.GetName())
+	if err != nil {
+		mlog.Error("Unable to register stripe webhook", mlog.Err(err))
+	}
+
 	base64lbURL := base64.StdEncoding.EncodeToString([]byte("http://" + lbURL))
 	// Update the SiteURL now that we have it
 	_, err = kc.Clientset.CoreV1().Secrets(namespaceName).Patch(
 		ctx,
 		cwsSecretName,
 		types.JSONPatchType,
-		[]byte(`[{"op": "replace", "path": "/data/CWS_SITEURL", "value": "`+base64lbURL+`"}]`),
+		[]byte(`[{"op": "replace", "path": "/data/CWS_SITEURL", "value": "`+base64lbURL+`"}, {"op": "replace", "path": "/data/STRIPE_WEBHOOK_SIGNATURE_SECRET", "value": "`+secret+`"}]`),
 		metav1.PatchOptions{},
 	)
 	if err != nil {
@@ -791,6 +808,36 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	request.InstallationID = namespaceName
 	mlog.Info("Kube namespace " + namespaceName + " has been destroyed")
+
+	headers := map[string]string{
+		"x-api-key": s.Config.AWSAPIKey,
+	}
+	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	webhooks, err := cloudClient.GetWebhooks(&cloudModel.GetWebhooksRequest{
+		OwnerID: namespaceName,
+	})
+	if err != nil {
+		mlog.Error("Failed to get webhooks for spinwick", mlog.Err(err))
+		request.Error = err
+		return request
+	}
+
+	for _, webhook := range webhooks {
+		err = cloudClient.DeleteWebhook(webhook.ID)
+		if err != nil {
+			mlog.Error("Failed to delete webhook", mlog.Err(err))
+			request.Error = err
+			return request
+		}
+	}
+
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	err = cwsClient.DeleteStripeWebhook(namespaceName)
+	if err != nil {
+		mlog.Error("Failed to delete stripe webhook", mlog.Err(err))
+		request.Error = err
+		return request
+	}
 
 	// Old comments created by MatterWick user will be deleted here.
 	s.commentLock.Lock()
