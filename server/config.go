@@ -86,6 +86,7 @@ type MatterwickConfig struct {
 
 	CWSPublicAPIAddress   string
 	CWSInternalAPIAddress string
+	CWSAPIKey             string
 	CWSUserPassword       string
 	CWSSpinwickGroupID    string
 
