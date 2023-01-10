@@ -1,5 +1,6 @@
 package cws
 
+// TODO: Replace this with the CWS' client
 import (
 	"bytes"
 	"encoding/json"
