@@ -36,8 +36,8 @@ build-image:  ## Build the docker image for matterwick
 .PHONY: lint
 lint:
 	@echo Running lint
-	env GO111MODULE=off $(GO) get -u golang.org/x/lint/golint
-	$(shell $(GO) list -f {{.Target}} golang.org/x/lint/golint) -set_exit_status ./...
+	go get golang.org/x/lint/golint
+	golint -set_exit_status $(PACKAGES)
 	@echo lint success
 
 ## Runs govet against all packages.
