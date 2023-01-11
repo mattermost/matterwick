@@ -41,3 +41,4 @@ Session.vim
 /config/config-matterwick.json
 
 /.idea
+bin/

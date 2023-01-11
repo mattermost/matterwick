@@ -9,6 +9,14 @@ DEP ?= $(shell command -v dep 2> /dev/null)
 
 PACKAGES=$(shell go list ./...)
 
+TOOLS_BIN_DIR := $(abspath bin)
+GO_INSTALL = ./scripts/go_install.sh
+
+GOLINT_VER := master
+GOLINT_BIN := golint
+GOLINT_GEN := $(TOOLS_BIN_DIR)/$(GOLINT_BIN)
+
+
 ## Checks the code style, tests, builds and bundles the plugin.
 .PHONY: all
 all: check-style test
@@ -34,10 +42,9 @@ build-image:  ## Build the docker image for matterwick
 
 ## Runs lint against all packages.
 .PHONY: lint
-lint:
+lint: $(GOLINT_GEN)
 	@echo Running lint
-	go get golang.org/x/lint/golint
-	golint -set_exit_status $(PACKAGES)
+	$(GOLINT_GEN) -set_exit_status $(PACKAGES)
 	@echo lint success
 
 ## Runs govet against all packages.
@@ -52,6 +59,9 @@ test:
 	@echo Running Go tests
 	$(GO) test $(PACKAGES) $(CONFIG_TEST)
 	@echo test success
+
+$(GOLINT_GEN): ## Build golint.
+	GOBIN=$(TOOLS_BIN_DIR) $(GO_INSTALL) golang.org/x/lint/golint $(GOLINT_BIN) $(GOLINT_VER)
 
 # Help documentation à la https://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 help:
