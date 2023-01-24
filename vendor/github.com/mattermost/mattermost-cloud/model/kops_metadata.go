@@ -6,6 +6,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"github.com/mattermost/rotator/rotator"
@@ -22,14 +23,15 @@ type KopsMetadata struct {
 	NodeInstanceType     string
 	NodeMinCount         int64
 	NodeMaxCount         int64
+	MaxPodsPerNode       int64
+	VPC                  string
+	Networking           string
 	MasterInstanceGroups KopsInstanceGroupsMetadata
 	NodeInstanceGroups   KopsInstanceGroupsMetadata
-	CustomInstanceGroups KopsInstanceGroupsMetadata
+	CustomInstanceGroups KopsInstanceGroupsMetadata  `json:"CustomInstanceGroups,omitempty"`
 	ChangeRequest        *KopsMetadataRequestedState `json:"ChangeRequest,omitempty"`
 	RotatorRequest       *RotatorMetadata            `json:"RotatorRequest,omitempty"`
 	Warnings             []string                    `json:"Warnings,omitempty"`
-	Networking           string                      `json:"Networking,omitempty"`
-	VPC                  string                      `json:"VPC,omitempty"`
 }
 
 // KopsInstanceGroupsMetadata is a map of instance group names to their metadata.
@@ -51,6 +53,7 @@ type KopsMetadataRequestedState struct {
 	NodeInstanceType   string `json:"NodeInstanceType,omitempty"`
 	NodeMinCount       int64  `json:"NodeMinCount,omitempty"`
 	NodeMaxCount       int64  `json:"NodeMaxCount,omitempty"`
+	MaxPodsPerNode     int64  `json:"MaxPodsPerNode,omitempty"`
 	Networking         string `json:"Networking,omitempty"`
 	VPC                string `json:"VPC,omitempty"`
 }
@@ -63,12 +66,42 @@ type RotatorMetadata struct {
 
 // RotatorConfig is the config setup for the Rotator tool run
 type RotatorConfig struct {
-	UseRotator           *bool `json:"use-rotator,omitempty"`
-	MaxScaling           *int  `json:"max-scaling,omitempty"`
-	MaxDrainRetries      *int  `json:"max-drain-retries,omitempty"`
-	EvictGracePeriod     *int  `json:"evict-grace-period,omitempty"`
-	WaitBetweenRotations *int  `json:"wait-between-rotations,omitempty"`
-	WaitBetweenDrains    *int  `json:"wait-between-drains,omitempty"`
+	UseRotator              *bool `json:"use-rotator,omitempty"`
+	MaxScaling              *int  `json:"max-scaling,omitempty"`
+	MaxDrainRetries         *int  `json:"max-drain-retries,omitempty"`
+	EvictGracePeriod        *int  `json:"evict-grace-period,omitempty"`
+	WaitBetweenRotations    *int  `json:"wait-between-rotations,omitempty"`
+	WaitBetweenDrains       *int  `json:"wait-between-drains,omitempty"`
+	WaitBetweenPodEvictions *int  `json:"wait-between-pod-evictions,omitempty"`
+}
+
+// Validate validates that the provided attributes for the rotator are set
+func (r RotatorConfig) Validate() error {
+	if r.UseRotator == nil {
+		return errors.Errorf("rotator config use rotator should be set")
+	}
+
+	if *r.UseRotator {
+		if r.EvictGracePeriod == nil {
+			return errors.Errorf("rotator config evict grace period should be set")
+		}
+		if r.MaxDrainRetries == nil {
+			return errors.Errorf("rotator config max drain retries should be set")
+		}
+		if r.MaxScaling == nil {
+			return errors.Errorf("rotator config max scaling should be set")
+		}
+		if r.WaitBetweenRotations == nil {
+			return errors.Errorf("rotator config wait between rotations should be set")
+		}
+		if r.WaitBetweenDrains == nil {
+			return errors.Errorf("rotator config wait between drains should be set")
+		}
+		if r.WaitBetweenPodEvictions == nil {
+			return errors.Errorf("rotator config wait between pod evictions should be set")
+		}
+	}
+	return nil
 }
 
 // ValidateChangeRequest ensures that the ChangeRequest has at least one
@@ -91,25 +124,76 @@ func (km *KopsMetadata) ValidateChangeRequest() error {
 	return nil
 }
 
+// GetKopsResizeSetActionsFromChanges produces a set of kops set actions that
+// should be applied to the instance groups from the provided change data.
+func (km *KopsMetadata) GetKopsResizeSetActionsFromChanges(changes KopsInstanceGroupMetadata, igName string) []string {
+	kopsSetActions := []string{}
+
+	// There is a bit of complexity with updating min and max instancegroup
+	// sizes. The maxSize always needs to be equal or larger than minSize
+	// which means we need to apply the changes in a different order
+	// depending on if the instance group is scaling up or down.
+	if changes.NodeMaxCount >= km.NodeInstanceGroups[igName].NodeMaxCount {
+		if changes.NodeMaxCount != km.NodeInstanceGroups[igName].NodeMaxCount {
+			kopsSetActions = append(kopsSetActions, fmt.Sprintf("spec.maxSize=%d", changes.NodeMaxCount))
+		}
+		if changes.NodeMinCount != km.NodeInstanceGroups[igName].NodeMinCount {
+			kopsSetActions = append(kopsSetActions, fmt.Sprintf("spec.minSize=%d", changes.NodeMinCount))
+		}
+	} else {
+		if changes.NodeMinCount != km.NodeInstanceGroups[igName].NodeMinCount {
+			kopsSetActions = append(kopsSetActions, fmt.Sprintf("spec.minSize=%d", changes.NodeMinCount))
+		}
+		if changes.NodeMaxCount != km.NodeInstanceGroups[igName].NodeMaxCount {
+			kopsSetActions = append(kopsSetActions, fmt.Sprintf("spec.maxSize=%d", changes.NodeMaxCount))
+		}
+	}
+
+	if changes.NodeInstanceType != km.NodeInstanceGroups[igName].NodeInstanceType {
+		kopsSetActions = append(kopsSetActions, fmt.Sprintf("spec.machineType=%s", changes.NodeInstanceType))
+	}
+
+	return kopsSetActions
+}
+
 // GetWorkerNodesResizeChanges calculates instance group resizing based on the
 // current ChangeRequest.
 func (km *KopsMetadata) GetWorkerNodesResizeChanges() KopsInstanceGroupsMetadata {
+	// Build a new change map.
+	changes := make(KopsInstanceGroupsMetadata, len(km.NodeInstanceGroups))
+	for k, v := range km.NodeInstanceGroups {
+		changes[k] = v
+	}
+
+	// Update the AMI if specified.
+	if len(km.ChangeRequest.NodeInstanceType) != 0 {
+		for k, ig := range changes {
+			ig.NodeInstanceType = km.ChangeRequest.NodeInstanceType
+			changes[k] = ig
+		}
+	}
+
+	if km.ChangeRequest.NodeMinCount == 0 {
+		return changes
+	}
+
+	// Calculate new instance group sizes.
 	difference := km.ChangeRequest.NodeMinCount - km.NodeMinCount
 
 	if difference < 0 {
-		return km.getDecreasedWorkerNodesResizeChanges(difference)
+		getDecreasedWorkerNodesResizeChanges(changes, difference)
 	}
 	if difference > 0 {
-		return km.getIncreasedWorkerNodesResizeChanges(difference)
+		getIncreasedWorkerNodesResizeChanges(changes, difference)
 	}
 
-	return km.NodeInstanceGroups
+	return changes
 }
 
-func (km *KopsMetadata) getIncreasedWorkerNodesResizeChanges(count int64) KopsInstanceGroupsMetadata {
-	changes := km.NodeInstanceGroups
+func getIncreasedWorkerNodesResizeChanges(changes KopsInstanceGroupsMetadata, count int64) {
 	orderedKeys := changes.getStableIterationOrder()
 	currentBalanceCount := int64(1)
+
 	for {
 		for _, key := range orderedKeys {
 			ig := changes[key]
@@ -118,21 +202,21 @@ func (km *KopsMetadata) getIncreasedWorkerNodesResizeChanges(count int64) KopsIn
 			}
 
 			changes[key] = KopsInstanceGroupMetadata{
-				NodeMinCount: ig.NodeMinCount + 1,
-				NodeMaxCount: ig.NodeMinCount + 1,
+				NodeInstanceType: ig.NodeInstanceType,
+				NodeMinCount:     ig.NodeMinCount + 1,
+				NodeMaxCount:     ig.NodeMinCount + 1,
 			}
 
 			count--
 			if count == 0 {
-				return changes
+				return
 			}
 		}
 		currentBalanceCount++
 	}
 }
 
-func (km *KopsMetadata) getDecreasedWorkerNodesResizeChanges(count int64) KopsInstanceGroupsMetadata {
-	changes := km.NodeInstanceGroups
+func getDecreasedWorkerNodesResizeChanges(changes KopsInstanceGroupsMetadata, count int64) {
 	orderedKeys := changes.getStableIterationOrder()
 
 	// For removing nodes, we want to work our way down starting with the end of
@@ -155,16 +239,27 @@ func (km *KopsMetadata) getDecreasedWorkerNodesResizeChanges(count int64) KopsIn
 			}
 
 			changes[key] = KopsInstanceGroupMetadata{
-				NodeMinCount: ig.NodeMinCount - 1,
-				NodeMaxCount: ig.NodeMinCount - 1,
+				NodeInstanceType: ig.NodeInstanceType,
+				NodeMinCount:     ig.NodeMinCount - 1,
+				NodeMaxCount:     ig.NodeMinCount - 1,
 			}
 
 			count++
 			if count == 0 {
-				return changes
+				return
 			}
 		}
 		currentBalanceCount--
+	}
+}
+
+// ApplyChangeRequest applies change request values to the KopsMetadata that are
+// not reflected by calling RefreshKopsMetadata().
+func (km *KopsMetadata) ApplyChangeRequest() {
+	if km.ChangeRequest != nil {
+		if km.ChangeRequest.NodeMaxCount != 0 {
+			km.NodeMaxCount = km.ChangeRequest.NodeMaxCount
+		}
 	}
 }
 

@@ -7,22 +7,23 @@ on:
     branches: [ master ]
 
 jobs:
-
   ci:
     name: CI
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@755da8c3cf115ac066823e79a1e1788f8940201b # v3.2.0
+        with:
+          fetch-depth: 0
+          
+      - name: Setup Go
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
+        with:
+          go-version: "1.19"
+          cache: true
 
-    - name: Set up Go 1.19
-      uses: actions/setup-go@v1
-      with:
-        go-version: 1.19
-      id: go
+      - name: Check Style
+        run: make check-style
 
-    - uses: actions/checkout@v2
-
-    - name: Check Style
-      run: make check-style
-
-    - name: Tests
-      run: make test
+      - name: Tests
+        run: make test

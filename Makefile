@@ -12,6 +12,7 @@ PACKAGES=$(shell go list ./...)
 TOOLS_BIN_DIR := $(abspath bin)
 GO_INSTALL = ./scripts/go_install.sh
 
+GOFLAGS ?= $(GOFLAGS:) -mod=vendor
 GOLINT_VER := master
 GOLINT_BIN := golint
 GOLINT_GEN := $(TOOLS_BIN_DIR)/$(GOLINT_BIN)
@@ -51,7 +52,7 @@ lint: $(GOLINT_GEN)
 .PHONY: vet
 vet:
 	@echo Running govet
-	$(GO) vet ./...
+	$(GO) vet $(GOFLAGS) $(PACKAGES)
 	@echo Govet success
 
 ## Runs tests. For local usage, run `make test CONFIG_TEST="-config=config-matterwick.test-local.json"`
