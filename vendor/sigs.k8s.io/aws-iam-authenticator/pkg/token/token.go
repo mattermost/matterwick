@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,12 +32,18 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/aws/aws-sdk-go/service/sts/stsiface"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clientauthv1alpha1 "k8s.io/client-go/pkg/apis/clientauthentication/v1alpha1"
+	"k8s.io/client-go/pkg/apis/clientauthentication"
+	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+	"sigs.k8s.io/aws-iam-authenticator/pkg"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/arn"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/metrics"
 )
 
 // Identity is returned on successful Verify() results. It contains a parsed
@@ -68,7 +73,7 @@ type Identity struct {
 	SessionName string
 
 	// The AWS Access Key ID used to authenticate the request.  This can be used
-	// in conjuction with CloudTrail to determine the identity of the individual
+	// in conjunction with CloudTrail to determine the identity of the individual
 	// if the individual assumed an IAM role before making the request.
 	AccessKeyID string
 }
@@ -86,8 +91,9 @@ const (
 	clusterIDHeader        = "x-k8s-aws-id"
 	// Format of the X-Amz-Date header used for expiration
 	// https://golang.org/pkg/time/#pkg-constants
-	dateHeaderFormat = "20060102T150405Z"
-	hostRegexp       = `^sts(\.[a-z1-9\-]+)?\.amazonaws\.com(\.cn)?$`
+	dateHeaderFormat   = "20060102T150405Z"
+	kindExecCredential = "ExecCredential"
+	execInfoEnvKey     = "KUBERNETES_EXEC_INFO"
 )
 
 // Token is generated and used by Kubernetes client-go to authenticate with a Kubernetes cluster.
@@ -238,6 +244,11 @@ func (g generator) GetWithOptions(options *GetTokenOptions) (Token, error) {
 		if err != nil {
 			return Token{}, fmt.Errorf("could not create session: %v", err)
 		}
+		sess.Handlers.Build.PushFrontNamed(request.NamedHandler{
+			Name: "authenticatorUserAgent",
+			Fn: request.MakeAddToUserAgentHandler(
+				"aws-iam-authenticator", pkg.Version),
+		})
 		if options.Region != "" {
 			sess = sess.Copy(aws.NewConfig().WithRegion(options.Region).WithSTSRegionalEndpoint(endpoints.RegionalSTSEndpoint))
 		}
@@ -331,13 +342,22 @@ func (g generator) GetWithSTS(clusterID string, stsAPI stsiface.STSAPI) (Token, 
 
 // FormatJSON formats the json to support ExecCredential authentication
 func (g generator) FormatJSON(token Token) string {
+	apiVersion := clientauthv1beta1.SchemeGroupVersion.String()
+	env := os.Getenv(execInfoEnvKey)
+	if env != "" {
+		cred := &clientauthentication.ExecCredential{}
+		if err := json.Unmarshal([]byte(env), cred); err == nil {
+			apiVersion = cred.APIVersion
+		}
+	}
+
 	expirationTimestamp := metav1.NewTime(token.Expiration)
-	execInput := &clientauthv1alpha1.ExecCredential{
+	execInput := &clientauthv1beta1.ExecCredential{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "client.authentication.k8s.io/v1alpha1",
-			Kind:       "ExecCredential",
+			APIVersion: apiVersion,
+			Kind:       kindExecCredential,
 		},
-		Status: &clientauthv1alpha1.ExecCredentialStatus{
+		Status: &clientauthv1beta1.ExecCredentialStatus{
 			ExpirationTimestamp: &expirationTimestamp,
 			Token:               token.Token,
 		},
@@ -352,24 +372,69 @@ type Verifier interface {
 }
 
 type tokenVerifier struct {
-	client    *http.Client
-	clusterID string
+	client            *http.Client
+	clusterID         string
+	validSTShostnames map[string]bool
+}
+
+func stsHostsForPartition(partitionID string) map[string]bool {
+	validSTShostnames := map[string]bool{}
+
+	var partition *endpoints.Partition
+	for _, p := range endpoints.DefaultPartitions() {
+		if partitionID == p.ID() {
+			partition = &p
+			break
+		}
+	}
+	if partition == nil {
+		logrus.Errorf("Partition %s not valid", partitionID)
+		return validSTShostnames
+	}
+	stsSvc, ok := partition.Services()["sts"]
+	if !ok {
+		logrus.Errorf("STS service not found in partition %s", partitionID)
+		return validSTShostnames
+	}
+	for epName, ep := range stsSvc.Endpoints() {
+		rep, err := ep.ResolveEndpoint(endpoints.STSRegionalEndpointOption)
+		if err != nil {
+			logrus.WithError(err).Errorf("Error resolving endpoint for %s in partition %s", epName, partitionID)
+			continue
+		}
+		parsedURL, err := url.Parse(rep.URL)
+		if err != nil {
+			logrus.WithError(err).Errorf("Error parsing STS URL %s", rep.URL)
+			continue
+		}
+		validSTShostnames[parsedURL.Hostname()] = true
+	}
+	return validSTShostnames
 }
 
 // NewVerifier creates a Verifier that is bound to the clusterID and uses the default http client.
-func NewVerifier(clusterID string) Verifier {
+func NewVerifier(clusterID string, partitionID string) Verifier {
+	// Initialize metrics if they haven't already been initialized to avoid a
+	// nil pointer panic when setting metric values.
+	if !metrics.Initialized() {
+		metrics.InitMetrics(prometheus.NewRegistry())
+	}
 	return tokenVerifier{
-		client:    http.DefaultClient,
-		clusterID: clusterID,
+		client: &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		clusterID:         clusterID,
+		validSTShostnames: stsHostsForPartition(partitionID),
 	}
 }
 
 // verify a sts host, doc: http://docs.amazonaws.cn/en_us/general/latest/gr/rande.html#sts_region
 func (v tokenVerifier) verifyHost(host string) error {
-	if match, _ := regexp.MatchString(hostRegexp, host); !match {
+	if _, ok := v.validSTShostnames[host]; !ok {
 		return FormatError{fmt.Sprintf("unexpected hostname %q in pre-signed URL", host)}
 	}
-
 	return nil
 }
 
@@ -409,7 +474,15 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 	}
 
 	queryParamsLower := make(url.Values)
-	queryParams := parsedURL.Query()
+	queryParams, err := url.ParseQuery(parsedURL.RawQuery)
+	if err != nil {
+		return nil, FormatError{"malformed query parameter"}
+	}
+
+	if err = validateDuplicateParameters(queryParams); err != nil {
+		return nil, err
+	}
+
 	for key, values := range queryParams {
 		if !parameterWhitelist[strings.ToLower(key)] {
 			return nil, FormatError{fmt.Sprintf("non-whitelisted query parameter %q", key)}
@@ -460,6 +533,7 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 
 	response, err := v.client.Do(req)
 	if err != nil {
+		metrics.Get().StsConnectionFailure.Inc()
 		// special case to avoid printing the full URL if possible
 		if urlErr, ok := err.(*url.Error); ok {
 			return nil, NewSTSError(fmt.Sprintf("error during GET: %v", urlErr.Err))
@@ -473,6 +547,7 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 		return nil, NewSTSError(fmt.Sprintf("error reading HTTP result: %v", err))
 	}
 
+	metrics.Get().StsResponses.WithLabelValues(fmt.Sprint(response.StatusCode)).Inc()
 	if response.StatusCode != 200 {
 		return nil, NewSTSError(fmt.Sprintf("error from AWS (expected 200, got %d). Body: %s", response.StatusCode, string(responseBody[:])))
 	}
@@ -509,6 +584,17 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 	}
 
 	return id, nil
+}
+
+func validateDuplicateParameters(queryParams url.Values) error {
+	duplicateCheck := make(map[string]bool)
+	for key, _ := range queryParams {
+		if _, found := duplicateCheck[strings.ToLower(key)]; found {
+			return FormatError{fmt.Sprintf("duplicate query parameter found: %q", key)}
+		}
+		duplicateCheck[strings.ToLower(key)] = true
+	}
+	return nil
 }
 
 func hasSignedClusterIDHeader(paramsLower *url.Values) bool {

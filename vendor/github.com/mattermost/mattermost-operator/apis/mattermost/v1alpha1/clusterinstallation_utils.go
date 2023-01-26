@@ -15,7 +15,7 @@ const (
 	// DefaultMattermostImage is the default Mattermost docker image
 	DefaultMattermostImage = "mattermost/mattermost-enterprise-edition"
 	// DefaultMattermostVersion is the default Mattermost docker tag
-	DefaultMattermostVersion = "5.34.2"
+	DefaultMattermostVersion = "6.5.0"
 	// DefaultMattermostSize is the default number of users
 	DefaultMattermostSize = "5000users"
 	// DefaultMattermostDatabaseType is the default Mattermost database
@@ -33,10 +33,10 @@ const (
 	// as well as all other resources created to support it.
 	ClusterResourceLabel = "v1alpha1.mattermost.com/resource"
 
-	// BlueName is the name of the blue Mattermmost installation in a blue/green
+	// BlueName is the name of the blue Mattermost installation in a blue/green
 	// deployment type.
 	BlueName = "blue"
-	// GreenName is the name of the green Mattermmost installation in a blue/green
+	// GreenName is the name of the green Mattermost installation in a blue/green
 	// deployment type.
 	GreenName = "green"
 

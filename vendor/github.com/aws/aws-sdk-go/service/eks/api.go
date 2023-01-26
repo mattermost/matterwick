@@ -13,6 +13,218 @@ import (
 	"github.com/aws/aws-sdk-go/private/protocol/restjson"
 )
 
+const opAssociateEncryptionConfig = "AssociateEncryptionConfig"
+
+// AssociateEncryptionConfigRequest generates a "aws/request.Request" representing the
+// client's request for the AssociateEncryptionConfig operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See AssociateEncryptionConfig for more information on using the AssociateEncryptionConfig
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the AssociateEncryptionConfigRequest method.
+//	req, resp := client.AssociateEncryptionConfigRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/AssociateEncryptionConfig
+func (c *EKS) AssociateEncryptionConfigRequest(input *AssociateEncryptionConfigInput) (req *request.Request, output *AssociateEncryptionConfigOutput) {
+	op := &request.Operation{
+		Name:       opAssociateEncryptionConfig,
+		HTTPMethod: "POST",
+		HTTPPath:   "/clusters/{name}/encryption-config/associate",
+	}
+
+	if input == nil {
+		input = &AssociateEncryptionConfigInput{}
+	}
+
+	output = &AssociateEncryptionConfigOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// AssociateEncryptionConfig API operation for Amazon Elastic Kubernetes Service.
+//
+// Associate encryption configuration to an existing cluster.
+//
+// You can use this API to enable encryption on existing clusters which do not
+// have encryption already enabled. This allows you to implement a defense-in-depth
+// security strategy without migrating applications to new Amazon EKS clusters.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation AssociateEncryptionConfig for usage and error information.
+//
+// Returned Error Types:
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceInUseException
+//     The specified resource is in use.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/AssociateEncryptionConfig
+func (c *EKS) AssociateEncryptionConfig(input *AssociateEncryptionConfigInput) (*AssociateEncryptionConfigOutput, error) {
+	req, out := c.AssociateEncryptionConfigRequest(input)
+	return out, req.Send()
+}
+
+// AssociateEncryptionConfigWithContext is the same as AssociateEncryptionConfig with the addition of
+// the ability to pass a context and additional request options.
+//
+// See AssociateEncryptionConfig for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) AssociateEncryptionConfigWithContext(ctx aws.Context, input *AssociateEncryptionConfigInput, opts ...request.Option) (*AssociateEncryptionConfigOutput, error) {
+	req, out := c.AssociateEncryptionConfigRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
+const opAssociateIdentityProviderConfig = "AssociateIdentityProviderConfig"
+
+// AssociateIdentityProviderConfigRequest generates a "aws/request.Request" representing the
+// client's request for the AssociateIdentityProviderConfig operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See AssociateIdentityProviderConfig for more information on using the AssociateIdentityProviderConfig
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the AssociateIdentityProviderConfigRequest method.
+//	req, resp := client.AssociateIdentityProviderConfigRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/AssociateIdentityProviderConfig
+func (c *EKS) AssociateIdentityProviderConfigRequest(input *AssociateIdentityProviderConfigInput) (req *request.Request, output *AssociateIdentityProviderConfigOutput) {
+	op := &request.Operation{
+		Name:       opAssociateIdentityProviderConfig,
+		HTTPMethod: "POST",
+		HTTPPath:   "/clusters/{name}/identity-provider-configs/associate",
+	}
+
+	if input == nil {
+		input = &AssociateIdentityProviderConfigInput{}
+	}
+
+	output = &AssociateIdentityProviderConfigOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// AssociateIdentityProviderConfig API operation for Amazon Elastic Kubernetes Service.
+//
+// Associate an identity provider configuration to a cluster.
+//
+// If you want to authenticate identities using an identity provider, you can
+// create an identity provider configuration and associate it to your cluster.
+// After configuring authentication to your cluster you can create Kubernetes
+// roles and clusterroles to assign permissions to the roles, and then bind
+// the roles to the identities using Kubernetes rolebindings and clusterrolebindings.
+// For more information see Using RBAC Authorization (https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+// in the Kubernetes documentation.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation AssociateIdentityProviderConfig for usage and error information.
+//
+// Returned Error Types:
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceInUseException
+//     The specified resource is in use.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/AssociateIdentityProviderConfig
+func (c *EKS) AssociateIdentityProviderConfig(input *AssociateIdentityProviderConfigInput) (*AssociateIdentityProviderConfigOutput, error) {
+	req, out := c.AssociateIdentityProviderConfigRequest(input)
+	return out, req.Send()
+}
+
+// AssociateIdentityProviderConfigWithContext is the same as AssociateIdentityProviderConfig with the addition of
+// the ability to pass a context and additional request options.
+//
+// See AssociateIdentityProviderConfig for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) AssociateIdentityProviderConfigWithContext(ctx aws.Context, input *AssociateIdentityProviderConfigInput, opts ...request.Option) (*AssociateIdentityProviderConfigOutput, error) {
+	req, out := c.AssociateIdentityProviderConfigRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
 const opCreateAddon = "CreateAddon"
 
 // CreateAddonRequest generates a "aws/request.Request" representing the
@@ -29,14 +241,13 @@ const opCreateAddon = "CreateAddon"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the CreateAddonRequest method.
+//	req, resp := client.CreateAddonRequest(params)
 //
-//    // Example sending a request using the CreateAddonRequest method.
-//    req, resp := client.CreateAddonRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateAddon
 func (c *EKS) CreateAddonRequest(input *CreateAddonInput) (req *request.Request, output *CreateAddonOutput) {
@@ -60,10 +271,9 @@ func (c *EKS) CreateAddonRequest(input *CreateAddonInput) (req *request.Request,
 // Creates an Amazon EKS add-on.
 //
 // Amazon EKS add-ons help to automate the provisioning and lifecycle management
-// of common operational software for Amazon EKS clusters. Amazon EKS add-ons
-// can only be used with Amazon EKS clusters running version 1.18 with platform
-// version eks.3 or later because add-ons rely on the Server-side Apply Kubernetes
-// feature, which is only available in Kubernetes 1.18 and later.
+// of common operational software for Amazon EKS clusters. For more information,
+// see Amazon EKS add-ons (https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+// in the Amazon EKS User Guide.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -73,29 +283,30 @@ func (c *EKS) CreateAddonRequest(input *CreateAddonInput) (req *request.Request,
 // API operation CreateAddon for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateAddon
 func (c *EKS) CreateAddon(input *CreateAddonInput) (*CreateAddonOutput, error) {
@@ -135,14 +346,13 @@ const opCreateCluster = "CreateCluster"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the CreateClusterRequest method.
+//	req, resp := client.CreateClusterRequest(params)
 //
-//    // Example sending a request using the CreateClusterRequest method.
-//    req, resp := client.CreateClusterRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateCluster
 func (c *EKS) CreateClusterRequest(input *CreateClusterInput) (req *request.Request, output *CreateClusterOutput) {
@@ -167,42 +377,26 @@ func (c *EKS) CreateClusterRequest(input *CreateClusterInput) (req *request.Requ
 //
 // The Amazon EKS control plane consists of control plane instances that run
 // the Kubernetes software, such as etcd and the API server. The control plane
-// runs in an account managed by AWS, and the Kubernetes API is exposed via
-// the Amazon EKS API server endpoint. Each Amazon EKS cluster control plane
-// is single-tenant and unique and runs on its own set of Amazon EC2 instances.
+// runs in an account managed by Amazon Web Services, and the Kubernetes API
+// is exposed by the Amazon EKS API server endpoint. Each Amazon EKS cluster
+// control plane is single tenant and unique. It runs on its own set of Amazon
+// EC2 instances.
 //
 // The cluster control plane is provisioned across multiple Availability Zones
 // and fronted by an Elastic Load Balancing Network Load Balancer. Amazon EKS
 // also provisions elastic network interfaces in your VPC subnets to provide
-// connectivity from the control plane instances to the worker nodes (for example,
+// connectivity from the control plane instances to the nodes (for example,
 // to support kubectl exec, logs, and proxy data flows).
 //
-// Amazon EKS worker nodes run in your AWS account and connect to your cluster's
-// control plane via the Kubernetes API server endpoint and a certificate file
-// that is created for your cluster.
+// Amazon EKS nodes run in your Amazon Web Services account and connect to your
+// cluster's control plane over the Kubernetes API server endpoint and a certificate
+// file that is created for your cluster.
 //
-// You can use the endpointPublicAccess and endpointPrivateAccess parameters
-// to enable or disable public and private access to your cluster's Kubernetes
-// API server endpoint. By default, public access is enabled, and private access
-// is disabled. For more information, see Amazon EKS Cluster Endpoint Access
-// Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
-// in the Amazon EKS User Guide .
-//
-// You can use the logging parameter to enable or disable exporting the Kubernetes
-// control plane logs for your cluster to CloudWatch Logs. By default, cluster
-// control plane logs aren't exported to CloudWatch Logs. For more information,
-// see Amazon EKS Cluster Control Plane Logs (https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)
-// in the Amazon EKS User Guide .
-//
-// CloudWatch Logs ingestion, archive storage, and data scanning rates apply
-// to exported control plane logs. For more information, see Amazon CloudWatch
-// Pricing (http://aws.amazon.com/cloudwatch/pricing/).
-//
-// Cluster creation typically takes between 10 and 15 minutes. After you create
+// In most cases, it takes several minutes to create a cluster. After you create
 // an Amazon EKS cluster, you must configure your Kubernetes tooling to communicate
-// with the API server and launch worker nodes into your cluster. For more information,
+// with the API server and launch nodes into your cluster. For more information,
 // see Managing Cluster Authentication (https://docs.aws.amazon.com/eks/latest/userguide/managing-auth.html)
-// and Launching Amazon EKS Worker Nodes (https://docs.aws.amazon.com/eks/latest/userguide/launch-workers.html)
+// and Launching Amazon EKS nodes (https://docs.aws.amazon.com/eks/latest/userguide/launch-workers.html)
 // in the Amazon EKS User Guide.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
@@ -213,32 +407,33 @@ func (c *EKS) CreateClusterRequest(input *CreateClusterInput) (req *request.Requ
 // API operation CreateCluster for usage and error information.
 //
 // Returned Error Types:
-//   * ResourceInUseException
-//   The specified resource is in use.
 //
-//   * ResourceLimitExceededException
-//   You have encountered a service limit on the specified resource.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
+//   - ResourceLimitExceededException
+//     You have encountered a service limit on the specified resource.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * UnsupportedAvailabilityZoneException
-//   At least one of your specified cluster subnets is in an Availability Zone
-//   that does not support Amazon EKS. The exception output specifies the supported
-//   Availability Zones for your account, from which you can choose subnets for
-//   your cluster.
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+//   - UnsupportedAvailabilityZoneException
+//     At least one of your specified cluster subnets is in an Availability Zone
+//     that does not support Amazon EKS. The exception output specifies the supported
+//     Availability Zones for your account, from which you can choose subnets for
+//     your cluster.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateCluster
 func (c *EKS) CreateCluster(input *CreateClusterInput) (*CreateClusterOutput, error) {
@@ -278,14 +473,13 @@ const opCreateFargateProfile = "CreateFargateProfile"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the CreateFargateProfileRequest method.
+//	req, resp := client.CreateFargateProfileRequest(params)
 //
-//    // Example sending a request using the CreateFargateProfileRequest method.
-//    req, resp := client.CreateFargateProfileRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateFargateProfile
 func (c *EKS) CreateFargateProfileRequest(input *CreateFargateProfileInput) (req *request.Request, output *CreateFargateProfileOutput) {
@@ -306,8 +500,8 @@ func (c *EKS) CreateFargateProfileRequest(input *CreateFargateProfileInput) (req
 
 // CreateFargateProfile API operation for Amazon Elastic Kubernetes Service.
 //
-// Creates an AWS Fargate profile for your Amazon EKS cluster. You must have
-// at least one Fargate profile in a cluster to be able to run pods on Fargate.
+// Creates an Fargate profile for your Amazon EKS cluster. You must have at
+// least one Fargate profile in a cluster to be able to run pods on Fargate.
 //
 // The Fargate profile allows an administrator to declare which pods run on
 // Fargate and specify which pods run on which Fargate profile. This declaration
@@ -336,7 +530,7 @@ func (c *EKS) CreateFargateProfileRequest(input *CreateFargateProfileInput) (req
 // wait for that Fargate profile to finish deleting before you can create any
 // other profiles in that cluster.
 //
-// For more information, see AWS Fargate Profile (https://docs.aws.amazon.com/eks/latest/userguide/fargate-profile.html)
+// For more information, see Fargate Profile (https://docs.aws.amazon.com/eks/latest/userguide/fargate-profile.html)
 // in the Amazon EKS User Guide.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
@@ -347,30 +541,31 @@ func (c *EKS) CreateFargateProfileRequest(input *CreateFargateProfileInput) (req
 // API operation CreateFargateProfile for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceLimitExceededException
-//   You have encountered a service limit on the specified resource.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * UnsupportedAvailabilityZoneException
-//   At least one of your specified cluster subnets is in an Availability Zone
-//   that does not support Amazon EKS. The exception output specifies the supported
-//   Availability Zones for your account, from which you can choose subnets for
-//   your cluster.
+//   - ResourceLimitExceededException
+//     You have encountered a service limit on the specified resource.
+//
+//   - UnsupportedAvailabilityZoneException
+//     At least one of your specified cluster subnets is in an Availability Zone
+//     that does not support Amazon EKS. The exception output specifies the supported
+//     Availability Zones for your account, from which you can choose subnets for
+//     your cluster.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateFargateProfile
 func (c *EKS) CreateFargateProfile(input *CreateFargateProfileInput) (*CreateFargateProfileOutput, error) {
@@ -410,14 +605,13 @@ const opCreateNodegroup = "CreateNodegroup"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the CreateNodegroupRequest method.
+//	req, resp := client.CreateNodegroupRequest(params)
 //
-//    // Example sending a request using the CreateNodegroupRequest method.
-//    req, resp := client.CreateNodegroupRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateNodegroup
 func (c *EKS) CreateNodegroupRequest(input *CreateNodegroupInput) (req *request.Request, output *CreateNodegroupOutput) {
@@ -438,17 +632,17 @@ func (c *EKS) CreateNodegroupRequest(input *CreateNodegroupInput) (req *request.
 
 // CreateNodegroup API operation for Amazon Elastic Kubernetes Service.
 //
-// Creates a managed worker node group for an Amazon EKS cluster. You can only
-// create a node group for your cluster that is equal to the current Kubernetes
-// version for the cluster. All node groups are created with the latest AMI
-// release version for the respective minor Kubernetes version of the cluster,
-// unless you deploy a custom AMI using a launch template. For more information
-// about using launch templates, see Launch template support (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html).
+// Creates a managed node group for an Amazon EKS cluster. You can only create
+// a node group for your cluster that is equal to the current Kubernetes version
+// for the cluster. All node groups are created with the latest AMI release
+// version for the respective minor Kubernetes version of the cluster, unless
+// you deploy a custom AMI using a launch template. For more information about
+// using launch templates, see Launch template support (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html).
 //
 // An Amazon EKS managed node group is an Amazon EC2 Auto Scaling group and
-// associated Amazon EC2 instances that are managed by AWS for an Amazon EKS
-// cluster. Each node group uses a version of the Amazon EKS optimized Amazon
-// Linux 2 AMI. For more information, see Managed Node Groups (https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
+// associated Amazon EC2 instances that are managed by Amazon Web Services for
+// an Amazon EKS cluster. Each node group uses a version of the Amazon EKS optimized
+// Amazon Linux 2 AMI. For more information, see Managed Node Groups (https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html)
 // in the Amazon EKS User Guide.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
@@ -459,30 +653,31 @@ func (c *EKS) CreateNodegroupRequest(input *CreateNodegroupInput) (req *request.
 // API operation CreateNodegroup for usage and error information.
 //
 // Returned Error Types:
-//   * ResourceInUseException
-//   The specified resource is in use.
 //
-//   * ResourceLimitExceededException
-//   You have encountered a service limit on the specified resource.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - ResourceLimitExceededException
+//     You have encountered a service limit on the specified resource.
 //
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/CreateNodegroup
 func (c *EKS) CreateNodegroup(input *CreateNodegroupInput) (*CreateNodegroupOutput, error) {
@@ -522,14 +717,13 @@ const opDeleteAddon = "DeleteAddon"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DeleteAddonRequest method.
+//	req, resp := client.DeleteAddonRequest(params)
 //
-//    // Example sending a request using the DeleteAddonRequest method.
-//    req, resp := client.DeleteAddonRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteAddon
 func (c *EKS) DeleteAddonRequest(input *DeleteAddonInput) (req *request.Request, output *DeleteAddonOutput) {
@@ -563,26 +757,27 @@ func (c *EKS) DeleteAddonRequest(input *DeleteAddonInput) (req *request.Request,
 // API operation DeleteAddon for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteAddon
 func (c *EKS) DeleteAddon(input *DeleteAddonInput) (*DeleteAddonOutput, error) {
@@ -622,14 +817,13 @@ const opDeleteCluster = "DeleteCluster"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DeleteClusterRequest method.
+//	req, resp := client.DeleteClusterRequest(params)
 //
-//    // Example sending a request using the DeleteClusterRequest method.
-//    req, resp := client.DeleteClusterRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteCluster
 func (c *EKS) DeleteClusterRequest(input *DeleteClusterInput) (req *request.Request, output *DeleteClusterOutput) {
@@ -671,24 +865,25 @@ func (c *EKS) DeleteClusterRequest(input *DeleteClusterInput) (req *request.Requ
 // API operation DeleteCluster for usage and error information.
 //
 // Returned Error Types:
-//   * ResourceInUseException
-//   The specified resource is in use.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteCluster
 func (c *EKS) DeleteCluster(input *DeleteClusterInput) (*DeleteClusterOutput, error) {
@@ -728,14 +923,13 @@ const opDeleteFargateProfile = "DeleteFargateProfile"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DeleteFargateProfileRequest method.
+//	req, resp := client.DeleteFargateProfileRequest(params)
 //
-//    // Example sending a request using the DeleteFargateProfileRequest method.
-//    req, resp := client.DeleteFargateProfileRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteFargateProfile
 func (c *EKS) DeleteFargateProfileRequest(input *DeleteFargateProfileInput) (req *request.Request, output *DeleteFargateProfileOutput) {
@@ -756,7 +950,7 @@ func (c *EKS) DeleteFargateProfileRequest(input *DeleteFargateProfileInput) (req
 
 // DeleteFargateProfile API operation for Amazon Elastic Kubernetes Service.
 //
-// Deletes an AWS Fargate profile.
+// Deletes an Fargate profile.
 //
 // When you delete a Fargate profile, any pods running on Fargate that were
 // created with the profile are deleted. If those pods match another Fargate
@@ -776,22 +970,23 @@ func (c *EKS) DeleteFargateProfileRequest(input *DeleteFargateProfileInput) (req
 // API operation DeleteFargateProfile for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteFargateProfile
 func (c *EKS) DeleteFargateProfile(input *DeleteFargateProfileInput) (*DeleteFargateProfileOutput, error) {
@@ -831,14 +1026,13 @@ const opDeleteNodegroup = "DeleteNodegroup"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DeleteNodegroupRequest method.
+//	req, resp := client.DeleteNodegroupRequest(params)
 //
-//    // Example sending a request using the DeleteNodegroupRequest method.
-//    req, resp := client.DeleteNodegroupRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteNodegroup
 func (c *EKS) DeleteNodegroupRequest(input *DeleteNodegroupInput) (req *request.Request, output *DeleteNodegroupOutput) {
@@ -869,28 +1063,29 @@ func (c *EKS) DeleteNodegroupRequest(input *DeleteNodegroupInput) (req *request.
 // API operation DeleteNodegroup for usage and error information.
 //
 // Returned Error Types:
-//   * ResourceInUseException
-//   The specified resource is in use.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeleteNodegroup
 func (c *EKS) DeleteNodegroup(input *DeleteNodegroupInput) (*DeleteNodegroupOutput, error) {
@@ -914,6 +1109,109 @@ func (c *EKS) DeleteNodegroupWithContext(ctx aws.Context, input *DeleteNodegroup
 	return out, req.Send()
 }
 
+const opDeregisterCluster = "DeregisterCluster"
+
+// DeregisterClusterRequest generates a "aws/request.Request" representing the
+// client's request for the DeregisterCluster operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See DeregisterCluster for more information on using the DeregisterCluster
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the DeregisterClusterRequest method.
+//	req, resp := client.DeregisterClusterRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeregisterCluster
+func (c *EKS) DeregisterClusterRequest(input *DeregisterClusterInput) (req *request.Request, output *DeregisterClusterOutput) {
+	op := &request.Operation{
+		Name:       opDeregisterCluster,
+		HTTPMethod: "DELETE",
+		HTTPPath:   "/cluster-registrations/{name}",
+	}
+
+	if input == nil {
+		input = &DeregisterClusterInput{}
+	}
+
+	output = &DeregisterClusterOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// DeregisterCluster API operation for Amazon Elastic Kubernetes Service.
+//
+// Deregisters a connected cluster to remove it from the Amazon EKS control
+// plane.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation DeregisterCluster for usage and error information.
+//
+// Returned Error Types:
+//
+//   - ResourceInUseException
+//     The specified resource is in use.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+//   - AccessDeniedException
+//     You don't have permissions to perform the requested operation. The user or
+//     role that is making the request must have at least one IAM permissions policy
+//     attached that grants the required permissions. For more information, see
+//     Access Management (https://docs.aws.amazon.com/IAM/latest/UserGuide/access.html)
+//     in the IAM User Guide.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DeregisterCluster
+func (c *EKS) DeregisterCluster(input *DeregisterClusterInput) (*DeregisterClusterOutput, error) {
+	req, out := c.DeregisterClusterRequest(input)
+	return out, req.Send()
+}
+
+// DeregisterClusterWithContext is the same as DeregisterCluster with the addition of
+// the ability to pass a context and additional request options.
+//
+// See DeregisterCluster for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) DeregisterClusterWithContext(ctx aws.Context, input *DeregisterClusterInput, opts ...request.Option) (*DeregisterClusterOutput, error) {
+	req, out := c.DeregisterClusterRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
 const opDescribeAddon = "DescribeAddon"
 
 // DescribeAddonRequest generates a "aws/request.Request" representing the
@@ -930,14 +1228,13 @@ const opDescribeAddon = "DescribeAddon"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeAddonRequest method.
+//	req, resp := client.DescribeAddonRequest(params)
 //
-//    // Example sending a request using the DescribeAddonRequest method.
-//    req, resp := client.DescribeAddonRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeAddon
 func (c *EKS) DescribeAddonRequest(input *DescribeAddonInput) (req *request.Request, output *DescribeAddonOutput) {
@@ -968,26 +1265,27 @@ func (c *EKS) DescribeAddonRequest(input *DescribeAddonInput) (req *request.Requ
 // API operation DescribeAddon for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeAddon
 func (c *EKS) DescribeAddon(input *DescribeAddonInput) (*DescribeAddonOutput, error) {
@@ -1027,14 +1325,13 @@ const opDescribeAddonVersions = "DescribeAddonVersions"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeAddonVersionsRequest method.
+//	req, resp := client.DescribeAddonVersionsRequest(params)
 //
-//    // Example sending a request using the DescribeAddonVersionsRequest method.
-//    req, resp := client.DescribeAddonVersionsRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeAddonVersions
 func (c *EKS) DescribeAddonVersionsRequest(input *DescribeAddonVersionsInput) (req *request.Request, output *DescribeAddonVersionsOutput) {
@@ -1071,17 +1368,18 @@ func (c *EKS) DescribeAddonVersionsRequest(input *DescribeAddonVersionsInput) (r
 // API operation DescribeAddonVersions for usage and error information.
 //
 // Returned Error Types:
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeAddonVersions
 func (c *EKS) DescribeAddonVersions(input *DescribeAddonVersionsInput) (*DescribeAddonVersionsOutput, error) {
@@ -1113,15 +1411,14 @@ func (c *EKS) DescribeAddonVersionsWithContext(ctx aws.Context, input *DescribeA
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a DescribeAddonVersions operation.
-//    pageNum := 0
-//    err := client.DescribeAddonVersionsPages(params,
-//        func(page *eks.DescribeAddonVersionsOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a DescribeAddonVersions operation.
+//	pageNum := 0
+//	err := client.DescribeAddonVersionsPages(params,
+//	    func(page *eks.DescribeAddonVersionsOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) DescribeAddonVersionsPages(input *DescribeAddonVersionsInput, fn func(*DescribeAddonVersionsOutput, bool) bool) error {
 	return c.DescribeAddonVersionsPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -1173,14 +1470,13 @@ const opDescribeCluster = "DescribeCluster"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeClusterRequest method.
+//	req, resp := client.DescribeClusterRequest(params)
 //
-//    // Example sending a request using the DescribeClusterRequest method.
-//    req, resp := client.DescribeClusterRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeCluster
 func (c *EKS) DescribeClusterRequest(input *DescribeClusterInput) (req *request.Request, output *DescribeClusterOutput) {
@@ -1219,21 +1515,22 @@ func (c *EKS) DescribeClusterRequest(input *DescribeClusterInput) (req *request.
 // API operation DescribeCluster for usage and error information.
 //
 // Returned Error Types:
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeCluster
 func (c *EKS) DescribeCluster(input *DescribeClusterInput) (*DescribeClusterOutput, error) {
@@ -1273,14 +1570,13 @@ const opDescribeFargateProfile = "DescribeFargateProfile"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeFargateProfileRequest method.
+//	req, resp := client.DescribeFargateProfileRequest(params)
 //
-//    // Example sending a request using the DescribeFargateProfileRequest method.
-//    req, resp := client.DescribeFargateProfileRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeFargateProfile
 func (c *EKS) DescribeFargateProfileRequest(input *DescribeFargateProfileInput) (req *request.Request, output *DescribeFargateProfileOutput) {
@@ -1301,7 +1597,7 @@ func (c *EKS) DescribeFargateProfileRequest(input *DescribeFargateProfileInput) 
 
 // DescribeFargateProfile API operation for Amazon Elastic Kubernetes Service.
 //
-// Returns descriptive information about an AWS Fargate profile.
+// Returns descriptive information about an Fargate profile.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -1311,22 +1607,23 @@ func (c *EKS) DescribeFargateProfileRequest(input *DescribeFargateProfileInput) 
 // API operation DescribeFargateProfile for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeFargateProfile
 func (c *EKS) DescribeFargateProfile(input *DescribeFargateProfileInput) (*DescribeFargateProfileOutput, error) {
@@ -1350,6 +1647,102 @@ func (c *EKS) DescribeFargateProfileWithContext(ctx aws.Context, input *Describe
 	return out, req.Send()
 }
 
+const opDescribeIdentityProviderConfig = "DescribeIdentityProviderConfig"
+
+// DescribeIdentityProviderConfigRequest generates a "aws/request.Request" representing the
+// client's request for the DescribeIdentityProviderConfig operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See DescribeIdentityProviderConfig for more information on using the DescribeIdentityProviderConfig
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the DescribeIdentityProviderConfigRequest method.
+//	req, resp := client.DescribeIdentityProviderConfigRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeIdentityProviderConfig
+func (c *EKS) DescribeIdentityProviderConfigRequest(input *DescribeIdentityProviderConfigInput) (req *request.Request, output *DescribeIdentityProviderConfigOutput) {
+	op := &request.Operation{
+		Name:       opDescribeIdentityProviderConfig,
+		HTTPMethod: "POST",
+		HTTPPath:   "/clusters/{name}/identity-provider-configs/describe",
+	}
+
+	if input == nil {
+		input = &DescribeIdentityProviderConfigInput{}
+	}
+
+	output = &DescribeIdentityProviderConfigOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// DescribeIdentityProviderConfig API operation for Amazon Elastic Kubernetes Service.
+//
+// Returns descriptive information about an identity provider configuration.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation DescribeIdentityProviderConfig for usage and error information.
+//
+// Returned Error Types:
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeIdentityProviderConfig
+func (c *EKS) DescribeIdentityProviderConfig(input *DescribeIdentityProviderConfigInput) (*DescribeIdentityProviderConfigOutput, error) {
+	req, out := c.DescribeIdentityProviderConfigRequest(input)
+	return out, req.Send()
+}
+
+// DescribeIdentityProviderConfigWithContext is the same as DescribeIdentityProviderConfig with the addition of
+// the ability to pass a context and additional request options.
+//
+// See DescribeIdentityProviderConfig for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) DescribeIdentityProviderConfigWithContext(ctx aws.Context, input *DescribeIdentityProviderConfigInput, opts ...request.Option) (*DescribeIdentityProviderConfigOutput, error) {
+	req, out := c.DescribeIdentityProviderConfigRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
 const opDescribeNodegroup = "DescribeNodegroup"
 
 // DescribeNodegroupRequest generates a "aws/request.Request" representing the
@@ -1366,14 +1759,13 @@ const opDescribeNodegroup = "DescribeNodegroup"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeNodegroupRequest method.
+//	req, resp := client.DescribeNodegroupRequest(params)
 //
-//    // Example sending a request using the DescribeNodegroupRequest method.
-//    req, resp := client.DescribeNodegroupRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeNodegroup
 func (c *EKS) DescribeNodegroupRequest(input *DescribeNodegroupInput) (req *request.Request, output *DescribeNodegroupOutput) {
@@ -1404,25 +1796,26 @@ func (c *EKS) DescribeNodegroupRequest(input *DescribeNodegroupInput) (req *requ
 // API operation DescribeNodegroup for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeNodegroup
 func (c *EKS) DescribeNodegroup(input *DescribeNodegroupInput) (*DescribeNodegroupOutput, error) {
@@ -1462,14 +1855,13 @@ const opDescribeUpdate = "DescribeUpdate"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the DescribeUpdateRequest method.
+//	req, resp := client.DescribeUpdateRequest(params)
 //
-//    // Example sending a request using the DescribeUpdateRequest method.
-//    req, resp := client.DescribeUpdateRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeUpdate
 func (c *EKS) DescribeUpdateRequest(input *DescribeUpdateInput) (req *request.Request, output *DescribeUpdateOutput) {
@@ -1491,7 +1883,7 @@ func (c *EKS) DescribeUpdateRequest(input *DescribeUpdateInput) (req *request.Re
 // DescribeUpdate API operation for Amazon Elastic Kubernetes Service.
 //
 // Returns descriptive information about an update against your Amazon EKS cluster
-// or associated managed node group.
+// or associated managed node group or Amazon EKS add-on.
 //
 // When the status of the update is Succeeded, the update is complete. If an
 // update fails, the status is Failed, and an error detail explains the reason
@@ -1505,22 +1897,23 @@ func (c *EKS) DescribeUpdateRequest(input *DescribeUpdateInput) (req *request.Re
 // API operation DescribeUpdate for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DescribeUpdate
 func (c *EKS) DescribeUpdate(input *DescribeUpdateInput) (*DescribeUpdateOutput, error) {
@@ -1544,6 +1937,109 @@ func (c *EKS) DescribeUpdateWithContext(ctx aws.Context, input *DescribeUpdateIn
 	return out, req.Send()
 }
 
+const opDisassociateIdentityProviderConfig = "DisassociateIdentityProviderConfig"
+
+// DisassociateIdentityProviderConfigRequest generates a "aws/request.Request" representing the
+// client's request for the DisassociateIdentityProviderConfig operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See DisassociateIdentityProviderConfig for more information on using the DisassociateIdentityProviderConfig
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the DisassociateIdentityProviderConfigRequest method.
+//	req, resp := client.DisassociateIdentityProviderConfigRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DisassociateIdentityProviderConfig
+func (c *EKS) DisassociateIdentityProviderConfigRequest(input *DisassociateIdentityProviderConfigInput) (req *request.Request, output *DisassociateIdentityProviderConfigOutput) {
+	op := &request.Operation{
+		Name:       opDisassociateIdentityProviderConfig,
+		HTTPMethod: "POST",
+		HTTPPath:   "/clusters/{name}/identity-provider-configs/disassociate",
+	}
+
+	if input == nil {
+		input = &DisassociateIdentityProviderConfigInput{}
+	}
+
+	output = &DisassociateIdentityProviderConfigOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// DisassociateIdentityProviderConfig API operation for Amazon Elastic Kubernetes Service.
+//
+// Disassociates an identity provider configuration from a cluster. If you disassociate
+// an identity provider from your cluster, users included in the provider can
+// no longer access the cluster. However, you can still access the cluster with
+// Amazon Web Services IAM users.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation DisassociateIdentityProviderConfig for usage and error information.
+//
+// Returned Error Types:
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceInUseException
+//     The specified resource is in use.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/DisassociateIdentityProviderConfig
+func (c *EKS) DisassociateIdentityProviderConfig(input *DisassociateIdentityProviderConfigInput) (*DisassociateIdentityProviderConfigOutput, error) {
+	req, out := c.DisassociateIdentityProviderConfigRequest(input)
+	return out, req.Send()
+}
+
+// DisassociateIdentityProviderConfigWithContext is the same as DisassociateIdentityProviderConfig with the addition of
+// the ability to pass a context and additional request options.
+//
+// See DisassociateIdentityProviderConfig for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) DisassociateIdentityProviderConfigWithContext(ctx aws.Context, input *DisassociateIdentityProviderConfigInput, opts ...request.Option) (*DisassociateIdentityProviderConfigOutput, error) {
+	req, out := c.DisassociateIdentityProviderConfigRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
 const opListAddons = "ListAddons"
 
 // ListAddonsRequest generates a "aws/request.Request" representing the
@@ -1560,14 +2056,13 @@ const opListAddons = "ListAddons"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListAddonsRequest method.
+//	req, resp := client.ListAddonsRequest(params)
 //
-//    // Example sending a request using the ListAddonsRequest method.
-//    req, resp := client.ListAddonsRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListAddons
 func (c *EKS) ListAddonsRequest(input *ListAddonsInput) (req *request.Request, output *ListAddonsOutput) {
@@ -1604,26 +2099,27 @@ func (c *EKS) ListAddonsRequest(input *ListAddonsInput) (req *request.Request, o
 // API operation ListAddons for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListAddons
 func (c *EKS) ListAddons(input *ListAddonsInput) (*ListAddonsOutput, error) {
@@ -1655,15 +2151,14 @@ func (c *EKS) ListAddonsWithContext(ctx aws.Context, input *ListAddonsInput, opt
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a ListAddons operation.
-//    pageNum := 0
-//    err := client.ListAddonsPages(params,
-//        func(page *eks.ListAddonsOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a ListAddons operation.
+//	pageNum := 0
+//	err := client.ListAddonsPages(params,
+//	    func(page *eks.ListAddonsOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) ListAddonsPages(input *ListAddonsInput, fn func(*ListAddonsOutput, bool) bool) error {
 	return c.ListAddonsPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -1715,14 +2210,13 @@ const opListClusters = "ListClusters"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListClustersRequest method.
+//	req, resp := client.ListClustersRequest(params)
 //
-//    // Example sending a request using the ListClustersRequest method.
-//    req, resp := client.ListClustersRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListClusters
 func (c *EKS) ListClustersRequest(input *ListClustersInput) (req *request.Request, output *ListClustersOutput) {
@@ -1749,7 +2243,8 @@ func (c *EKS) ListClustersRequest(input *ListClustersInput) (req *request.Reques
 
 // ListClusters API operation for Amazon Elastic Kubernetes Service.
 //
-// Lists the Amazon EKS clusters in your AWS account in the specified Region.
+// Lists the Amazon EKS clusters in your Amazon Web Services account in the
+// specified Region.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -1759,20 +2254,21 @@ func (c *EKS) ListClustersRequest(input *ListClustersInput) (req *request.Reques
 // API operation ListClusters for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListClusters
 func (c *EKS) ListClusters(input *ListClustersInput) (*ListClustersOutput, error) {
@@ -1804,15 +2300,14 @@ func (c *EKS) ListClustersWithContext(ctx aws.Context, input *ListClustersInput,
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a ListClusters operation.
-//    pageNum := 0
-//    err := client.ListClustersPages(params,
-//        func(page *eks.ListClustersOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a ListClusters operation.
+//	pageNum := 0
+//	err := client.ListClustersPages(params,
+//	    func(page *eks.ListClustersOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) ListClustersPages(input *ListClustersInput, fn func(*ListClustersOutput, bool) bool) error {
 	return c.ListClustersPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -1864,14 +2359,13 @@ const opListFargateProfiles = "ListFargateProfiles"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListFargateProfilesRequest method.
+//	req, resp := client.ListFargateProfilesRequest(params)
 //
-//    // Example sending a request using the ListFargateProfilesRequest method.
-//    req, resp := client.ListFargateProfilesRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListFargateProfiles
 func (c *EKS) ListFargateProfilesRequest(input *ListFargateProfilesInput) (req *request.Request, output *ListFargateProfilesOutput) {
@@ -1898,8 +2392,8 @@ func (c *EKS) ListFargateProfilesRequest(input *ListFargateProfilesInput) (req *
 
 // ListFargateProfiles API operation for Amazon Elastic Kubernetes Service.
 //
-// Lists the AWS Fargate profiles associated with the specified cluster in your
-// AWS account in the specified Region.
+// Lists the Fargate profiles associated with the specified cluster in your
+// Amazon Web Services account in the specified Region.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -1909,22 +2403,23 @@ func (c *EKS) ListFargateProfilesRequest(input *ListFargateProfilesInput) (req *
 // API operation ListFargateProfiles for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListFargateProfiles
 func (c *EKS) ListFargateProfiles(input *ListFargateProfilesInput) (*ListFargateProfilesOutput, error) {
@@ -1956,15 +2451,14 @@ func (c *EKS) ListFargateProfilesWithContext(ctx aws.Context, input *ListFargate
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a ListFargateProfiles operation.
-//    pageNum := 0
-//    err := client.ListFargateProfilesPages(params,
-//        func(page *eks.ListFargateProfilesOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a ListFargateProfiles operation.
+//	pageNum := 0
+//	err := client.ListFargateProfilesPages(params,
+//	    func(page *eks.ListFargateProfilesOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) ListFargateProfilesPages(input *ListFargateProfilesInput, fn func(*ListFargateProfilesOutput, bool) bool) error {
 	return c.ListFargateProfilesPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -2000,6 +2494,159 @@ func (c *EKS) ListFargateProfilesPagesWithContext(ctx aws.Context, input *ListFa
 	return p.Err()
 }
 
+const opListIdentityProviderConfigs = "ListIdentityProviderConfigs"
+
+// ListIdentityProviderConfigsRequest generates a "aws/request.Request" representing the
+// client's request for the ListIdentityProviderConfigs operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See ListIdentityProviderConfigs for more information on using the ListIdentityProviderConfigs
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the ListIdentityProviderConfigsRequest method.
+//	req, resp := client.ListIdentityProviderConfigsRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListIdentityProviderConfigs
+func (c *EKS) ListIdentityProviderConfigsRequest(input *ListIdentityProviderConfigsInput) (req *request.Request, output *ListIdentityProviderConfigsOutput) {
+	op := &request.Operation{
+		Name:       opListIdentityProviderConfigs,
+		HTTPMethod: "GET",
+		HTTPPath:   "/clusters/{name}/identity-provider-configs",
+		Paginator: &request.Paginator{
+			InputTokens:     []string{"nextToken"},
+			OutputTokens:    []string{"nextToken"},
+			LimitToken:      "maxResults",
+			TruncationToken: "",
+		},
+	}
+
+	if input == nil {
+		input = &ListIdentityProviderConfigsInput{}
+	}
+
+	output = &ListIdentityProviderConfigsOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// ListIdentityProviderConfigs API operation for Amazon Elastic Kubernetes Service.
+//
+// A list of identity provider configurations.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation ListIdentityProviderConfigs for usage and error information.
+//
+// Returned Error Types:
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListIdentityProviderConfigs
+func (c *EKS) ListIdentityProviderConfigs(input *ListIdentityProviderConfigsInput) (*ListIdentityProviderConfigsOutput, error) {
+	req, out := c.ListIdentityProviderConfigsRequest(input)
+	return out, req.Send()
+}
+
+// ListIdentityProviderConfigsWithContext is the same as ListIdentityProviderConfigs with the addition of
+// the ability to pass a context and additional request options.
+//
+// See ListIdentityProviderConfigs for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) ListIdentityProviderConfigsWithContext(ctx aws.Context, input *ListIdentityProviderConfigsInput, opts ...request.Option) (*ListIdentityProviderConfigsOutput, error) {
+	req, out := c.ListIdentityProviderConfigsRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
+// ListIdentityProviderConfigsPages iterates over the pages of a ListIdentityProviderConfigs operation,
+// calling the "fn" function with the response data for each page. To stop
+// iterating, return false from the fn function.
+//
+// See ListIdentityProviderConfigs method for more information on how to use this operation.
+//
+// Note: This operation can generate multiple requests to a service.
+//
+//	// Example iterating over at most 3 pages of a ListIdentityProviderConfigs operation.
+//	pageNum := 0
+//	err := client.ListIdentityProviderConfigsPages(params,
+//	    func(page *eks.ListIdentityProviderConfigsOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
+func (c *EKS) ListIdentityProviderConfigsPages(input *ListIdentityProviderConfigsInput, fn func(*ListIdentityProviderConfigsOutput, bool) bool) error {
+	return c.ListIdentityProviderConfigsPagesWithContext(aws.BackgroundContext(), input, fn)
+}
+
+// ListIdentityProviderConfigsPagesWithContext same as ListIdentityProviderConfigsPages except
+// it takes a Context and allows setting request options on the pages.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) ListIdentityProviderConfigsPagesWithContext(ctx aws.Context, input *ListIdentityProviderConfigsInput, fn func(*ListIdentityProviderConfigsOutput, bool) bool, opts ...request.Option) error {
+	p := request.Pagination{
+		NewRequest: func() (*request.Request, error) {
+			var inCpy *ListIdentityProviderConfigsInput
+			if input != nil {
+				tmp := *input
+				inCpy = &tmp
+			}
+			req, _ := c.ListIdentityProviderConfigsRequest(inCpy)
+			req.SetContext(ctx)
+			req.ApplyOptions(opts...)
+			return req, nil
+		},
+	}
+
+	for p.Next() {
+		if !fn(p.Page().(*ListIdentityProviderConfigsOutput), !p.HasNextPage()) {
+			break
+		}
+	}
+
+	return p.Err()
+}
+
 const opListNodegroups = "ListNodegroups"
 
 // ListNodegroupsRequest generates a "aws/request.Request" representing the
@@ -2016,14 +2663,13 @@ const opListNodegroups = "ListNodegroups"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListNodegroupsRequest method.
+//	req, resp := client.ListNodegroupsRequest(params)
 //
-//    // Example sending a request using the ListNodegroupsRequest method.
-//    req, resp := client.ListNodegroupsRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListNodegroups
 func (c *EKS) ListNodegroupsRequest(input *ListNodegroupsInput) (req *request.Request, output *ListNodegroupsOutput) {
@@ -2051,8 +2697,8 @@ func (c *EKS) ListNodegroupsRequest(input *ListNodegroupsInput) (req *request.Re
 // ListNodegroups API operation for Amazon Elastic Kubernetes Service.
 //
 // Lists the Amazon EKS managed node groups associated with the specified cluster
-// in your AWS account in the specified Region. Self-managed node groups are
-// not listed.
+// in your Amazon Web Services account in the specified Region. Self-managed
+// node groups are not listed.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -2062,25 +2708,26 @@ func (c *EKS) ListNodegroupsRequest(input *ListNodegroupsInput) (req *request.Re
 // API operation ListNodegroups for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ServiceUnavailableException
-//   The service is unavailable. Back off and retry the operation.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListNodegroups
 func (c *EKS) ListNodegroups(input *ListNodegroupsInput) (*ListNodegroupsOutput, error) {
@@ -2112,15 +2759,14 @@ func (c *EKS) ListNodegroupsWithContext(ctx aws.Context, input *ListNodegroupsIn
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a ListNodegroups operation.
-//    pageNum := 0
-//    err := client.ListNodegroupsPages(params,
-//        func(page *eks.ListNodegroupsOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a ListNodegroups operation.
+//	pageNum := 0
+//	err := client.ListNodegroupsPages(params,
+//	    func(page *eks.ListNodegroupsOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) ListNodegroupsPages(input *ListNodegroupsInput, fn func(*ListNodegroupsOutput, bool) bool) error {
 	return c.ListNodegroupsPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -2172,14 +2818,13 @@ const opListTagsForResource = "ListTagsForResource"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListTagsForResourceRequest method.
+//	req, resp := client.ListTagsForResourceRequest(params)
 //
-//    // Example sending a request using the ListTagsForResourceRequest method.
-//    req, resp := client.ListTagsForResourceRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListTagsForResource
 func (c *EKS) ListTagsForResourceRequest(input *ListTagsForResourceInput) (req *request.Request, output *ListTagsForResourceOutput) {
@@ -2210,13 +2855,14 @@ func (c *EKS) ListTagsForResourceRequest(input *ListTagsForResourceInput) (req *
 // API operation ListTagsForResource for usage and error information.
 //
 // Returned Error Types:
-//   * BadRequestException
-//   This exception is thrown if the request contains a semantic error. The precise
-//   meaning will depend on the API, and will be documented in the error message.
 //
-//   * NotFoundException
-//   A service resource associated with the request could not be found. Clients
-//   should not retry such requests.
+//   - BadRequestException
+//     This exception is thrown if the request contains a semantic error. The precise
+//     meaning will depend on the API, and will be documented in the error message.
+//
+//   - NotFoundException
+//     A service resource associated with the request could not be found. Clients
+//     should not retry such requests.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListTagsForResource
 func (c *EKS) ListTagsForResource(input *ListTagsForResourceInput) (*ListTagsForResourceOutput, error) {
@@ -2256,14 +2902,13 @@ const opListUpdates = "ListUpdates"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the ListUpdatesRequest method.
+//	req, resp := client.ListUpdatesRequest(params)
 //
-//    // Example sending a request using the ListUpdatesRequest method.
-//    req, resp := client.ListUpdatesRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListUpdates
 func (c *EKS) ListUpdatesRequest(input *ListUpdatesInput) (req *request.Request, output *ListUpdatesOutput) {
@@ -2291,7 +2936,7 @@ func (c *EKS) ListUpdatesRequest(input *ListUpdatesInput) (req *request.Request,
 // ListUpdates API operation for Amazon Elastic Kubernetes Service.
 //
 // Lists the updates associated with an Amazon EKS cluster or managed node group
-// in your AWS account, in the specified Region.
+// in your Amazon Web Services account, in the specified Region.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -2301,22 +2946,23 @@ func (c *EKS) ListUpdatesRequest(input *ListUpdatesInput) (req *request.Request,
 // API operation ListUpdates for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/ListUpdates
 func (c *EKS) ListUpdates(input *ListUpdatesInput) (*ListUpdatesOutput, error) {
@@ -2348,15 +2994,14 @@ func (c *EKS) ListUpdatesWithContext(ctx aws.Context, input *ListUpdatesInput, o
 //
 // Note: This operation can generate multiple requests to a service.
 //
-//    // Example iterating over at most 3 pages of a ListUpdates operation.
-//    pageNum := 0
-//    err := client.ListUpdatesPages(params,
-//        func(page *eks.ListUpdatesOutput, lastPage bool) bool {
-//            pageNum++
-//            fmt.Println(page)
-//            return pageNum <= 3
-//        })
-//
+//	// Example iterating over at most 3 pages of a ListUpdates operation.
+//	pageNum := 0
+//	err := client.ListUpdatesPages(params,
+//	    func(page *eks.ListUpdatesOutput, lastPage bool) bool {
+//	        pageNum++
+//	        fmt.Println(page)
+//	        return pageNum <= 3
+//	    })
 func (c *EKS) ListUpdatesPages(input *ListUpdatesInput, fn func(*ListUpdatesOutput, bool) bool) error {
 	return c.ListUpdatesPagesWithContext(aws.BackgroundContext(), input, fn)
 }
@@ -2392,6 +3037,129 @@ func (c *EKS) ListUpdatesPagesWithContext(ctx aws.Context, input *ListUpdatesInp
 	return p.Err()
 }
 
+const opRegisterCluster = "RegisterCluster"
+
+// RegisterClusterRequest generates a "aws/request.Request" representing the
+// client's request for the RegisterCluster operation. The "output" return
+// value will be populated with the request's response once the request completes
+// successfully.
+//
+// Use "Send" method on the returned Request to send the API call to the service.
+// the "output" return value is not valid until after Send returns without error.
+//
+// See RegisterCluster for more information on using the RegisterCluster
+// API call, and error handling.
+//
+// This method is useful when you want to inject custom logic or configuration
+// into the SDK's request lifecycle. Such as custom headers, or retry logic.
+//
+//	// Example sending a request using the RegisterClusterRequest method.
+//	req, resp := client.RegisterClusterRequest(params)
+//
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/RegisterCluster
+func (c *EKS) RegisterClusterRequest(input *RegisterClusterInput) (req *request.Request, output *RegisterClusterOutput) {
+	op := &request.Operation{
+		Name:       opRegisterCluster,
+		HTTPMethod: "POST",
+		HTTPPath:   "/cluster-registrations",
+	}
+
+	if input == nil {
+		input = &RegisterClusterInput{}
+	}
+
+	output = &RegisterClusterOutput{}
+	req = c.newRequest(op, input, output)
+	return
+}
+
+// RegisterCluster API operation for Amazon Elastic Kubernetes Service.
+//
+// Connects a Kubernetes cluster to the Amazon EKS control plane.
+//
+// Any Kubernetes cluster can be connected to the Amazon EKS control plane to
+// view current information about the cluster and its nodes.
+//
+// Cluster connection requires two steps. First, send a RegisterClusterRequest
+// to add it to the Amazon EKS control plane.
+//
+// Second, a Manifest (https://amazon-eks.s3.us-west-2.amazonaws.com/eks-connector/manifests/eks-connector/latest/eks-connector.yaml)
+// containing the activationID and activationCode must be applied to the Kubernetes
+// cluster through it's native provider to provide visibility.
+//
+// After the Manifest is updated and applied, then the connected cluster is
+// visible to the Amazon EKS control plane. If the Manifest is not applied within
+// three days, then the connected cluster will no longer be visible and must
+// be deregistered. See DeregisterCluster.
+//
+// Returns awserr.Error for service API and SDK errors. Use runtime type assertions
+// with awserr.Error's Code and Message methods to get detailed information about
+// the error.
+//
+// See the AWS API reference guide for Amazon Elastic Kubernetes Service's
+// API operation RegisterCluster for usage and error information.
+//
+// Returned Error Types:
+//
+//   - ResourceLimitExceededException
+//     You have encountered a service limit on the specified resource.
+//
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
+//
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
+//
+//   - ServiceUnavailableException
+//     The service is unavailable. Back off and retry the operation.
+//
+//   - AccessDeniedException
+//     You don't have permissions to perform the requested operation. The user or
+//     role that is making the request must have at least one IAM permissions policy
+//     attached that grants the required permissions. For more information, see
+//     Access Management (https://docs.aws.amazon.com/IAM/latest/UserGuide/access.html)
+//     in the IAM User Guide.
+//
+//   - ResourceInUseException
+//     The specified resource is in use.
+//
+//   - ResourcePropagationDelayException
+//     Required resources (such as service-linked roles) were created and are still
+//     propagating. Retry later.
+//
+// See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/RegisterCluster
+func (c *EKS) RegisterCluster(input *RegisterClusterInput) (*RegisterClusterOutput, error) {
+	req, out := c.RegisterClusterRequest(input)
+	return out, req.Send()
+}
+
+// RegisterClusterWithContext is the same as RegisterCluster with the addition of
+// the ability to pass a context and additional request options.
+//
+// See RegisterCluster for details on how to use this API operation.
+//
+// The context must be non-nil and will be used for request cancellation. If
+// the context is nil a panic will occur. In the future the SDK may create
+// sub-contexts for http.Requests. See https://golang.org/pkg/context/
+// for more information on using Contexts.
+func (c *EKS) RegisterClusterWithContext(ctx aws.Context, input *RegisterClusterInput, opts ...request.Option) (*RegisterClusterOutput, error) {
+	req, out := c.RegisterClusterRequest(input)
+	req.SetContext(ctx)
+	req.ApplyOptions(opts...)
+	return out, req.Send()
+}
+
 const opTagResource = "TagResource"
 
 // TagResourceRequest generates a "aws/request.Request" representing the
@@ -2408,14 +3176,13 @@ const opTagResource = "TagResource"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the TagResourceRequest method.
+//	req, resp := client.TagResourceRequest(params)
 //
-//    // Example sending a request using the TagResourceRequest method.
-//    req, resp := client.TagResourceRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/TagResource
 func (c *EKS) TagResourceRequest(input *TagResourceInput) (req *request.Request, output *TagResourceOutput) {
@@ -2443,7 +3210,7 @@ func (c *EKS) TagResourceRequest(input *TagResourceInput) (req *request.Request,
 // that resource are deleted as well. Tags that you create for Amazon EKS resources
 // do not propagate to any other resources associated with the cluster. For
 // example, if you tag a cluster with this operation, that tag does not automatically
-// propagate to the subnets and worker nodes associated with the cluster.
+// propagate to the subnets and nodes associated with the cluster.
 //
 // Returns awserr.Error for service API and SDK errors. Use runtime type assertions
 // with awserr.Error's Code and Message methods to get detailed information about
@@ -2453,13 +3220,14 @@ func (c *EKS) TagResourceRequest(input *TagResourceInput) (req *request.Request,
 // API operation TagResource for usage and error information.
 //
 // Returned Error Types:
-//   * BadRequestException
-//   This exception is thrown if the request contains a semantic error. The precise
-//   meaning will depend on the API, and will be documented in the error message.
 //
-//   * NotFoundException
-//   A service resource associated with the request could not be found. Clients
-//   should not retry such requests.
+//   - BadRequestException
+//     This exception is thrown if the request contains a semantic error. The precise
+//     meaning will depend on the API, and will be documented in the error message.
+//
+//   - NotFoundException
+//     A service resource associated with the request could not be found. Clients
+//     should not retry such requests.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/TagResource
 func (c *EKS) TagResource(input *TagResourceInput) (*TagResourceOutput, error) {
@@ -2499,14 +3267,13 @@ const opUntagResource = "UntagResource"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UntagResourceRequest method.
+//	req, resp := client.UntagResourceRequest(params)
 //
-//    // Example sending a request using the UntagResourceRequest method.
-//    req, resp := client.UntagResourceRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UntagResource
 func (c *EKS) UntagResourceRequest(input *UntagResourceInput) (req *request.Request, output *UntagResourceOutput) {
@@ -2538,13 +3305,14 @@ func (c *EKS) UntagResourceRequest(input *UntagResourceInput) (req *request.Requ
 // API operation UntagResource for usage and error information.
 //
 // Returned Error Types:
-//   * BadRequestException
-//   This exception is thrown if the request contains a semantic error. The precise
-//   meaning will depend on the API, and will be documented in the error message.
 //
-//   * NotFoundException
-//   A service resource associated with the request could not be found. Clients
-//   should not retry such requests.
+//   - BadRequestException
+//     This exception is thrown if the request contains a semantic error. The precise
+//     meaning will depend on the API, and will be documented in the error message.
+//
+//   - NotFoundException
+//     A service resource associated with the request could not be found. Clients
+//     should not retry such requests.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UntagResource
 func (c *EKS) UntagResource(input *UntagResourceInput) (*UntagResourceOutput, error) {
@@ -2584,14 +3352,13 @@ const opUpdateAddon = "UpdateAddon"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UpdateAddonRequest method.
+//	req, resp := client.UpdateAddonRequest(params)
 //
-//    // Example sending a request using the UpdateAddonRequest method.
-//    req, resp := client.UpdateAddonRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateAddon
 func (c *EKS) UpdateAddonRequest(input *UpdateAddonInput) (req *request.Request, output *UpdateAddonOutput) {
@@ -2622,29 +3389,30 @@ func (c *EKS) UpdateAddonRequest(input *UpdateAddonInput) (req *request.Request,
 // API operation UpdateAddon for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
+//
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateAddon
 func (c *EKS) UpdateAddon(input *UpdateAddonInput) (*UpdateAddonOutput, error) {
@@ -2684,14 +3452,13 @@ const opUpdateClusterConfig = "UpdateClusterConfig"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UpdateClusterConfigRequest method.
+//	req, resp := client.UpdateClusterConfigRequest(params)
 //
-//    // Example sending a request using the UpdateClusterConfigRequest method.
-//    req, resp := client.UpdateClusterConfigRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateClusterConfig
 func (c *EKS) UpdateClusterConfigRequest(input *UpdateClusterConfigInput) (req *request.Request, output *UpdateClusterConfigOutput) {
@@ -2724,17 +3491,16 @@ func (c *EKS) UpdateClusterConfigRequest(input *UpdateClusterConfigInput) (req *
 // in the Amazon EKS User Guide .
 //
 // CloudWatch Logs ingestion, archive storage, and data scanning rates apply
-// to exported control plane logs. For more information, see Amazon CloudWatch
-// Pricing (http://aws.amazon.com/cloudwatch/pricing/).
+// to exported control plane logs. For more information, see CloudWatch Pricing
+// (http://aws.amazon.com/cloudwatch/pricing/).
 //
 // You can also use this API operation to enable or disable public and private
 // access to your cluster's Kubernetes API server endpoint. By default, public
 // access is enabled, and private access is disabled. For more information,
-// see Amazon EKS Cluster Endpoint Access Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+// see Amazon EKS cluster endpoint access control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 // in the Amazon EKS User Guide .
 //
-// At this time, you can not update the subnets or security group IDs for an
-// existing cluster.
+// You can't update the subnets or security group IDs for an existing cluster.
 //
 // Cluster updates are asynchronous, and they should finish within a few minutes.
 // During an update, the cluster status moves to UPDATING (this status transition
@@ -2749,29 +3515,30 @@ func (c *EKS) UpdateClusterConfigRequest(input *UpdateClusterConfigInput) (req *
 // API operation UpdateClusterConfig for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateClusterConfig
 func (c *EKS) UpdateClusterConfig(input *UpdateClusterConfigInput) (*UpdateClusterConfigOutput, error) {
@@ -2811,14 +3578,13 @@ const opUpdateClusterVersion = "UpdateClusterVersion"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UpdateClusterVersionRequest method.
+//	req, resp := client.UpdateClusterVersionRequest(params)
 //
-//    // Example sending a request using the UpdateClusterVersionRequest method.
-//    req, resp := client.UpdateClusterVersionRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateClusterVersion
 func (c *EKS) UpdateClusterVersionRequest(input *UpdateClusterVersionInput) (req *request.Request, output *UpdateClusterVersionOutput) {
@@ -2861,29 +3627,30 @@ func (c *EKS) UpdateClusterVersionRequest(input *UpdateClusterVersionInput) (req
 // API operation UpdateClusterVersion for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateClusterVersion
 func (c *EKS) UpdateClusterVersion(input *UpdateClusterVersionInput) (*UpdateClusterVersionOutput, error) {
@@ -2923,14 +3690,13 @@ const opUpdateNodegroupConfig = "UpdateNodegroupConfig"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UpdateNodegroupConfigRequest method.
+//	req, resp := client.UpdateNodegroupConfigRequest(params)
 //
-//    // Example sending a request using the UpdateNodegroupConfigRequest method.
-//    req, resp := client.UpdateNodegroupConfigRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateNodegroupConfig
 func (c *EKS) UpdateNodegroupConfigRequest(input *UpdateNodegroupConfigInput) (req *request.Request, output *UpdateNodegroupConfigOutput) {
@@ -2965,29 +3731,30 @@ func (c *EKS) UpdateNodegroupConfigRequest(input *UpdateNodegroupConfigInput) (r
 // API operation UpdateNodegroupConfig for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateNodegroupConfig
 func (c *EKS) UpdateNodegroupConfig(input *UpdateNodegroupConfigInput) (*UpdateNodegroupConfigOutput, error) {
@@ -3027,14 +3794,13 @@ const opUpdateNodegroupVersion = "UpdateNodegroupVersion"
 // This method is useful when you want to inject custom logic or configuration
 // into the SDK's request lifecycle. Such as custom headers, or retry logic.
 //
+//	// Example sending a request using the UpdateNodegroupVersionRequest method.
+//	req, resp := client.UpdateNodegroupVersionRequest(params)
 //
-//    // Example sending a request using the UpdateNodegroupVersionRequest method.
-//    req, resp := client.UpdateNodegroupVersionRequest(params)
-//
-//    err := req.Send()
-//    if err == nil { // resp is now filled
-//        fmt.Println(resp)
-//    }
+//	err := req.Send()
+//	if err == nil { // resp is now filled
+//	    fmt.Println(resp)
+//	}
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateNodegroupVersion
 func (c *EKS) UpdateNodegroupVersionRequest(input *UpdateNodegroupVersionInput) (req *request.Request, output *UpdateNodegroupVersionOutput) {
@@ -3089,29 +3855,30 @@ func (c *EKS) UpdateNodegroupVersionRequest(input *UpdateNodegroupVersionInput) 
 // API operation UpdateNodegroupVersion for usage and error information.
 //
 // Returned Error Types:
-//   * InvalidParameterException
-//   The specified parameter is invalid. Review the available parameters for the
-//   API request.
 //
-//   * ClientException
-//   These errors are usually caused by a client action. Actions can include using
-//   an action or resource on behalf of a user that doesn't have permissions to
-//   use the action or resource or specifying an identifier that is not valid.
+//   - InvalidParameterException
+//     The specified parameter is invalid. Review the available parameters for the
+//     API request.
 //
-//   * ServerException
-//   These errors are usually caused by a server-side issue.
+//   - ClientException
+//     These errors are usually caused by a client action. Actions can include using
+//     an action or resource on behalf of a user that doesn't have permissions to
+//     use the action or resource or specifying an identifier that is not valid.
 //
-//   * ResourceInUseException
-//   The specified resource is in use.
+//   - ServerException
+//     These errors are usually caused by a server-side issue.
 //
-//   * ResourceNotFoundException
-//   The specified resource could not be found. You can view your available clusters
-//   with ListClusters. You can view your available managed node groups with ListNodegroups.
-//   Amazon EKS clusters and node groups are Region-specific.
+//   - ResourceInUseException
+//     The specified resource is in use.
 //
-//   * InvalidRequestException
-//   The request is invalid given the state of the cluster. Check the state of
-//   the cluster and the associated operations.
+//   - ResourceNotFoundException
+//     The specified resource could not be found. You can view your available clusters
+//     with ListClusters. You can view your available managed node groups with ListNodegroups.
+//     Amazon EKS clusters and node groups are Region-specific.
+//
+//   - InvalidRequestException
+//     The request is invalid given the state of the cluster. Check the state of
+//     the cluster and the associated operations.
 //
 // See also, https://docs.aws.amazon.com/goto/WebAPI/eks-2017-11-01/UpdateNodegroupVersion
 func (c *EKS) UpdateNodegroupVersion(input *UpdateNodegroupVersionInput) (*UpdateNodegroupVersionOutput, error) {
@@ -3135,7 +3902,76 @@ func (c *EKS) UpdateNodegroupVersionWithContext(ctx aws.Context, input *UpdateNo
 	return out, req.Send()
 }
 
-// An Amazon EKS add-on.
+// You don't have permissions to perform the requested operation. The user or
+// role that is making the request must have at least one IAM permissions policy
+// attached that grants the required permissions. For more information, see
+// Access Management (https://docs.aws.amazon.com/IAM/latest/UserGuide/access.html)
+// in the IAM User Guide.
+type AccessDeniedException struct {
+	_            struct{}                  `type:"structure"`
+	RespMetadata protocol.ResponseMetadata `json:"-" xml:"-"`
+
+	Message_ *string `locationName:"message" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AccessDeniedException) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AccessDeniedException) GoString() string {
+	return s.String()
+}
+
+func newErrorAccessDeniedException(v protocol.ResponseMetadata) error {
+	return &AccessDeniedException{
+		RespMetadata: v,
+	}
+}
+
+// Code returns the exception type name.
+func (s *AccessDeniedException) Code() string {
+	return "AccessDeniedException"
+}
+
+// Message returns the exception's message.
+func (s *AccessDeniedException) Message() string {
+	if s.Message_ != nil {
+		return *s.Message_
+	}
+	return ""
+}
+
+// OrigErr always returns nil, satisfies awserr.Error interface.
+func (s *AccessDeniedException) OrigErr() error {
+	return nil
+}
+
+func (s *AccessDeniedException) Error() string {
+	return fmt.Sprintf("%s: %s", s.Code(), s.Message())
+}
+
+// Status code returns the HTTP status code for the request's response error.
+func (s *AccessDeniedException) StatusCode() int {
+	return s.RespMetadata.StatusCode
+}
+
+// RequestID returns the service's response RequestID for request.
+func (s *AccessDeniedException) RequestID() string {
+	return s.RespMetadata.RequestID
+}
+
+// An Amazon EKS add-on. For more information, see Amazon EKS add-ons (https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+// in the Amazon EKS User Guide.
 type Addon struct {
 	_ struct{} `type:"structure"`
 
@@ -3154,7 +3990,7 @@ type Addon struct {
 	// The date and time that the add-on was created.
 	CreatedAt *time.Time `locationName:"createdAt" type:"timestamp"`
 
-	// An object that represents the health of the add-on.
+	// An object representing the health of the add-on.
 	Health *AddonHealth `locationName:"health" type:"structure"`
 
 	// The date and time that the add-on was last modified.
@@ -3167,19 +4003,27 @@ type Addon struct {
 	// The status of the add-on.
 	Status *string `locationName:"status" type:"string" enum:"AddonStatus"`
 
-	// The metadata that you apply to the cluster to assist with categorization
-	// and organization. Each tag consists of a key and an optional value, both
-	// of which you define. Cluster tags do not propagate to any other resources
-	// associated with the cluster.
+	// The metadata that you apply to the add-on to assist with categorization and
+	// organization. Each tag consists of a key and an optional value. You define
+	// both. Add-on tags do not propagate to any other resources associated with
+	// the cluster.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Addon) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Addon) GoString() string {
 	return s.String()
 }
@@ -3248,16 +4092,24 @@ func (s *Addon) SetTags(v map[string]*string) *Addon {
 type AddonHealth struct {
 	_ struct{} `type:"structure"`
 
-	// An object that represents the add-on's health issues.
+	// An object representing the health issues for an add-on.
 	Issues []*AddonIssue `locationName:"issues" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonHealth) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonHealth) GoString() string {
 	return s.String()
 }
@@ -3275,20 +4127,28 @@ type AddonInfo struct {
 	// The name of the add-on.
 	AddonName *string `locationName:"addonName" type:"string"`
 
-	// An object that represents information about available add-on versions and
-	// compatible Kubernetes versions.
+	// An object representing information about available add-on versions and compatible
+	// Kubernetes versions.
 	AddonVersions []*AddonVersionInfo `locationName:"addonVersions" type:"list"`
 
 	// The type of the add-on.
 	Type *string `locationName:"type" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonInfo) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonInfo) GoString() string {
 	return s.String()
 }
@@ -3325,12 +4185,20 @@ type AddonIssue struct {
 	ResourceIds []*string `locationName:"resourceIds" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonIssue) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonIssue) GoString() string {
 	return s.String()
 }
@@ -3363,16 +4231,24 @@ type AddonVersionInfo struct {
 	// The architectures that the version supports.
 	Architecture []*string `locationName:"architecture" type:"list"`
 
-	// An object that represents the compatibilities of a version.
+	// An object representing the compatibilities of a version.
 	Compatibilities []*Compatibility `locationName:"compatibilities" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonVersionInfo) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AddonVersionInfo) GoString() string {
 	return s.String()
 }
@@ -3395,6 +4271,241 @@ func (s *AddonVersionInfo) SetCompatibilities(v []*Compatibility) *AddonVersionI
 	return s
 }
 
+type AssociateEncryptionConfigInput struct {
+	_ struct{} `type:"structure"`
+
+	// The client request token you are using with the encryption configuration.
+	ClientRequestToken *string `locationName:"clientRequestToken" type:"string" idempotencyToken:"true"`
+
+	// The name of the cluster that you are associating with encryption configuration.
+	//
+	// ClusterName is a required field
+	ClusterName *string `location:"uri" locationName:"name" type:"string" required:"true"`
+
+	// The configuration you are using for encryption.
+	//
+	// EncryptionConfig is a required field
+	EncryptionConfig []*EncryptionConfig `locationName:"encryptionConfig" type:"list" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateEncryptionConfigInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateEncryptionConfigInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *AssociateEncryptionConfigInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "AssociateEncryptionConfigInput"}
+	if s.ClusterName == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClusterName"))
+	}
+	if s.ClusterName != nil && len(*s.ClusterName) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("ClusterName", 1))
+	}
+	if s.EncryptionConfig == nil {
+		invalidParams.Add(request.NewErrParamRequired("EncryptionConfig"))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClientRequestToken sets the ClientRequestToken field's value.
+func (s *AssociateEncryptionConfigInput) SetClientRequestToken(v string) *AssociateEncryptionConfigInput {
+	s.ClientRequestToken = &v
+	return s
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *AssociateEncryptionConfigInput) SetClusterName(v string) *AssociateEncryptionConfigInput {
+	s.ClusterName = &v
+	return s
+}
+
+// SetEncryptionConfig sets the EncryptionConfig field's value.
+func (s *AssociateEncryptionConfigInput) SetEncryptionConfig(v []*EncryptionConfig) *AssociateEncryptionConfigInput {
+	s.EncryptionConfig = v
+	return s
+}
+
+type AssociateEncryptionConfigOutput struct {
+	_ struct{} `type:"structure"`
+
+	// An object representing an asynchronous update.
+	Update *Update `locationName:"update" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateEncryptionConfigOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateEncryptionConfigOutput) GoString() string {
+	return s.String()
+}
+
+// SetUpdate sets the Update field's value.
+func (s *AssociateEncryptionConfigOutput) SetUpdate(v *Update) *AssociateEncryptionConfigOutput {
+	s.Update = v
+	return s
+}
+
+type AssociateIdentityProviderConfigInput struct {
+	_ struct{} `type:"structure"`
+
+	// Unique, case-sensitive identifier that you provide to ensure the idempotency
+	// of the request.
+	ClientRequestToken *string `locationName:"clientRequestToken" type:"string" idempotencyToken:"true"`
+
+	// The name of the cluster to associate the configuration to.
+	//
+	// ClusterName is a required field
+	ClusterName *string `location:"uri" locationName:"name" type:"string" required:"true"`
+
+	// An object representing an OpenID Connect (OIDC) identity provider configuration.
+	//
+	// Oidc is a required field
+	Oidc *OidcIdentityProviderConfigRequest `locationName:"oidc" type:"structure" required:"true"`
+
+	// The metadata to apply to the configuration to assist with categorization
+	// and organization. Each tag consists of a key and an optional value. You define
+	// both.
+	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateIdentityProviderConfigInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateIdentityProviderConfigInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *AssociateIdentityProviderConfigInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "AssociateIdentityProviderConfigInput"}
+	if s.ClusterName == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClusterName"))
+	}
+	if s.ClusterName != nil && len(*s.ClusterName) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("ClusterName", 1))
+	}
+	if s.Oidc == nil {
+		invalidParams.Add(request.NewErrParamRequired("Oidc"))
+	}
+	if s.Tags != nil && len(s.Tags) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("Tags", 1))
+	}
+	if s.Oidc != nil {
+		if err := s.Oidc.Validate(); err != nil {
+			invalidParams.AddNested("Oidc", err.(request.ErrInvalidParams))
+		}
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClientRequestToken sets the ClientRequestToken field's value.
+func (s *AssociateIdentityProviderConfigInput) SetClientRequestToken(v string) *AssociateIdentityProviderConfigInput {
+	s.ClientRequestToken = &v
+	return s
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *AssociateIdentityProviderConfigInput) SetClusterName(v string) *AssociateIdentityProviderConfigInput {
+	s.ClusterName = &v
+	return s
+}
+
+// SetOidc sets the Oidc field's value.
+func (s *AssociateIdentityProviderConfigInput) SetOidc(v *OidcIdentityProviderConfigRequest) *AssociateIdentityProviderConfigInput {
+	s.Oidc = v
+	return s
+}
+
+// SetTags sets the Tags field's value.
+func (s *AssociateIdentityProviderConfigInput) SetTags(v map[string]*string) *AssociateIdentityProviderConfigInput {
+	s.Tags = v
+	return s
+}
+
+type AssociateIdentityProviderConfigOutput struct {
+	_ struct{} `type:"structure"`
+
+	// The tags for the resource.
+	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+
+	// An object representing an asynchronous update.
+	Update *Update `locationName:"update" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateIdentityProviderConfigOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s AssociateIdentityProviderConfigOutput) GoString() string {
+	return s.String()
+}
+
+// SetTags sets the Tags field's value.
+func (s *AssociateIdentityProviderConfigOutput) SetTags(v map[string]*string) *AssociateIdentityProviderConfigOutput {
+	s.Tags = v
+	return s
+}
+
+// SetUpdate sets the Update field's value.
+func (s *AssociateIdentityProviderConfigOutput) SetUpdate(v *Update) *AssociateIdentityProviderConfigOutput {
+	s.Update = v
+	return s
+}
+
 // An Auto Scaling group that is associated with an Amazon EKS managed node
 // group.
 type AutoScalingGroup struct {
@@ -3405,12 +4516,20 @@ type AutoScalingGroup struct {
 	Name *string `locationName:"name" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AutoScalingGroup) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s AutoScalingGroup) GoString() string {
 	return s.String()
 }
@@ -3430,12 +4549,20 @@ type BadRequestException struct {
 	Message_ *string `locationName:"message" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s BadRequestException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s BadRequestException) GoString() string {
 	return s.String()
 }
@@ -3488,12 +4615,20 @@ type Certificate struct {
 	Data *string `locationName:"data" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Certificate) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Certificate) GoString() string {
 	return s.String()
 }
@@ -3522,12 +4657,20 @@ type ClientException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ClientException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ClientException) GoString() string {
 	return s.String()
 }
@@ -3584,6 +4727,9 @@ type Cluster struct {
 	// of the request.
 	ClientRequestToken *string `locationName:"clientRequestToken" type:"string"`
 
+	// The configuration used to connect to a cluster for registration.
+	ConnectorConfig *ConnectorConfigResponse `locationName:"connectorConfig" type:"structure"`
+
 	// The Unix epoch timestamp in seconds for when the cluster was created.
 	CreatedAt *time.Time `locationName:"createdAt" type:"timestamp"`
 
@@ -3592,6 +4738,16 @@ type Cluster struct {
 
 	// The endpoint for your Kubernetes API server.
 	Endpoint *string `locationName:"endpoint" type:"string"`
+
+	// An object representing the health of your local Amazon EKS cluster on an
+	// Amazon Web Services Outpost. This object isn't available for clusters on
+	// the Amazon Web Services cloud.
+	Health *ClusterHealth `locationName:"health" type:"structure"`
+
+	// The ID of your local Amazon EKS cluster on an Amazon Web Services Outpost.
+	// This property isn't available for an Amazon EKS cluster on the Amazon Web
+	// Services cloud.
+	Id *string `locationName:"id" type:"string"`
 
 	// The identity provider information for the cluster.
 	Identity *Identity `locationName:"identity" type:"structure"`
@@ -3604,6 +4760,11 @@ type Cluster struct {
 
 	// The name of the cluster.
 	Name *string `locationName:"name" type:"string"`
+
+	// An object representing the configuration of your local Amazon EKS cluster
+	// on an Amazon Web Services Outpost. This object isn't available for clusters
+	// on the Amazon Web Services cloud.
+	OutpostConfig *OutpostConfigResponse `locationName:"outpostConfig" type:"structure"`
 
 	// The platform version of your Amazon EKS cluster. For more information, see
 	// Platform Versions (https://docs.aws.amazon.com/eks/latest/userguide/platform-versions.html)
@@ -3618,29 +4779,37 @@ type Cluster struct {
 	ResourcesVpcConfig *VpcConfigResponse `locationName:"resourcesVpcConfig" type:"structure"`
 
 	// The Amazon Resource Name (ARN) of the IAM role that provides permissions
-	// for the Kubernetes control plane to make calls to AWS API operations on your
-	// behalf.
+	// for the Kubernetes control plane to make calls to Amazon Web Services API
+	// operations on your behalf.
 	RoleArn *string `locationName:"roleArn" type:"string"`
 
 	// The current status of the cluster.
 	Status *string `locationName:"status" type:"string" enum:"ClusterStatus"`
 
 	// The metadata that you apply to the cluster to assist with categorization
-	// and organization. Each tag consists of a key and an optional value, both
-	// of which you define. Cluster tags do not propagate to any other resources
-	// associated with the cluster.
+	// and organization. Each tag consists of a key and an optional value. You define
+	// both. Cluster tags do not propagate to any other resources associated with
+	// the cluster.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 
 	// The Kubernetes server version for the cluster.
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Cluster) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Cluster) GoString() string {
 	return s.String()
 }
@@ -3663,6 +4832,12 @@ func (s *Cluster) SetClientRequestToken(v string) *Cluster {
 	return s
 }
 
+// SetConnectorConfig sets the ConnectorConfig field's value.
+func (s *Cluster) SetConnectorConfig(v *ConnectorConfigResponse) *Cluster {
+	s.ConnectorConfig = v
+	return s
+}
+
 // SetCreatedAt sets the CreatedAt field's value.
 func (s *Cluster) SetCreatedAt(v time.Time) *Cluster {
 	s.CreatedAt = &v
@@ -3678,6 +4853,18 @@ func (s *Cluster) SetEncryptionConfig(v []*EncryptionConfig) *Cluster {
 // SetEndpoint sets the Endpoint field's value.
 func (s *Cluster) SetEndpoint(v string) *Cluster {
 	s.Endpoint = &v
+	return s
+}
+
+// SetHealth sets the Health field's value.
+func (s *Cluster) SetHealth(v *ClusterHealth) *Cluster {
+	s.Health = v
+	return s
+}
+
+// SetId sets the Id field's value.
+func (s *Cluster) SetId(v string) *Cluster {
+	s.Id = &v
 	return s
 }
 
@@ -3702,6 +4889,12 @@ func (s *Cluster) SetLogging(v *Logging) *Cluster {
 // SetName sets the Name field's value.
 func (s *Cluster) SetName(v string) *Cluster {
 	s.Name = &v
+	return s
+}
+
+// SetOutpostConfig sets the OutpostConfig field's value.
+func (s *Cluster) SetOutpostConfig(v *OutpostConfigResponse) *Cluster {
+	s.OutpostConfig = v
 	return s
 }
 
@@ -3741,6 +4934,93 @@ func (s *Cluster) SetVersion(v string) *Cluster {
 	return s
 }
 
+// An object representing the health of your local Amazon EKS cluster on an
+// Amazon Web Services Outpost. You can't use this API with an Amazon EKS cluster
+// on the Amazon Web Services cloud.
+type ClusterHealth struct {
+	_ struct{} `type:"structure"`
+
+	// An object representing the health issues of your local Amazon EKS cluster
+	// on an Amazon Web Services Outpost.
+	Issues []*ClusterIssue `locationName:"issues" type:"list"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ClusterHealth) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ClusterHealth) GoString() string {
+	return s.String()
+}
+
+// SetIssues sets the Issues field's value.
+func (s *ClusterHealth) SetIssues(v []*ClusterIssue) *ClusterHealth {
+	s.Issues = v
+	return s
+}
+
+// An issue with your local Amazon EKS cluster on an Amazon Web Services Outpost.
+// You can't use this API with an Amazon EKS cluster on the Amazon Web Services
+// cloud.
+type ClusterIssue struct {
+	_ struct{} `type:"structure"`
+
+	// The error code of the issue.
+	Code *string `locationName:"code" type:"string" enum:"ClusterIssueCode"`
+
+	// A description of the issue.
+	Message *string `locationName:"message" type:"string"`
+
+	// The resource IDs that the issue relates to.
+	ResourceIds []*string `locationName:"resourceIds" type:"list"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ClusterIssue) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ClusterIssue) GoString() string {
+	return s.String()
+}
+
+// SetCode sets the Code field's value.
+func (s *ClusterIssue) SetCode(v string) *ClusterIssue {
+	s.Code = &v
+	return s
+}
+
+// SetMessage sets the Message field's value.
+func (s *ClusterIssue) SetMessage(v string) *ClusterIssue {
+	s.Message = &v
+	return s
+}
+
+// SetResourceIds sets the ResourceIds field's value.
+func (s *ClusterIssue) SetResourceIds(v []*string) *ClusterIssue {
+	s.ResourceIds = v
+	return s
+}
+
 // Compatibility information.
 type Compatibility struct {
 	_ struct{} `type:"structure"`
@@ -3755,12 +5035,20 @@ type Compatibility struct {
 	PlatformVersions []*string `locationName:"platformVersions" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Compatibility) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Compatibility) GoString() string {
 	return s.String()
 }
@@ -3783,11 +5071,214 @@ func (s *Compatibility) SetPlatformVersions(v []*string) *Compatibility {
 	return s
 }
 
+// The configuration sent to a cluster for configuration.
+type ConnectorConfigRequest struct {
+	_ struct{} `type:"structure"`
+
+	// The cloud provider for the target cluster to connect.
+	//
+	// Provider is a required field
+	Provider *string `locationName:"provider" type:"string" required:"true" enum:"ConnectorConfigProvider"`
+
+	// The Amazon Resource Name (ARN) of the role that is authorized to request
+	// the connector configuration.
+	//
+	// RoleArn is a required field
+	RoleArn *string `locationName:"roleArn" type:"string" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ConnectorConfigRequest) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ConnectorConfigRequest) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *ConnectorConfigRequest) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "ConnectorConfigRequest"}
+	if s.Provider == nil {
+		invalidParams.Add(request.NewErrParamRequired("Provider"))
+	}
+	if s.RoleArn == nil {
+		invalidParams.Add(request.NewErrParamRequired("RoleArn"))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetProvider sets the Provider field's value.
+func (s *ConnectorConfigRequest) SetProvider(v string) *ConnectorConfigRequest {
+	s.Provider = &v
+	return s
+}
+
+// SetRoleArn sets the RoleArn field's value.
+func (s *ConnectorConfigRequest) SetRoleArn(v string) *ConnectorConfigRequest {
+	s.RoleArn = &v
+	return s
+}
+
+// The full description of your connected cluster.
+type ConnectorConfigResponse struct {
+	_ struct{} `type:"structure"`
+
+	// A unique code associated with the cluster for registration purposes.
+	ActivationCode *string `locationName:"activationCode" type:"string"`
+
+	// The expiration time of the connected cluster. The cluster's YAML file must
+	// be applied through the native provider.
+	ActivationExpiry *time.Time `locationName:"activationExpiry" type:"timestamp"`
+
+	// A unique ID associated with the cluster for registration purposes.
+	ActivationId *string `locationName:"activationId" type:"string"`
+
+	// The cluster's cloud service provider.
+	Provider *string `locationName:"provider" type:"string"`
+
+	// The Amazon Resource Name (ARN) of the role to communicate with services from
+	// the connected Kubernetes cluster.
+	RoleArn *string `locationName:"roleArn" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ConnectorConfigResponse) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ConnectorConfigResponse) GoString() string {
+	return s.String()
+}
+
+// SetActivationCode sets the ActivationCode field's value.
+func (s *ConnectorConfigResponse) SetActivationCode(v string) *ConnectorConfigResponse {
+	s.ActivationCode = &v
+	return s
+}
+
+// SetActivationExpiry sets the ActivationExpiry field's value.
+func (s *ConnectorConfigResponse) SetActivationExpiry(v time.Time) *ConnectorConfigResponse {
+	s.ActivationExpiry = &v
+	return s
+}
+
+// SetActivationId sets the ActivationId field's value.
+func (s *ConnectorConfigResponse) SetActivationId(v string) *ConnectorConfigResponse {
+	s.ActivationId = &v
+	return s
+}
+
+// SetProvider sets the Provider field's value.
+func (s *ConnectorConfigResponse) SetProvider(v string) *ConnectorConfigResponse {
+	s.Provider = &v
+	return s
+}
+
+// SetRoleArn sets the RoleArn field's value.
+func (s *ConnectorConfigResponse) SetRoleArn(v string) *ConnectorConfigResponse {
+	s.RoleArn = &v
+	return s
+}
+
+// The placement configuration for all the control plane instance of your local
+// Amazon EKS cluster on an Amazon Web Services Outpost. For more information,
+// see Capacity considerations (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-capacity-considerations.html)
+// in the Amazon EKS User Guide
+type ControlPlanePlacementRequest struct {
+	_ struct{} `type:"structure"`
+
+	// The name of the placement group for the Kubernetes control plane instances.
+	// This setting can't be changed after cluster creation.
+	GroupName *string `locationName:"groupName" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ControlPlanePlacementRequest) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ControlPlanePlacementRequest) GoString() string {
+	return s.String()
+}
+
+// SetGroupName sets the GroupName field's value.
+func (s *ControlPlanePlacementRequest) SetGroupName(v string) *ControlPlanePlacementRequest {
+	s.GroupName = &v
+	return s
+}
+
+// The placement configuration for all the control plane instance of your local
+// Amazon EKS cluster on an Amazon Web Services Outpost. For more information,
+// see Capacity considerations (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-capacity-considerations.html)
+// in the Amazon EKS User Guide.
+type ControlPlanePlacementResponse struct {
+	_ struct{} `type:"structure"`
+
+	// The name of the placement group for the Kubernetes control plane instances.
+	GroupName *string `locationName:"groupName" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ControlPlanePlacementResponse) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ControlPlanePlacementResponse) GoString() string {
+	return s.String()
+}
+
+// SetGroupName sets the GroupName field's value.
+func (s *ControlPlanePlacementResponse) SetGroupName(v string) *ControlPlanePlacementResponse {
+	s.GroupName = &v
+	return s
+}
+
 type CreateAddonInput struct {
 	_ struct{} `type:"structure"`
 
 	// The name of the add-on. The name must match one of the names returned by
-	// ListAddons (https://docs.aws.amazon.com/eks/latest/APIReference/API_ListAddons.html).
+	// DescribeAddonVersions (https://docs.aws.amazon.com/eks/latest/APIReference/API_DescribeAddonVersions.html).
 	//
 	// AddonName is a required field
 	AddonName *string `locationName:"addonName" type:"string" required:"true"`
@@ -3805,8 +5296,24 @@ type CreateAddonInput struct {
 	// ClusterName is a required field
 	ClusterName *string `location:"uri" locationName:"name" min:"1" type:"string" required:"true"`
 
-	// How to resolve parameter value conflicts when migrating an existing add-on
-	// to an Amazon EKS add-on.
+	// How to resolve field value conflicts for an Amazon EKS add-on. Conflicts
+	// are handled based on the value you choose:
+	//
+	//    * None – If the self-managed version of the add-on is installed on your
+	//    cluster, Amazon EKS doesn't change the value. Creation of the add-on might
+	//    fail.
+	//
+	//    * Overwrite – If the self-managed version of the add-on is installed
+	//    on your cluster and the Amazon EKS default value is different than the
+	//    existing value, Amazon EKS changes the value to the Amazon EKS default
+	//    value.
+	//
+	//    * Preserve – Not supported. You can set this value when updating an
+	//    add-on though. For more information, see UpdateAddon (https://docs.aws.amazon.com/eks/latest/APIReference/API_UpdateAddon.html).
+	//
+	// If you don't currently have the self-managed version of the add-on installed
+	// on your cluster, the Amazon EKS add-on is installed. Amazon EKS sets all
+	// values to default values, regardless of the option that you specify.
 	ResolveConflicts *string `locationName:"resolveConflicts" type:"string" enum:"ResolveConflicts"`
 
 	// The Amazon Resource Name (ARN) of an existing IAM role to bind to the add-on's
@@ -3823,16 +5330,24 @@ type CreateAddonInput struct {
 	ServiceAccountRoleArn *string `locationName:"serviceAccountRoleArn" min:"1" type:"string"`
 
 	// The metadata to apply to the cluster to assist with categorization and organization.
-	// Each tag consists of a key and an optional value, both of which you define.
+	// Each tag consists of a key and an optional value. You define both.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateAddonInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateAddonInput) GoString() string {
 	return s.String()
 }
@@ -3907,16 +5422,25 @@ func (s *CreateAddonInput) SetTags(v map[string]*string) *CreateAddonInput {
 type CreateAddonOutput struct {
 	_ struct{} `type:"structure"`
 
-	// An Amazon EKS add-on.
+	// An Amazon EKS add-on. For more information, see Amazon EKS add-ons (https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+	// in the Amazon EKS User Guide.
 	Addon *Addon `locationName:"addon" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateAddonOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateAddonOutput) GoString() string {
 	return s.String()
 }
@@ -3942,13 +5466,13 @@ type CreateClusterInput struct {
 
 	// Enable or disable exporting the Kubernetes control plane logs for your cluster
 	// to CloudWatch Logs. By default, cluster control plane logs aren't exported
-	// to CloudWatch Logs. For more information, see Amazon EKS Cluster Control
-	// Plane Logs (https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)
+	// to CloudWatch Logs. For more information, see Amazon EKS Cluster control
+	// plane logs (https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)
 	// in the Amazon EKS User Guide .
 	//
 	// CloudWatch Logs ingestion, archive storage, and data scanning rates apply
-	// to exported control plane logs. For more information, see Amazon CloudWatch
-	// Pricing (http://aws.amazon.com/cloudwatch/pricing/).
+	// to exported control plane logs. For more information, see CloudWatch Pricing
+	// (http://aws.amazon.com/cloudwatch/pricing/).
 	Logging *Logging `locationName:"logging" type:"structure"`
 
 	// The unique name to give to your cluster.
@@ -3956,40 +5480,59 @@ type CreateClusterInput struct {
 	// Name is a required field
 	Name *string `locationName:"name" min:"1" type:"string" required:"true"`
 
-	// The VPC configuration used by the cluster control plane. Amazon EKS VPC resources
-	// have specific requirements to work properly with Kubernetes. For more information,
-	// see Cluster VPC Considerations (https://docs.aws.amazon.com/eks/latest/userguide/network_reqs.html)
+	// An object representing the configuration of your local Amazon EKS cluster
+	// on an Amazon Web Services Outpost. Before creating a local cluster on an
+	// Outpost, review Local clusters for Amazon EKS on Amazon Web Services Outposts
+	// (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-local-cluster-overview.html)
+	// in the Amazon EKS User Guide. This object isn't available for creating Amazon
+	// EKS clusters on the Amazon Web Services cloud.
+	OutpostConfig *OutpostConfigRequest `locationName:"outpostConfig" type:"structure"`
+
+	// The VPC configuration that's used by the cluster control plane. Amazon EKS
+	// VPC resources have specific requirements to work properly with Kubernetes.
+	// For more information, see Cluster VPC Considerations (https://docs.aws.amazon.com/eks/latest/userguide/network_reqs.html)
 	// and Cluster Security Group Considerations (https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html)
 	// in the Amazon EKS User Guide. You must specify at least two subnets. You
-	// can specify up to five security groups, but we recommend that you use a dedicated
-	// security group for your cluster control plane.
+	// can specify up to five security groups. However, we recommend that you use
+	// a dedicated security group for your cluster control plane.
 	//
 	// ResourcesVpcConfig is a required field
 	ResourcesVpcConfig *VpcConfigRequest `locationName:"resourcesVpcConfig" type:"structure" required:"true"`
 
 	// The Amazon Resource Name (ARN) of the IAM role that provides permissions
-	// for the Kubernetes control plane to make calls to AWS API operations on your
-	// behalf. For more information, see Amazon EKS Service IAM Role (https://docs.aws.amazon.com/eks/latest/userguide/service_IAM_role.html)
+	// for the Kubernetes control plane to make calls to Amazon Web Services API
+	// operations on your behalf. For more information, see Amazon EKS Service IAM
+	// Role (https://docs.aws.amazon.com/eks/latest/userguide/service_IAM_role.html)
 	// in the Amazon EKS User Guide .
 	//
 	// RoleArn is a required field
 	RoleArn *string `locationName:"roleArn" type:"string" required:"true"`
 
 	// The metadata to apply to the cluster to assist with categorization and organization.
-	// Each tag consists of a key and an optional value, both of which you define.
+	// Each tag consists of a key and an optional value. You define both.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 
 	// The desired Kubernetes version for your cluster. If you don't specify a value
-	// here, the latest version available in Amazon EKS is used.
+	// here, the default version available in Amazon EKS is used.
+	//
+	// The default version might not be the latest version available.
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateClusterInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateClusterInput) GoString() string {
 	return s.String()
 }
@@ -4011,6 +5554,11 @@ func (s *CreateClusterInput) Validate() error {
 	}
 	if s.Tags != nil && len(s.Tags) < 1 {
 		invalidParams.Add(request.NewErrParamMinLen("Tags", 1))
+	}
+	if s.OutpostConfig != nil {
+		if err := s.OutpostConfig.Validate(); err != nil {
+			invalidParams.AddNested("OutpostConfig", err.(request.ErrInvalidParams))
+		}
 	}
 
 	if invalidParams.Len() > 0 {
@@ -4049,6 +5597,12 @@ func (s *CreateClusterInput) SetName(v string) *CreateClusterInput {
 	return s
 }
 
+// SetOutpostConfig sets the OutpostConfig field's value.
+func (s *CreateClusterInput) SetOutpostConfig(v *OutpostConfigRequest) *CreateClusterInput {
+	s.OutpostConfig = v
+	return s
+}
+
 // SetResourcesVpcConfig sets the ResourcesVpcConfig field's value.
 func (s *CreateClusterInput) SetResourcesVpcConfig(v *VpcConfigRequest) *CreateClusterInput {
 	s.ResourcesVpcConfig = v
@@ -4080,12 +5634,20 @@ type CreateClusterOutput struct {
 	Cluster *Cluster `locationName:"cluster" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateClusterOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateClusterOutput) GoString() string {
 	return s.String()
 }
@@ -4134,19 +5696,26 @@ type CreateFargateProfileInput struct {
 	Subnets []*string `locationName:"subnets" type:"list"`
 
 	// The metadata to apply to the Fargate profile to assist with categorization
-	// and organization. Each tag consists of a key and an optional value, both
-	// of which you define. Fargate profile tags do not propagate to any other resources
-	// associated with the Fargate profile, such as the pods that are scheduled
-	// with it.
+	// and organization. Each tag consists of a key and an optional value. You define
+	// both. Fargate profile tags do not propagate to any other resources associated
+	// with the Fargate profile, such as the pods that are scheduled with it.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateFargateProfileInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateFargateProfileInput) GoString() string {
 	return s.String()
 }
@@ -4225,12 +5794,20 @@ type CreateFargateProfileOutput struct {
 	FargateProfile *FargateProfile `locationName:"fargateProfile" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateFargateProfileOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateFargateProfileOutput) GoString() string {
 	return s.String()
 }
@@ -4282,7 +5859,7 @@ type CreateNodegroupInput struct {
 	// an instance type in a launch template or for instanceTypes, then t3.medium
 	// is used, by default. If you specify Spot for capacityType, then we recommend
 	// specifying multiple values for instanceTypes. For more information, see Managed
-	// node group capacity types (https://docs.aws.amazon.com/managed-node-groups.html#managed-node-group-capacity-types)
+	// node group capacity types (https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html#managed-node-group-capacity-types)
 	// and Launch template support (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
 	// in the Amazon EKS User Guide.
 	InstanceTypes []*string `locationName:"instanceTypes" type:"list"`
@@ -4297,12 +5874,12 @@ type CreateNodegroupInput struct {
 	LaunchTemplate *LaunchTemplateSpecification `locationName:"launchTemplate" type:"structure"`
 
 	// The Amazon Resource Name (ARN) of the IAM role to associate with your node
-	// group. The Amazon EKS worker node kubelet daemon makes calls to AWS APIs
-	// on your behalf. Worker nodes receive permissions for these API calls through
-	// an IAM instance profile and associated policies. Before you can launch worker
+	// group. The Amazon EKS worker node kubelet daemon makes calls to Amazon Web
+	// Services APIs on your behalf. Nodes receive permissions for these API calls
+	// through an IAM instance profile and associated policies. Before you can launch
 	// nodes and register them into a cluster, you must create an IAM role for those
-	// worker nodes to use when they are launched. For more information, see Amazon
-	// EKS Worker Node IAM Role (https://docs.aws.amazon.com/eks/latest/userguide/worker_node_IAM_role.html)
+	// nodes to use when they are launched. For more information, see Amazon EKS
+	// node IAM role (https://docs.aws.amazon.com/eks/latest/userguide/create-node-role.html)
 	// in the Amazon EKS User Guide . If you specify launchTemplate, then don't
 	// specify IamInstanceProfile (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_IamInstanceProfile.html)
 	// in your launch template, or the node group deployment will fail. For more
@@ -4341,9 +5918,7 @@ type CreateNodegroupInput struct {
 	ScalingConfig *NodegroupScalingConfig `locationName:"scalingConfig" type:"structure"`
 
 	// The subnets to use for the Auto Scaling group that is created for your node
-	// group. These subnets must have the tag key kubernetes.io/cluster/CLUSTER_NAME
-	// with a value of shared, where CLUSTER_NAME is replaced with the name of your
-	// cluster. If you specify launchTemplate, then don't specify SubnetId (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateNetworkInterface.html)
+	// group. If you specify launchTemplate, then don't specify SubnetId (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateNetworkInterface.html)
 	// in your launch template, or the node group deployment will fail. For more
 	// information about using launch templates with Amazon EKS, see Launch template
 	// support (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
@@ -4353,10 +5928,17 @@ type CreateNodegroupInput struct {
 	Subnets []*string `locationName:"subnets" type:"list" required:"true"`
 
 	// The metadata to apply to the node group to assist with categorization and
-	// organization. Each tag consists of a key and an optional value, both of which
-	// you define. Node group tags do not propagate to any other resources associated
+	// organization. Each tag consists of a key and an optional value. You define
+	// both. Node group tags do not propagate to any other resources associated
 	// with the node group, such as the Amazon EC2 instances or subnets.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+
+	// The Kubernetes taints to be applied to the nodes in the node group. For more
+	// information, see Node taints on managed node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+	Taints []*Taint `locationName:"taints" type:"list"`
+
+	// The node group update configuration.
+	UpdateConfig *NodegroupUpdateConfig `locationName:"updateConfig" type:"structure"`
 
 	// The Kubernetes version to use for your managed nodes. By default, the Kubernetes
 	// version of the cluster is used, and this is the only accepted specified value.
@@ -4368,12 +5950,20 @@ type CreateNodegroupInput struct {
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateNodegroupInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateNodegroupInput) GoString() string {
 	return s.String()
 }
@@ -4402,6 +5992,21 @@ func (s *CreateNodegroupInput) Validate() error {
 	if s.ScalingConfig != nil {
 		if err := s.ScalingConfig.Validate(); err != nil {
 			invalidParams.AddNested("ScalingConfig", err.(request.ErrInvalidParams))
+		}
+	}
+	if s.Taints != nil {
+		for i, v := range s.Taints {
+			if v == nil {
+				continue
+			}
+			if err := v.Validate(); err != nil {
+				invalidParams.AddNested(fmt.Sprintf("%s[%v]", "Taints", i), err.(request.ErrInvalidParams))
+			}
+		}
+	}
+	if s.UpdateConfig != nil {
+		if err := s.UpdateConfig.Validate(); err != nil {
+			invalidParams.AddNested("UpdateConfig", err.(request.ErrInvalidParams))
 		}
 	}
 
@@ -4501,6 +6106,18 @@ func (s *CreateNodegroupInput) SetTags(v map[string]*string) *CreateNodegroupInp
 	return s
 }
 
+// SetTaints sets the Taints field's value.
+func (s *CreateNodegroupInput) SetTaints(v []*Taint) *CreateNodegroupInput {
+	s.Taints = v
+	return s
+}
+
+// SetUpdateConfig sets the UpdateConfig field's value.
+func (s *CreateNodegroupInput) SetUpdateConfig(v *NodegroupUpdateConfig) *CreateNodegroupInput {
+	s.UpdateConfig = v
+	return s
+}
+
 // SetVersion sets the Version field's value.
 func (s *CreateNodegroupInput) SetVersion(v string) *CreateNodegroupInput {
 	s.Version = &v
@@ -4514,12 +6131,20 @@ type CreateNodegroupOutput struct {
 	Nodegroup *Nodegroup `locationName:"nodegroup" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateNodegroupOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s CreateNodegroupOutput) GoString() string {
 	return s.String()
 }
@@ -4531,7 +6156,7 @@ func (s *CreateNodegroupOutput) SetNodegroup(v *Nodegroup) *CreateNodegroupOutpu
 }
 
 type DeleteAddonInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the add-on. The name must match one of the names returned by
 	// ListAddons (https://docs.aws.amazon.com/eks/latest/APIReference/API_ListAddons.html).
@@ -4543,14 +6168,27 @@ type DeleteAddonInput struct {
 	//
 	// ClusterName is a required field
 	ClusterName *string `location:"uri" locationName:"name" min:"1" type:"string" required:"true"`
+
+	// Specifying this option preserves the add-on software on your cluster but
+	// Amazon EKS stops managing any settings for the add-on. If an IAM account
+	// is associated with the add-on, it is not removed.
+	Preserve *bool `location:"querystring" locationName:"preserve" type:"boolean"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteAddonInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteAddonInput) GoString() string {
 	return s.String()
 }
@@ -4589,19 +6227,34 @@ func (s *DeleteAddonInput) SetClusterName(v string) *DeleteAddonInput {
 	return s
 }
 
+// SetPreserve sets the Preserve field's value.
+func (s *DeleteAddonInput) SetPreserve(v bool) *DeleteAddonInput {
+	s.Preserve = &v
+	return s
+}
+
 type DeleteAddonOutput struct {
 	_ struct{} `type:"structure"`
 
-	// An Amazon EKS add-on.
+	// An Amazon EKS add-on. For more information, see Amazon EKS add-ons (https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+	// in the Amazon EKS User Guide.
 	Addon *Addon `locationName:"addon" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteAddonOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteAddonOutput) GoString() string {
 	return s.String()
 }
@@ -4613,7 +6266,7 @@ func (s *DeleteAddonOutput) SetAddon(v *Addon) *DeleteAddonOutput {
 }
 
 type DeleteClusterInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the cluster to delete.
 	//
@@ -4621,12 +6274,20 @@ type DeleteClusterInput struct {
 	Name *string `location:"uri" locationName:"name" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteClusterInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteClusterInput) GoString() string {
 	return s.String()
 }
@@ -4660,12 +6321,20 @@ type DeleteClusterOutput struct {
 	Cluster *Cluster `locationName:"cluster" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteClusterOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteClusterOutput) GoString() string {
 	return s.String()
 }
@@ -4677,7 +6346,7 @@ func (s *DeleteClusterOutput) SetCluster(v *Cluster) *DeleteClusterOutput {
 }
 
 type DeleteFargateProfileInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the Amazon EKS cluster associated with the Fargate profile to
 	// delete.
@@ -4691,12 +6360,20 @@ type DeleteFargateProfileInput struct {
 	FargateProfileName *string `location:"uri" locationName:"fargateProfileName" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteFargateProfileInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteFargateProfileInput) GoString() string {
 	return s.String()
 }
@@ -4742,12 +6419,20 @@ type DeleteFargateProfileOutput struct {
 	FargateProfile *FargateProfile `locationName:"fargateProfile" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteFargateProfileOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteFargateProfileOutput) GoString() string {
 	return s.String()
 }
@@ -4759,7 +6444,7 @@ func (s *DeleteFargateProfileOutput) SetFargateProfile(v *FargateProfile) *Delet
 }
 
 type DeleteNodegroupInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the Amazon EKS cluster that is associated with your node group.
 	//
@@ -4772,12 +6457,20 @@ type DeleteNodegroupInput struct {
 	NodegroupName *string `location:"uri" locationName:"nodegroupName" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteNodegroupInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteNodegroupInput) GoString() string {
 	return s.String()
 }
@@ -4823,12 +6516,20 @@ type DeleteNodegroupOutput struct {
 	Nodegroup *Nodegroup `locationName:"nodegroup" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteNodegroupOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DeleteNodegroupOutput) GoString() string {
 	return s.String()
 }
@@ -4839,8 +6540,88 @@ func (s *DeleteNodegroupOutput) SetNodegroup(v *Nodegroup) *DeleteNodegroupOutpu
 	return s
 }
 
-type DescribeAddonInput struct {
+type DeregisterClusterInput struct {
+	_ struct{} `type:"structure" nopayload:"true"`
+
+	// The name of the connected cluster to deregister.
+	//
+	// Name is a required field
+	Name *string `location:"uri" locationName:"name" type:"string" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DeregisterClusterInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DeregisterClusterInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *DeregisterClusterInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "DeregisterClusterInput"}
+	if s.Name == nil {
+		invalidParams.Add(request.NewErrParamRequired("Name"))
+	}
+	if s.Name != nil && len(*s.Name) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("Name", 1))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetName sets the Name field's value.
+func (s *DeregisterClusterInput) SetName(v string) *DeregisterClusterInput {
+	s.Name = &v
+	return s
+}
+
+type DeregisterClusterOutput struct {
 	_ struct{} `type:"structure"`
+
+	// An object representing an Amazon EKS cluster.
+	Cluster *Cluster `locationName:"cluster" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DeregisterClusterOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DeregisterClusterOutput) GoString() string {
+	return s.String()
+}
+
+// SetCluster sets the Cluster field's value.
+func (s *DeregisterClusterOutput) SetCluster(v *Cluster) *DeregisterClusterOutput {
+	s.Cluster = v
+	return s
+}
+
+type DescribeAddonInput struct {
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the add-on. The name must match one of the names returned by
 	// ListAddons (https://docs.aws.amazon.com/eks/latest/APIReference/API_ListAddons.html).
@@ -4854,12 +6635,20 @@ type DescribeAddonInput struct {
 	ClusterName *string `location:"uri" locationName:"name" min:"1" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonInput) GoString() string {
 	return s.String()
 }
@@ -4901,16 +6690,25 @@ func (s *DescribeAddonInput) SetClusterName(v string) *DescribeAddonInput {
 type DescribeAddonOutput struct {
 	_ struct{} `type:"structure"`
 
-	// An Amazon EKS add-on.
+	// An Amazon EKS add-on. For more information, see Amazon EKS add-ons (https://docs.aws.amazon.com/eks/latest/userguide/eks-add-ons.html)
+	// in the Amazon EKS User Guide.
 	Addon *Addon `locationName:"addon" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonOutput) GoString() string {
 	return s.String()
 }
@@ -4922,7 +6720,7 @@ func (s *DescribeAddonOutput) SetAddon(v *Addon) *DescribeAddonOutput {
 }
 
 type DescribeAddonVersionsInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the add-on. The name must match one of the names returned by
 	// ListAddons (https://docs.aws.amazon.com/eks/latest/APIReference/API_ListAddons.html).
@@ -4944,12 +6742,20 @@ type DescribeAddonVersionsInput struct {
 	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonVersionsInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonVersionsInput) GoString() string {
 	return s.String()
 }
@@ -5007,12 +6813,20 @@ type DescribeAddonVersionsOutput struct {
 	NextToken *string `locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonVersionsOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeAddonVersionsOutput) GoString() string {
 	return s.String()
 }
@@ -5030,7 +6844,7 @@ func (s *DescribeAddonVersionsOutput) SetNextToken(v string) *DescribeAddonVersi
 }
 
 type DescribeClusterInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the cluster to describe.
 	//
@@ -5038,12 +6852,20 @@ type DescribeClusterInput struct {
 	Name *string `location:"uri" locationName:"name" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeClusterInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeClusterInput) GoString() string {
 	return s.String()
 }
@@ -5077,12 +6899,20 @@ type DescribeClusterOutput struct {
 	Cluster *Cluster `locationName:"cluster" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeClusterOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeClusterOutput) GoString() string {
 	return s.String()
 }
@@ -5094,7 +6924,7 @@ func (s *DescribeClusterOutput) SetCluster(v *Cluster) *DescribeClusterOutput {
 }
 
 type DescribeFargateProfileInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the Amazon EKS cluster associated with the Fargate profile.
 	//
@@ -5107,12 +6937,20 @@ type DescribeFargateProfileInput struct {
 	FargateProfileName *string `location:"uri" locationName:"fargateProfileName" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeFargateProfileInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeFargateProfileInput) GoString() string {
 	return s.String()
 }
@@ -5158,12 +6996,20 @@ type DescribeFargateProfileOutput struct {
 	FargateProfile *FargateProfile `locationName:"fargateProfile" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeFargateProfileOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeFargateProfileOutput) GoString() string {
 	return s.String()
 }
@@ -5174,8 +7020,107 @@ func (s *DescribeFargateProfileOutput) SetFargateProfile(v *FargateProfile) *Des
 	return s
 }
 
-type DescribeNodegroupInput struct {
+type DescribeIdentityProviderConfigInput struct {
 	_ struct{} `type:"structure"`
+
+	// The cluster name that the identity provider configuration is associated to.
+	//
+	// ClusterName is a required field
+	ClusterName *string `location:"uri" locationName:"name" type:"string" required:"true"`
+
+	// An object representing an identity provider configuration.
+	//
+	// IdentityProviderConfig is a required field
+	IdentityProviderConfig *IdentityProviderConfig `locationName:"identityProviderConfig" type:"structure" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DescribeIdentityProviderConfigInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DescribeIdentityProviderConfigInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *DescribeIdentityProviderConfigInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "DescribeIdentityProviderConfigInput"}
+	if s.ClusterName == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClusterName"))
+	}
+	if s.ClusterName != nil && len(*s.ClusterName) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("ClusterName", 1))
+	}
+	if s.IdentityProviderConfig == nil {
+		invalidParams.Add(request.NewErrParamRequired("IdentityProviderConfig"))
+	}
+	if s.IdentityProviderConfig != nil {
+		if err := s.IdentityProviderConfig.Validate(); err != nil {
+			invalidParams.AddNested("IdentityProviderConfig", err.(request.ErrInvalidParams))
+		}
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *DescribeIdentityProviderConfigInput) SetClusterName(v string) *DescribeIdentityProviderConfigInput {
+	s.ClusterName = &v
+	return s
+}
+
+// SetIdentityProviderConfig sets the IdentityProviderConfig field's value.
+func (s *DescribeIdentityProviderConfigInput) SetIdentityProviderConfig(v *IdentityProviderConfig) *DescribeIdentityProviderConfigInput {
+	s.IdentityProviderConfig = v
+	return s
+}
+
+type DescribeIdentityProviderConfigOutput struct {
+	_ struct{} `type:"structure"`
+
+	// The object that represents an OpenID Connect (OIDC) identity provider configuration.
+	IdentityProviderConfig *IdentityProviderConfigResponse `locationName:"identityProviderConfig" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DescribeIdentityProviderConfigOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DescribeIdentityProviderConfigOutput) GoString() string {
+	return s.String()
+}
+
+// SetIdentityProviderConfig sets the IdentityProviderConfig field's value.
+func (s *DescribeIdentityProviderConfigOutput) SetIdentityProviderConfig(v *IdentityProviderConfigResponse) *DescribeIdentityProviderConfigOutput {
+	s.IdentityProviderConfig = v
+	return s
+}
+
+type DescribeNodegroupInput struct {
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the Amazon EKS cluster associated with the node group.
 	//
@@ -5188,12 +7133,20 @@ type DescribeNodegroupInput struct {
 	NodegroupName *string `location:"uri" locationName:"nodegroupName" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeNodegroupInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeNodegroupInput) GoString() string {
 	return s.String()
 }
@@ -5239,12 +7192,20 @@ type DescribeNodegroupOutput struct {
 	Nodegroup *Nodegroup `locationName:"nodegroup" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeNodegroupOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeNodegroupOutput) GoString() string {
 	return s.String()
 }
@@ -5256,10 +7217,11 @@ func (s *DescribeNodegroupOutput) SetNodegroup(v *Nodegroup) *DescribeNodegroupO
 }
 
 type DescribeUpdateInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the add-on. The name must match one of the names returned by
 	// ListAddons (https://docs.aws.amazon.com/eks/latest/APIReference/API_ListAddons.html).
+	// This parameter is required if the update is an add-on update.
 	AddonName *string `location:"querystring" locationName:"addonName" type:"string"`
 
 	// The name of the Amazon EKS cluster associated with the update.
@@ -5267,7 +7229,8 @@ type DescribeUpdateInput struct {
 	// Name is a required field
 	Name *string `location:"uri" locationName:"name" type:"string" required:"true"`
 
-	// The name of the Amazon EKS node group associated with the update.
+	// The name of the Amazon EKS node group associated with the update. This parameter
+	// is required if the update is a node group update.
 	NodegroupName *string `location:"querystring" locationName:"nodegroupName" type:"string"`
 
 	// The ID of the update to describe.
@@ -5276,12 +7239,20 @@ type DescribeUpdateInput struct {
 	UpdateId *string `location:"uri" locationName:"updateId" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeUpdateInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeUpdateInput) GoString() string {
 	return s.String()
 }
@@ -5339,12 +7310,20 @@ type DescribeUpdateOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeUpdateOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s DescribeUpdateOutput) GoString() string {
 	return s.String()
 }
@@ -5355,24 +7334,140 @@ func (s *DescribeUpdateOutput) SetUpdate(v *Update) *DescribeUpdateOutput {
 	return s
 }
 
+type DisassociateIdentityProviderConfigInput struct {
+	_ struct{} `type:"structure"`
+
+	// A unique, case-sensitive identifier that you provide to ensure the idempotency
+	// of the request.
+	ClientRequestToken *string `locationName:"clientRequestToken" type:"string" idempotencyToken:"true"`
+
+	// The name of the cluster to disassociate an identity provider from.
+	//
+	// ClusterName is a required field
+	ClusterName *string `location:"uri" locationName:"name" type:"string" required:"true"`
+
+	// An object representing an identity provider configuration.
+	//
+	// IdentityProviderConfig is a required field
+	IdentityProviderConfig *IdentityProviderConfig `locationName:"identityProviderConfig" type:"structure" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DisassociateIdentityProviderConfigInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DisassociateIdentityProviderConfigInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *DisassociateIdentityProviderConfigInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "DisassociateIdentityProviderConfigInput"}
+	if s.ClusterName == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClusterName"))
+	}
+	if s.ClusterName != nil && len(*s.ClusterName) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("ClusterName", 1))
+	}
+	if s.IdentityProviderConfig == nil {
+		invalidParams.Add(request.NewErrParamRequired("IdentityProviderConfig"))
+	}
+	if s.IdentityProviderConfig != nil {
+		if err := s.IdentityProviderConfig.Validate(); err != nil {
+			invalidParams.AddNested("IdentityProviderConfig", err.(request.ErrInvalidParams))
+		}
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClientRequestToken sets the ClientRequestToken field's value.
+func (s *DisassociateIdentityProviderConfigInput) SetClientRequestToken(v string) *DisassociateIdentityProviderConfigInput {
+	s.ClientRequestToken = &v
+	return s
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *DisassociateIdentityProviderConfigInput) SetClusterName(v string) *DisassociateIdentityProviderConfigInput {
+	s.ClusterName = &v
+	return s
+}
+
+// SetIdentityProviderConfig sets the IdentityProviderConfig field's value.
+func (s *DisassociateIdentityProviderConfigInput) SetIdentityProviderConfig(v *IdentityProviderConfig) *DisassociateIdentityProviderConfigInput {
+	s.IdentityProviderConfig = v
+	return s
+}
+
+type DisassociateIdentityProviderConfigOutput struct {
+	_ struct{} `type:"structure"`
+
+	// An object representing an asynchronous update.
+	Update *Update `locationName:"update" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DisassociateIdentityProviderConfigOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s DisassociateIdentityProviderConfigOutput) GoString() string {
+	return s.String()
+}
+
+// SetUpdate sets the Update field's value.
+func (s *DisassociateIdentityProviderConfigOutput) SetUpdate(v *Update) *DisassociateIdentityProviderConfigOutput {
+	s.Update = v
+	return s
+}
+
 // The encryption configuration for the cluster.
 type EncryptionConfig struct {
 	_ struct{} `type:"structure"`
 
-	// AWS Key Management Service (AWS KMS) customer master key (CMK). Either the
-	// ARN or the alias can be used.
+	// Key Management Service (KMS) key. Either the ARN or the alias can be used.
 	Provider *Provider `locationName:"provider" type:"structure"`
 
 	// Specifies the resources to be encrypted. The only supported value is "secrets".
 	Resources []*string `locationName:"resources" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s EncryptionConfig) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s EncryptionConfig) GoString() string {
 	return s.String()
 }
@@ -5422,12 +7517,20 @@ type ErrorDetail struct {
 	ResourceIds []*string `locationName:"resourceIds" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ErrorDetail) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ErrorDetail) GoString() string {
 	return s.String()
 }
@@ -5450,7 +7553,7 @@ func (s *ErrorDetail) SetResourceIds(v []*string) *ErrorDetail {
 	return s
 }
 
-// An object representing an AWS Fargate profile.
+// An object representing an Fargate profile.
 type FargateProfile struct {
 	_ struct{} `type:"structure"`
 
@@ -5482,19 +7585,26 @@ type FargateProfile struct {
 	Subnets []*string `locationName:"subnets" type:"list"`
 
 	// The metadata applied to the Fargate profile to assist with categorization
-	// and organization. Each tag consists of a key and an optional value, both
-	// of which you define. Fargate profile tags do not propagate to any other resources
-	// associated with the Fargate profile, such as the pods that are scheduled
-	// with it.
+	// and organization. Each tag consists of a key and an optional value. You define
+	// both. Fargate profile tags do not propagate to any other resources associated
+	// with the Fargate profile, such as the pods that are scheduled with it.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s FargateProfile) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s FargateProfile) GoString() string {
 	return s.String()
 }
@@ -5553,7 +7663,7 @@ func (s *FargateProfile) SetTags(v map[string]*string) *FargateProfile {
 	return s
 }
 
-// An object representing an AWS Fargate profile selector.
+// An object representing an Fargate profile selector.
 type FargateProfileSelector struct {
 	_ struct{} `type:"structure"`
 
@@ -5566,12 +7676,20 @@ type FargateProfileSelector struct {
 	Namespace *string `locationName:"namespace" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s FargateProfileSelector) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s FargateProfileSelector) GoString() string {
 	return s.String()
 }
@@ -5588,27 +7706,129 @@ func (s *FargateProfileSelector) SetNamespace(v string) *FargateProfileSelector 
 	return s
 }
 
-// An object representing an identity provider for authentication credentials.
+// An object representing an identity provider.
 type Identity struct {
 	_ struct{} `type:"structure"`
 
-	// The OpenID Connect (https://openid.net/connect/) identity provider information
-	// for the cluster.
+	// An object representing the OpenID Connect (https://openid.net/connect/) identity
+	// provider information.
 	Oidc *OIDC `locationName:"oidc" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Identity) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Identity) GoString() string {
 	return s.String()
 }
 
 // SetOidc sets the Oidc field's value.
 func (s *Identity) SetOidc(v *OIDC) *Identity {
+	s.Oidc = v
+	return s
+}
+
+// An object representing an identity provider configuration.
+type IdentityProviderConfig struct {
+	_ struct{} `type:"structure"`
+
+	// The name of the identity provider configuration.
+	//
+	// Name is a required field
+	Name *string `locationName:"name" type:"string" required:"true"`
+
+	// The type of the identity provider configuration. The only type available
+	// is oidc.
+	//
+	// Type is a required field
+	Type *string `locationName:"type" type:"string" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s IdentityProviderConfig) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s IdentityProviderConfig) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *IdentityProviderConfig) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "IdentityProviderConfig"}
+	if s.Name == nil {
+		invalidParams.Add(request.NewErrParamRequired("Name"))
+	}
+	if s.Type == nil {
+		invalidParams.Add(request.NewErrParamRequired("Type"))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetName sets the Name field's value.
+func (s *IdentityProviderConfig) SetName(v string) *IdentityProviderConfig {
+	s.Name = &v
+	return s
+}
+
+// SetType sets the Type field's value.
+func (s *IdentityProviderConfig) SetType(v string) *IdentityProviderConfig {
+	s.Type = &v
+	return s
+}
+
+// The full description of your identity configuration.
+type IdentityProviderConfigResponse struct {
+	_ struct{} `type:"structure"`
+
+	// An object representing an OpenID Connect (OIDC) identity provider configuration.
+	Oidc *OidcIdentityProviderConfig `locationName:"oidc" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s IdentityProviderConfigResponse) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s IdentityProviderConfigResponse) GoString() string {
+	return s.String()
+}
+
+// SetOidc sets the Oidc field's value.
+func (s *IdentityProviderConfigResponse) SetOidc(v *OidcIdentityProviderConfig) *IdentityProviderConfigResponse {
 	s.Oidc = v
 	return s
 }
@@ -5633,12 +7853,20 @@ type InvalidParameterException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s InvalidParameterException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s InvalidParameterException) GoString() string {
 	return s.String()
 }
@@ -5698,12 +7926,20 @@ type InvalidRequestException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s InvalidRequestException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s InvalidRequestException) GoString() string {
 	return s.String()
 }
@@ -5799,9 +8035,9 @@ type Issue struct {
 	//    node group. You may be able to recreate an IAM role with the same settings
 	//    to recover.
 	//
-	//    * InstanceLimitExceeded: Your AWS account is unable to launch any more
-	//    instances of the specified instance type. You may be able to request an
-	//    Amazon EC2 instance limit increase to recover.
+	//    * InstanceLimitExceeded: Your Amazon Web Services account is unable to
+	//    launch any more instances of the specified instance type. You may be able
+	//    to request an Amazon EC2 instance limit increase to recover.
 	//
 	//    * InsufficientFreeAddresses: One or more of the subnets associated with
 	//    your managed node group does not have enough available IP addresses for
@@ -5812,23 +8048,31 @@ type Issue struct {
 	//
 	//    * NodeCreationFailure: Your launched instances are unable to register
 	//    with your Amazon EKS cluster. Common causes of this failure are insufficient
-	//    worker node IAM role (https://docs.aws.amazon.com/eks/latest/userguide/worker_node_IAM_role.html)
+	//    node IAM role (https://docs.aws.amazon.com/eks/latest/userguide/create-node-role.html)
 	//    permissions or lack of outbound internet access for the nodes.
 	Code *string `locationName:"code" type:"string" enum:"NodegroupIssueCode"`
 
 	// The error message associated with the issue.
 	Message *string `locationName:"message" type:"string"`
 
-	// The AWS resources that are afflicted by this issue.
+	// The Amazon Web Services resources that are afflicted by this issue.
 	ResourceIds []*string `locationName:"resourceIds" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Issue) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Issue) GoString() string {
 	return s.String()
 }
@@ -5855,13 +8099,30 @@ func (s *Issue) SetResourceIds(v []*string) *Issue {
 type KubernetesNetworkConfigRequest struct {
 	_ struct{} `type:"structure"`
 
-	// The CIDR block to assign Kubernetes service IP addresses from. If you don't
-	// specify a block, Kubernetes assigns addresses from either the 10.100.0.0/16
-	// or 172.20.0.0/16 CIDR blocks. We recommend that you specify a block that
-	// does not overlap with resources in other networks that are peered or connected
-	// to your VPC. The block must meet the following requirements:
+	// Specify which IP family is used to assign Kubernetes pod and service IP addresses.
+	// If you don't specify a value, ipv4 is used by default. You can only specify
+	// an IP family when you create a cluster and can't change this value once the
+	// cluster is created. If you specify ipv6, the VPC and subnets that you specify
+	// for cluster creation must have both IPv4 and IPv6 CIDR blocks assigned to
+	// them. You can't specify ipv6 for clusters in China Regions.
 	//
-	//    * Within one of the following private IP address blocks: 10.0.0.0/8, 172.16.0.0.0/12,
+	// You can only specify ipv6 for 1.21 and later clusters that use version 1.10.1
+	// or later of the Amazon VPC CNI add-on. If you specify ipv6, then ensure that
+	// your VPC meets the requirements listed in the considerations listed in Assigning
+	// IPv6 addresses to pods and services (https://docs.aws.amazon.com/eks/latest/userguide/cni-ipv6.html)
+	// in the Amazon EKS User Guide. Kubernetes assigns services IPv6 addresses
+	// from the unique local address range (fc00::/7). You can't specify a custom
+	// IPv6 CIDR block. Pod addresses are assigned from the subnet's IPv6 CIDR.
+	IpFamily *string `locationName:"ipFamily" type:"string" enum:"IpFamily"`
+
+	// Don't specify a value if you select ipv6 for ipFamily. The CIDR block to
+	// assign Kubernetes service IP addresses from. If you don't specify a block,
+	// Kubernetes assigns addresses from either the 10.100.0.0/16 or 172.20.0.0/16
+	// CIDR blocks. We recommend that you specify a block that does not overlap
+	// with resources in other networks that are peered or connected to your VPC.
+	// The block must meet the following requirements:
+	//
+	//    * Within one of the following private IP address blocks: 10.0.0.0/8, 172.16.0.0/12,
 	//    or 192.168.0.0/16.
 	//
 	//    * Doesn't overlap with any CIDR block assigned to the VPC that you selected
@@ -5874,14 +8135,28 @@ type KubernetesNetworkConfigRequest struct {
 	ServiceIpv4Cidr *string `locationName:"serviceIpv4Cidr" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s KubernetesNetworkConfigRequest) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s KubernetesNetworkConfigRequest) GoString() string {
 	return s.String()
+}
+
+// SetIpFamily sets the IpFamily field's value.
+func (s *KubernetesNetworkConfigRequest) SetIpFamily(v string) *KubernetesNetworkConfigRequest {
+	s.IpFamily = &v
+	return s
 }
 
 // SetServiceIpv4Cidr sets the ServiceIpv4Cidr field's value.
@@ -5890,26 +8165,56 @@ func (s *KubernetesNetworkConfigRequest) SetServiceIpv4Cidr(v string) *Kubernete
 	return s
 }
 
-// The Kubernetes network configuration for the cluster.
+// The Kubernetes network configuration for the cluster. The response contains
+// a value for serviceIpv6Cidr or serviceIpv4Cidr, but not both.
 type KubernetesNetworkConfigResponse struct {
 	_ struct{} `type:"structure"`
 
-	// The CIDR block that Kubernetes service IP addresses are assigned from. If
-	// you didn't specify a CIDR block when you created the cluster, then Kubernetes
-	// assigns addresses from either the 10.100.0.0/16 or 172.20.0.0/16 CIDR blocks.
-	// If this was specified, then it was specified when the cluster was created
-	// and it cannot be changed.
+	// The IP family used to assign Kubernetes pod and service IP addresses. The
+	// IP family is always ipv4, unless you have a 1.21 or later cluster running
+	// version 1.10.1 or later of the Amazon VPC CNI add-on and specified ipv6 when
+	// you created the cluster.
+	IpFamily *string `locationName:"ipFamily" type:"string" enum:"IpFamily"`
+
+	// The CIDR block that Kubernetes pod and service IP addresses are assigned
+	// from. Kubernetes assigns addresses from an IPv4 CIDR block assigned to a
+	// subnet that the node is in. If you didn't specify a CIDR block when you created
+	// the cluster, then Kubernetes assigns addresses from either the 10.100.0.0/16
+	// or 172.20.0.0/16 CIDR blocks. If this was specified, then it was specified
+	// when the cluster was created and it can't be changed.
 	ServiceIpv4Cidr *string `locationName:"serviceIpv4Cidr" type:"string"`
+
+	// The CIDR block that Kubernetes pod and service IP addresses are assigned
+	// from if you created a 1.21 or later cluster with version 1.10.1 or later
+	// of the Amazon VPC CNI add-on and specified ipv6 for ipFamily when you created
+	// the cluster. Kubernetes assigns service addresses from the unique local address
+	// range (fc00::/7) because you can't specify a custom IPv6 CIDR block when
+	// you create the cluster.
+	ServiceIpv6Cidr *string `locationName:"serviceIpv6Cidr" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s KubernetesNetworkConfigResponse) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s KubernetesNetworkConfigResponse) GoString() string {
 	return s.String()
+}
+
+// SetIpFamily sets the IpFamily field's value.
+func (s *KubernetesNetworkConfigResponse) SetIpFamily(v string) *KubernetesNetworkConfigResponse {
+	s.IpFamily = &v
+	return s
 }
 
 // SetServiceIpv4Cidr sets the ServiceIpv4Cidr field's value.
@@ -5918,8 +8223,14 @@ func (s *KubernetesNetworkConfigResponse) SetServiceIpv4Cidr(v string) *Kubernet
 	return s
 }
 
+// SetServiceIpv6Cidr sets the ServiceIpv6Cidr field's value.
+func (s *KubernetesNetworkConfigResponse) SetServiceIpv6Cidr(v string) *KubernetesNetworkConfigResponse {
+	s.ServiceIpv6Cidr = &v
+	return s
+}
+
 // An object representing a node group launch template specification. The launch
-// template cannot include SubnetId (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateNetworkInterface.html),
+// template can't include SubnetId (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CreateNetworkInterface.html),
 // IamInstanceProfile (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_IamInstanceProfile.html),
 // RequestSpotInstances (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RequestSpotInstances.html),
 // HibernationOptions (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_HibernationOptionsRequest.html),
@@ -5930,27 +8241,42 @@ func (s *KubernetesNetworkConfigResponse) SetServiceIpv4Cidr(v string) *Kubernet
 // templates with Amazon EKS, see Launch template support (https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html)
 // in the Amazon EKS User Guide.
 //
-// Specify either name or id, but not both.
+// You must specify either the launch template ID or the launch template name
+// in the request, but not both.
 type LaunchTemplateSpecification struct {
 	_ struct{} `type:"structure"`
 
 	// The ID of the launch template.
+	//
+	// You must specify either the launch template ID or the launch template name
+	// in the request, but not both.
 	Id *string `locationName:"id" type:"string"`
 
 	// The name of the launch template.
+	//
+	// You must specify either the launch template name or the launch template ID
+	// in the request, but not both.
 	Name *string `locationName:"name" type:"string"`
 
-	// The version of the launch template to use. If no version is specified, then
-	// the template's default version is used.
+	// The version number of the launch template to use. If no version is specified,
+	// then the template's default version is used.
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s LaunchTemplateSpecification) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s LaunchTemplateSpecification) GoString() string {
 	return s.String()
 }
@@ -5974,7 +8300,7 @@ func (s *LaunchTemplateSpecification) SetVersion(v string) *LaunchTemplateSpecif
 }
 
 type ListAddonsInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the cluster.
 	//
@@ -6000,12 +8326,20 @@ type ListAddonsInput struct {
 	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListAddonsInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListAddonsInput) GoString() string {
 	return s.String()
 }
@@ -6063,12 +8397,20 @@ type ListAddonsOutput struct {
 	NextToken *string `locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListAddonsOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListAddonsOutput) GoString() string {
 	return s.String()
 }
@@ -6086,7 +8428,12 @@ func (s *ListAddonsOutput) SetNextToken(v string) *ListAddonsOutput {
 }
 
 type ListClustersInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
+
+	// Indicates whether external clusters are included in the returned list. Use
+	// 'all' to return connected clusters, or blank to return only Amazon EKS clusters.
+	// 'all' must be in lowercase otherwise an error occurs.
+	Include []*string `location:"querystring" locationName:"include" type:"list"`
 
 	// The maximum number of cluster results returned by ListClusters in paginated
 	// output. When you use this parameter, ListClusters returns only maxResults
@@ -6107,12 +8454,20 @@ type ListClustersInput struct {
 	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListClustersInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListClustersInput) GoString() string {
 	return s.String()
 }
@@ -6128,6 +8483,12 @@ func (s *ListClustersInput) Validate() error {
 		return invalidParams
 	}
 	return nil
+}
+
+// SetInclude sets the Include field's value.
+func (s *ListClustersInput) SetInclude(v []*string) *ListClustersInput {
+	s.Include = v
+	return s
 }
 
 // SetMaxResults sets the MaxResults field's value.
@@ -6155,12 +8516,20 @@ type ListClustersOutput struct {
 	NextToken *string `locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListClustersOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListClustersOutput) GoString() string {
 	return s.String()
 }
@@ -6178,9 +8547,9 @@ func (s *ListClustersOutput) SetNextToken(v string) *ListClustersOutput {
 }
 
 type ListFargateProfilesInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
-	// The name of the Amazon EKS cluster that you would like to listFargate profiles
+	// The name of the Amazon EKS cluster that you would like to list Fargate profiles
 	// in.
 	//
 	// ClusterName is a required field
@@ -6202,12 +8571,20 @@ type ListFargateProfilesInput struct {
 	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListFargateProfilesInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListFargateProfilesInput) GoString() string {
 	return s.String()
 }
@@ -6262,12 +8639,20 @@ type ListFargateProfilesOutput struct {
 	NextToken *string `locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListFargateProfilesOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListFargateProfilesOutput) GoString() string {
 	return s.String()
 }
@@ -6284,8 +8669,130 @@ func (s *ListFargateProfilesOutput) SetNextToken(v string) *ListFargateProfilesO
 	return s
 }
 
-type ListNodegroupsInput struct {
+type ListIdentityProviderConfigsInput struct {
+	_ struct{} `type:"structure" nopayload:"true"`
+
+	// The cluster name that you want to list identity provider configurations for.
+	//
+	// ClusterName is a required field
+	ClusterName *string `location:"uri" locationName:"name" type:"string" required:"true"`
+
+	// The maximum number of identity provider configurations returned by ListIdentityProviderConfigs
+	// in paginated output. When you use this parameter, ListIdentityProviderConfigs
+	// returns only maxResults results in a single page along with a nextToken response
+	// element. You can see the remaining results of the initial request by sending
+	// another ListIdentityProviderConfigs request with the returned nextToken value.
+	// This value can be between 1 and 100. If you don't use this parameter, ListIdentityProviderConfigs
+	// returns up to 100 results and a nextToken value, if applicable.
+	MaxResults *int64 `location:"querystring" locationName:"maxResults" min:"1" type:"integer"`
+
+	// The nextToken value returned from a previous paginated IdentityProviderConfigsRequest
+	// where maxResults was used and the results exceeded the value of that parameter.
+	// Pagination continues from the end of the previous results that returned the
+	// nextToken value.
+	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ListIdentityProviderConfigsInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ListIdentityProviderConfigsInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *ListIdentityProviderConfigsInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "ListIdentityProviderConfigsInput"}
+	if s.ClusterName == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClusterName"))
+	}
+	if s.ClusterName != nil && len(*s.ClusterName) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("ClusterName", 1))
+	}
+	if s.MaxResults != nil && *s.MaxResults < 1 {
+		invalidParams.Add(request.NewErrParamMinValue("MaxResults", 1))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *ListIdentityProviderConfigsInput) SetClusterName(v string) *ListIdentityProviderConfigsInput {
+	s.ClusterName = &v
+	return s
+}
+
+// SetMaxResults sets the MaxResults field's value.
+func (s *ListIdentityProviderConfigsInput) SetMaxResults(v int64) *ListIdentityProviderConfigsInput {
+	s.MaxResults = &v
+	return s
+}
+
+// SetNextToken sets the NextToken field's value.
+func (s *ListIdentityProviderConfigsInput) SetNextToken(v string) *ListIdentityProviderConfigsInput {
+	s.NextToken = &v
+	return s
+}
+
+type ListIdentityProviderConfigsOutput struct {
 	_ struct{} `type:"structure"`
+
+	// The identity provider configurations for the cluster.
+	IdentityProviderConfigs []*IdentityProviderConfig `locationName:"identityProviderConfigs" type:"list"`
+
+	// The nextToken value returned from a previous paginated ListIdentityProviderConfigsResponse
+	// where maxResults was used and the results exceeded the value of that parameter.
+	// Pagination continues from the end of the previous results that returned the
+	// nextToken value.
+	NextToken *string `locationName:"nextToken" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ListIdentityProviderConfigsOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ListIdentityProviderConfigsOutput) GoString() string {
+	return s.String()
+}
+
+// SetIdentityProviderConfigs sets the IdentityProviderConfigs field's value.
+func (s *ListIdentityProviderConfigsOutput) SetIdentityProviderConfigs(v []*IdentityProviderConfig) *ListIdentityProviderConfigsOutput {
+	s.IdentityProviderConfigs = v
+	return s
+}
+
+// SetNextToken sets the NextToken field's value.
+func (s *ListIdentityProviderConfigsOutput) SetNextToken(v string) *ListIdentityProviderConfigsOutput {
+	s.NextToken = &v
+	return s
+}
+
+type ListNodegroupsInput struct {
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The name of the Amazon EKS cluster that you would like to list node groups
 	// in.
@@ -6309,12 +8816,20 @@ type ListNodegroupsInput struct {
 	NextToken *string `location:"querystring" locationName:"nextToken" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListNodegroupsInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListNodegroupsInput) GoString() string {
 	return s.String()
 }
@@ -6369,12 +8884,20 @@ type ListNodegroupsOutput struct {
 	Nodegroups []*string `locationName:"nodegroups" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListNodegroupsOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListNodegroupsOutput) GoString() string {
 	return s.String()
 }
@@ -6392,7 +8915,7 @@ func (s *ListNodegroupsOutput) SetNodegroups(v []*string) *ListNodegroupsOutput 
 }
 
 type ListTagsForResourceInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The Amazon Resource Name (ARN) that identifies the resource for which to
 	// list the tags. Currently, the supported resources are Amazon EKS clusters
@@ -6402,12 +8925,20 @@ type ListTagsForResourceInput struct {
 	ResourceArn *string `location:"uri" locationName:"resourceArn" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListTagsForResourceInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListTagsForResourceInput) GoString() string {
 	return s.String()
 }
@@ -6441,12 +8972,20 @@ type ListTagsForResourceOutput struct {
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListTagsForResourceOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListTagsForResourceOutput) GoString() string {
 	return s.String()
 }
@@ -6458,7 +8997,7 @@ func (s *ListTagsForResourceOutput) SetTags(v map[string]*string) *ListTagsForRe
 }
 
 type ListUpdatesInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The names of the installed add-ons that have available updates.
 	AddonName *string `location:"querystring" locationName:"addonName" type:"string"`
@@ -6487,12 +9026,20 @@ type ListUpdatesInput struct {
 	NodegroupName *string `location:"querystring" locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListUpdatesInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListUpdatesInput) GoString() string {
 	return s.String()
 }
@@ -6559,12 +9106,20 @@ type ListUpdatesOutput struct {
 	UpdateIds []*string `locationName:"updateIds" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListUpdatesOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ListUpdatesOutput) GoString() string {
 	return s.String()
 }
@@ -6593,15 +9148,23 @@ type LogSetup struct {
 	Enabled *bool `locationName:"enabled" type:"boolean"`
 
 	// The available cluster control plane log types.
-	Types []*string `locationName:"types" type:"list"`
+	Types []*string `locationName:"types" type:"list" enum:"LogType"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s LogSetup) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s LogSetup) GoString() string {
 	return s.String()
 }
@@ -6626,12 +9189,20 @@ type Logging struct {
 	ClusterLogging []*LogSetup `locationName:"clusterLogging" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Logging) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Logging) GoString() string {
 	return s.String()
 }
@@ -6688,8 +9259,8 @@ type Nodegroup struct {
 	// modified.
 	ModifiedAt *time.Time `locationName:"modifiedAt" type:"timestamp"`
 
-	// The IAM role associated with your node group. The Amazon EKS worker node
-	// kubelet daemon makes calls to AWS APIs on your behalf. Worker nodes receive
+	// The IAM role associated with your node group. The Amazon EKS node kubelet
+	// daemon makes calls to Amazon Web Services APIs on your behalf. Nodes receive
 	// permissions for these API calls through an IAM instance profile and associated
 	// policies.
 	NodeRole *string `locationName:"nodeRole" type:"string"`
@@ -6727,21 +9298,39 @@ type Nodegroup struct {
 	Subnets []*string `locationName:"subnets" type:"list"`
 
 	// The metadata applied to the node group to assist with categorization and
-	// organization. Each tag consists of a key and an optional value, both of which
-	// you define. Node group tags do not propagate to any other resources associated
+	// organization. Each tag consists of a key and an optional value. You define
+	// both. Node group tags do not propagate to any other resources associated
 	// with the node group, such as the Amazon EC2 instances or subnets.
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+
+	// The Kubernetes taints to be applied to the nodes in the node group when they
+	// are created. Effect is one of No_Schedule, Prefer_No_Schedule, or No_Execute.
+	// Kubernetes taints can be used together with tolerations to control how workloads
+	// are scheduled to your nodes. For more information, see Node taints on managed
+	// node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+	Taints []*Taint `locationName:"taints" type:"list"`
+
+	// The node group update configuration.
+	UpdateConfig *NodegroupUpdateConfig `locationName:"updateConfig" type:"structure"`
 
 	// The Kubernetes version of the managed node group.
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Nodegroup) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Nodegroup) GoString() string {
 	return s.String()
 }
@@ -6866,6 +9455,18 @@ func (s *Nodegroup) SetTags(v map[string]*string) *Nodegroup {
 	return s
 }
 
+// SetTaints sets the Taints field's value.
+func (s *Nodegroup) SetTaints(v []*Taint) *Nodegroup {
+	s.Taints = v
+	return s
+}
+
+// SetUpdateConfig sets the UpdateConfig field's value.
+func (s *Nodegroup) SetUpdateConfig(v *NodegroupUpdateConfig) *Nodegroup {
+	s.UpdateConfig = v
+	return s
+}
+
 // SetVersion sets the Version field's value.
 func (s *Nodegroup) SetVersion(v string) *Nodegroup {
 	s.Version = &v
@@ -6880,12 +9481,20 @@ type NodegroupHealth struct {
 	Issues []*Issue `locationName:"issues" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupHealth) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupHealth) GoString() string {
 	return s.String()
 }
@@ -6905,16 +9514,24 @@ type NodegroupResources struct {
 	AutoScalingGroups []*AutoScalingGroup `locationName:"autoScalingGroups" type:"list"`
 
 	// The remote access security group associated with the node group. This security
-	// group controls SSH access to the worker nodes.
+	// group controls SSH access to the nodes.
 	RemoteAccessSecurityGroup *string `locationName:"remoteAccessSecurityGroup" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupResources) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupResources) GoString() string {
 	return s.String()
 }
@@ -6932,29 +9549,58 @@ func (s *NodegroupResources) SetRemoteAccessSecurityGroup(v string) *NodegroupRe
 }
 
 // An object representing the scaling configuration details for the Auto Scaling
-// group that is associated with your node group. If you specify a value for
-// any property, then you must specify values for all of the properties.
+// group that is associated with your node group. When creating a node group,
+// you must specify all or none of the properties. When updating a node group,
+// you can specify any or none of the properties.
 type NodegroupScalingConfig struct {
 	_ struct{} `type:"structure"`
 
-	// The current number of worker nodes that the managed node group should maintain.
-	DesiredSize *int64 `locationName:"desiredSize" min:"1" type:"integer"`
+	// The current number of nodes that the managed node group should maintain.
+	//
+	// If you use Cluster Autoscaler, you shouldn't change the desiredSize value
+	// directly, as this can cause the Cluster Autoscaler to suddenly scale up or
+	// scale down.
+	//
+	// Whenever this parameter changes, the number of worker nodes in the node group
+	// is updated to the specified size. If this parameter is given a value that
+	// is smaller than the current number of running worker nodes, the necessary
+	// number of worker nodes are terminated to match the given value. When using
+	// CloudFormation, no action occurs if you remove this parameter from your CFN
+	// template.
+	//
+	// This parameter can be different from minSize in some cases, such as when
+	// starting with extra hosts for testing. This parameter can also be different
+	// when you want to start with an estimated number of needed hosts, but let
+	// Cluster Autoscaler reduce the number if there are too many. When Cluster
+	// Autoscaler is used, the desiredSize parameter is altered by Cluster Autoscaler
+	// (but can be out-of-date for short periods of time). Cluster Autoscaler doesn't
+	// scale a managed node group lower than minSize or higher than maxSize.
+	DesiredSize *int64 `locationName:"desiredSize" type:"integer"`
 
-	// The maximum number of worker nodes that the managed node group can scale
-	// out to. Managed node groups can support up to 100 nodes by default.
+	// The maximum number of nodes that the managed node group can scale out to.
+	// For information about the maximum number that you can specify, see Amazon
+	// EKS service quotas (https://docs.aws.amazon.com/eks/latest/userguide/service-quotas.html)
+	// in the Amazon EKS User Guide.
 	MaxSize *int64 `locationName:"maxSize" min:"1" type:"integer"`
 
-	// The minimum number of worker nodes that the managed node group can scale
-	// in to. This number must be greater than zero.
-	MinSize *int64 `locationName:"minSize" min:"1" type:"integer"`
+	// The minimum number of nodes that the managed node group can scale in to.
+	MinSize *int64 `locationName:"minSize" type:"integer"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupScalingConfig) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NodegroupScalingConfig) GoString() string {
 	return s.String()
 }
@@ -6962,14 +9608,8 @@ func (s NodegroupScalingConfig) GoString() string {
 // Validate inspects the fields of the type to determine if they are valid.
 func (s *NodegroupScalingConfig) Validate() error {
 	invalidParams := request.ErrInvalidParams{Context: "NodegroupScalingConfig"}
-	if s.DesiredSize != nil && *s.DesiredSize < 1 {
-		invalidParams.Add(request.NewErrParamMinValue("DesiredSize", 1))
-	}
 	if s.MaxSize != nil && *s.MaxSize < 1 {
 		invalidParams.Add(request.NewErrParamMinValue("MaxSize", 1))
-	}
-	if s.MinSize != nil && *s.MinSize < 1 {
-		invalidParams.Add(request.NewErrParamMinValue("MinSize", 1))
 	}
 
 	if invalidParams.Len() > 0 {
@@ -6996,6 +9636,67 @@ func (s *NodegroupScalingConfig) SetMinSize(v int64) *NodegroupScalingConfig {
 	return s
 }
 
+// The node group update configuration.
+type NodegroupUpdateConfig struct {
+	_ struct{} `type:"structure"`
+
+	// The maximum number of nodes unavailable at once during a version update.
+	// Nodes will be updated in parallel. This value or maxUnavailablePercentage
+	// is required to have a value.The maximum number is 100.
+	MaxUnavailable *int64 `locationName:"maxUnavailable" min:"1" type:"integer"`
+
+	// The maximum percentage of nodes unavailable during a version update. This
+	// percentage of nodes will be updated in parallel, up to 100 nodes at once.
+	// This value or maxUnavailable is required to have a value.
+	MaxUnavailablePercentage *int64 `locationName:"maxUnavailablePercentage" min:"1" type:"integer"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s NodegroupUpdateConfig) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s NodegroupUpdateConfig) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *NodegroupUpdateConfig) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "NodegroupUpdateConfig"}
+	if s.MaxUnavailable != nil && *s.MaxUnavailable < 1 {
+		invalidParams.Add(request.NewErrParamMinValue("MaxUnavailable", 1))
+	}
+	if s.MaxUnavailablePercentage != nil && *s.MaxUnavailablePercentage < 1 {
+		invalidParams.Add(request.NewErrParamMinValue("MaxUnavailablePercentage", 1))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetMaxUnavailable sets the MaxUnavailable field's value.
+func (s *NodegroupUpdateConfig) SetMaxUnavailable(v int64) *NodegroupUpdateConfig {
+	s.MaxUnavailable = &v
+	return s
+}
+
+// SetMaxUnavailablePercentage sets the MaxUnavailablePercentage field's value.
+func (s *NodegroupUpdateConfig) SetMaxUnavailablePercentage(v int64) *NodegroupUpdateConfig {
+	s.MaxUnavailablePercentage = &v
+	return s
+}
+
 // A service resource associated with the request could not be found. Clients
 // should not retry such requests.
 type NotFoundException struct {
@@ -7005,12 +9706,20 @@ type NotFoundException struct {
 	Message_ *string `locationName:"message" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NotFoundException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s NotFoundException) GoString() string {
 	return s.String()
 }
@@ -7053,21 +9762,29 @@ func (s *NotFoundException) RequestID() string {
 	return s.RespMetadata.RequestID
 }
 
-// An object representing the OpenID Connect (https://openid.net/connect/) identity
-// provider information for the cluster.
+// An object representing the OpenID Connect (https://openid.net/connect/) (OIDC)
+// identity provider information for the cluster.
 type OIDC struct {
 	_ struct{} `type:"structure"`
 
-	// The issuer URL for the OpenID Connect identity provider.
+	// The issuer URL for the OIDC identity provider.
 	Issuer *string `locationName:"issuer" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s OIDC) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s OIDC) GoString() string {
 	return s.String()
 }
@@ -7078,26 +9795,463 @@ func (s *OIDC) SetIssuer(v string) *OIDC {
 	return s
 }
 
-// Identifies the AWS Key Management Service (AWS KMS) customer master key (CMK)
-// used to encrypt the secrets.
+// An object representing the configuration for an OpenID Connect (OIDC) identity
+// provider.
+type OidcIdentityProviderConfig struct {
+	_ struct{} `type:"structure"`
+
+	// This is also known as audience. The ID of the client application that makes
+	// authentication requests to the OIDC identity provider.
+	ClientId *string `locationName:"clientId" type:"string"`
+
+	// The cluster that the configuration is associated to.
+	ClusterName *string `locationName:"clusterName" type:"string"`
+
+	// The JSON web token (JWT) claim that the provider uses to return your groups.
+	GroupsClaim *string `locationName:"groupsClaim" type:"string"`
+
+	// The prefix that is prepended to group claims to prevent clashes with existing
+	// names (such as system: groups). For example, the valueoidc: creates group
+	// names like oidc:engineering and oidc:infra. The prefix can't contain system:
+	GroupsPrefix *string `locationName:"groupsPrefix" type:"string"`
+
+	// The ARN of the configuration.
+	IdentityProviderConfigArn *string `locationName:"identityProviderConfigArn" type:"string"`
+
+	// The name of the configuration.
+	IdentityProviderConfigName *string `locationName:"identityProviderConfigName" type:"string"`
+
+	// The URL of the OIDC identity provider that allows the API server to discover
+	// public signing keys for verifying tokens.
+	IssuerUrl *string `locationName:"issuerUrl" type:"string"`
+
+	// The key-value pairs that describe required claims in the identity token.
+	// If set, each claim is verified to be present in the token with a matching
+	// value.
+	RequiredClaims map[string]*string `locationName:"requiredClaims" type:"map"`
+
+	// The status of the OIDC identity provider.
+	Status *string `locationName:"status" type:"string" enum:"ConfigStatus"`
+
+	// The metadata to apply to the provider configuration to assist with categorization
+	// and organization. Each tag consists of a key and an optional value. You define
+	// both.
+	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+
+	// The JSON Web token (JWT) claim that is used as the username.
+	UsernameClaim *string `locationName:"usernameClaim" type:"string"`
+
+	// The prefix that is prepended to username claims to prevent clashes with existing
+	// names. The prefix can't contain system:
+	UsernamePrefix *string `locationName:"usernamePrefix" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OidcIdentityProviderConfig) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OidcIdentityProviderConfig) GoString() string {
+	return s.String()
+}
+
+// SetClientId sets the ClientId field's value.
+func (s *OidcIdentityProviderConfig) SetClientId(v string) *OidcIdentityProviderConfig {
+	s.ClientId = &v
+	return s
+}
+
+// SetClusterName sets the ClusterName field's value.
+func (s *OidcIdentityProviderConfig) SetClusterName(v string) *OidcIdentityProviderConfig {
+	s.ClusterName = &v
+	return s
+}
+
+// SetGroupsClaim sets the GroupsClaim field's value.
+func (s *OidcIdentityProviderConfig) SetGroupsClaim(v string) *OidcIdentityProviderConfig {
+	s.GroupsClaim = &v
+	return s
+}
+
+// SetGroupsPrefix sets the GroupsPrefix field's value.
+func (s *OidcIdentityProviderConfig) SetGroupsPrefix(v string) *OidcIdentityProviderConfig {
+	s.GroupsPrefix = &v
+	return s
+}
+
+// SetIdentityProviderConfigArn sets the IdentityProviderConfigArn field's value.
+func (s *OidcIdentityProviderConfig) SetIdentityProviderConfigArn(v string) *OidcIdentityProviderConfig {
+	s.IdentityProviderConfigArn = &v
+	return s
+}
+
+// SetIdentityProviderConfigName sets the IdentityProviderConfigName field's value.
+func (s *OidcIdentityProviderConfig) SetIdentityProviderConfigName(v string) *OidcIdentityProviderConfig {
+	s.IdentityProviderConfigName = &v
+	return s
+}
+
+// SetIssuerUrl sets the IssuerUrl field's value.
+func (s *OidcIdentityProviderConfig) SetIssuerUrl(v string) *OidcIdentityProviderConfig {
+	s.IssuerUrl = &v
+	return s
+}
+
+// SetRequiredClaims sets the RequiredClaims field's value.
+func (s *OidcIdentityProviderConfig) SetRequiredClaims(v map[string]*string) *OidcIdentityProviderConfig {
+	s.RequiredClaims = v
+	return s
+}
+
+// SetStatus sets the Status field's value.
+func (s *OidcIdentityProviderConfig) SetStatus(v string) *OidcIdentityProviderConfig {
+	s.Status = &v
+	return s
+}
+
+// SetTags sets the Tags field's value.
+func (s *OidcIdentityProviderConfig) SetTags(v map[string]*string) *OidcIdentityProviderConfig {
+	s.Tags = v
+	return s
+}
+
+// SetUsernameClaim sets the UsernameClaim field's value.
+func (s *OidcIdentityProviderConfig) SetUsernameClaim(v string) *OidcIdentityProviderConfig {
+	s.UsernameClaim = &v
+	return s
+}
+
+// SetUsernamePrefix sets the UsernamePrefix field's value.
+func (s *OidcIdentityProviderConfig) SetUsernamePrefix(v string) *OidcIdentityProviderConfig {
+	s.UsernamePrefix = &v
+	return s
+}
+
+// An object representing an OpenID Connect (OIDC) configuration. Before associating
+// an OIDC identity provider to your cluster, review the considerations in Authenticating
+// users for your cluster from an OpenID Connect identity provider (https://docs.aws.amazon.com/eks/latest/userguide/authenticate-oidc-identity-provider.html)
+// in the Amazon EKS User Guide.
+type OidcIdentityProviderConfigRequest struct {
+	_ struct{} `type:"structure"`
+
+	// This is also known as audience. The ID for the client application that makes
+	// authentication requests to the OpenID identity provider.
+	//
+	// ClientId is a required field
+	ClientId *string `locationName:"clientId" type:"string" required:"true"`
+
+	// The JWT claim that the provider uses to return your groups.
+	GroupsClaim *string `locationName:"groupsClaim" type:"string"`
+
+	// The prefix that is prepended to group claims to prevent clashes with existing
+	// names (such as system: groups). For example, the valueoidc: will create group
+	// names like oidc:engineering and oidc:infra.
+	GroupsPrefix *string `locationName:"groupsPrefix" type:"string"`
+
+	// The name of the OIDC provider configuration.
+	//
+	// IdentityProviderConfigName is a required field
+	IdentityProviderConfigName *string `locationName:"identityProviderConfigName" type:"string" required:"true"`
+
+	// The URL of the OpenID identity provider that allows the API server to discover
+	// public signing keys for verifying tokens. The URL must begin with https://
+	// and should correspond to the iss claim in the provider's OIDC ID tokens.
+	// Per the OIDC standard, path components are allowed but query parameters are
+	// not. Typically the URL consists of only a hostname, like https://server.example.org
+	// or https://example.com. This URL should point to the level below .well-known/openid-configuration
+	// and must be publicly accessible over the internet.
+	//
+	// IssuerUrl is a required field
+	IssuerUrl *string `locationName:"issuerUrl" type:"string" required:"true"`
+
+	// The key value pairs that describe required claims in the identity token.
+	// If set, each claim is verified to be present in the token with a matching
+	// value. For the maximum number of claims that you can require, see Amazon
+	// EKS service quotas (https://docs.aws.amazon.com/eks/latest/userguide/service-quotas.html)
+	// in the Amazon EKS User Guide.
+	RequiredClaims map[string]*string `locationName:"requiredClaims" type:"map"`
+
+	// The JSON Web Token (JWT) claim to use as the username. The default is sub,
+	// which is expected to be a unique identifier of the end user. You can choose
+	// other claims, such as email or name, depending on the OpenID identity provider.
+	// Claims other than email are prefixed with the issuer URL to prevent naming
+	// clashes with other plug-ins.
+	UsernameClaim *string `locationName:"usernameClaim" type:"string"`
+
+	// The prefix that is prepended to username claims to prevent clashes with existing
+	// names. If you do not provide this field, and username is a value other than
+	// email, the prefix defaults to issuerurl#. You can use the value - to disable
+	// all prefixing.
+	UsernamePrefix *string `locationName:"usernamePrefix" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OidcIdentityProviderConfigRequest) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OidcIdentityProviderConfigRequest) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *OidcIdentityProviderConfigRequest) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "OidcIdentityProviderConfigRequest"}
+	if s.ClientId == nil {
+		invalidParams.Add(request.NewErrParamRequired("ClientId"))
+	}
+	if s.IdentityProviderConfigName == nil {
+		invalidParams.Add(request.NewErrParamRequired("IdentityProviderConfigName"))
+	}
+	if s.IssuerUrl == nil {
+		invalidParams.Add(request.NewErrParamRequired("IssuerUrl"))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClientId sets the ClientId field's value.
+func (s *OidcIdentityProviderConfigRequest) SetClientId(v string) *OidcIdentityProviderConfigRequest {
+	s.ClientId = &v
+	return s
+}
+
+// SetGroupsClaim sets the GroupsClaim field's value.
+func (s *OidcIdentityProviderConfigRequest) SetGroupsClaim(v string) *OidcIdentityProviderConfigRequest {
+	s.GroupsClaim = &v
+	return s
+}
+
+// SetGroupsPrefix sets the GroupsPrefix field's value.
+func (s *OidcIdentityProviderConfigRequest) SetGroupsPrefix(v string) *OidcIdentityProviderConfigRequest {
+	s.GroupsPrefix = &v
+	return s
+}
+
+// SetIdentityProviderConfigName sets the IdentityProviderConfigName field's value.
+func (s *OidcIdentityProviderConfigRequest) SetIdentityProviderConfigName(v string) *OidcIdentityProviderConfigRequest {
+	s.IdentityProviderConfigName = &v
+	return s
+}
+
+// SetIssuerUrl sets the IssuerUrl field's value.
+func (s *OidcIdentityProviderConfigRequest) SetIssuerUrl(v string) *OidcIdentityProviderConfigRequest {
+	s.IssuerUrl = &v
+	return s
+}
+
+// SetRequiredClaims sets the RequiredClaims field's value.
+func (s *OidcIdentityProviderConfigRequest) SetRequiredClaims(v map[string]*string) *OidcIdentityProviderConfigRequest {
+	s.RequiredClaims = v
+	return s
+}
+
+// SetUsernameClaim sets the UsernameClaim field's value.
+func (s *OidcIdentityProviderConfigRequest) SetUsernameClaim(v string) *OidcIdentityProviderConfigRequest {
+	s.UsernameClaim = &v
+	return s
+}
+
+// SetUsernamePrefix sets the UsernamePrefix field's value.
+func (s *OidcIdentityProviderConfigRequest) SetUsernamePrefix(v string) *OidcIdentityProviderConfigRequest {
+	s.UsernamePrefix = &v
+	return s
+}
+
+// The configuration of your local Amazon EKS cluster on an Amazon Web Services
+// Outpost. Before creating a cluster on an Outpost, review Creating a local
+// cluster on an Outpost (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-local-cluster-create.html)
+// in the Amazon EKS User Guide. This API isn't available for Amazon EKS clusters
+// on the Amazon Web Services cloud.
+type OutpostConfigRequest struct {
+	_ struct{} `type:"structure"`
+
+	// The Amazon EC2 instance type that you want to use for your local Amazon EKS
+	// cluster on Outposts. Choose an instance type based on the number of nodes
+	// that your cluster will have. For more information, see Capacity considerations
+	// (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-capacity-considerations.html)
+	// in the Amazon EKS User Guide.
+	//
+	// The instance type that you specify is used for all Kubernetes control plane
+	// instances. The instance type can't be changed after cluster creation. The
+	// control plane is not automatically scaled by Amazon EKS.
+	//
+	// ControlPlaneInstanceType is a required field
+	ControlPlaneInstanceType *string `locationName:"controlPlaneInstanceType" type:"string" required:"true"`
+
+	// An object representing the placement configuration for all the control plane
+	// instance of your local Amazon EKS cluster on an Amazon Web Services Outpost.
+	// For more information, see Capacity considerations (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-capacity-considerations.html)
+	// in the Amazon EKS User Guide.
+	ControlPlanePlacement *ControlPlanePlacementRequest `locationName:"controlPlanePlacement" type:"structure"`
+
+	// The ARN of the Outpost that you want to use for your local Amazon EKS cluster
+	// on Outposts. Only a single Outpost ARN is supported.
+	//
+	// OutpostArns is a required field
+	OutpostArns []*string `locationName:"outpostArns" type:"list" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OutpostConfigRequest) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OutpostConfigRequest) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *OutpostConfigRequest) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "OutpostConfigRequest"}
+	if s.ControlPlaneInstanceType == nil {
+		invalidParams.Add(request.NewErrParamRequired("ControlPlaneInstanceType"))
+	}
+	if s.OutpostArns == nil {
+		invalidParams.Add(request.NewErrParamRequired("OutpostArns"))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetControlPlaneInstanceType sets the ControlPlaneInstanceType field's value.
+func (s *OutpostConfigRequest) SetControlPlaneInstanceType(v string) *OutpostConfigRequest {
+	s.ControlPlaneInstanceType = &v
+	return s
+}
+
+// SetControlPlanePlacement sets the ControlPlanePlacement field's value.
+func (s *OutpostConfigRequest) SetControlPlanePlacement(v *ControlPlanePlacementRequest) *OutpostConfigRequest {
+	s.ControlPlanePlacement = v
+	return s
+}
+
+// SetOutpostArns sets the OutpostArns field's value.
+func (s *OutpostConfigRequest) SetOutpostArns(v []*string) *OutpostConfigRequest {
+	s.OutpostArns = v
+	return s
+}
+
+// An object representing the configuration of your local Amazon EKS cluster
+// on an Amazon Web Services Outpost. This API isn't available for Amazon EKS
+// clusters on the Amazon Web Services cloud.
+type OutpostConfigResponse struct {
+	_ struct{} `type:"structure"`
+
+	// The Amazon EC2 instance type used for the control plane. The instance type
+	// is the same for all control plane instances.
+	//
+	// ControlPlaneInstanceType is a required field
+	ControlPlaneInstanceType *string `locationName:"controlPlaneInstanceType" type:"string" required:"true"`
+
+	// An object representing the placement configuration for all the control plane
+	// instance of your local Amazon EKS cluster on an Amazon Web Services Outpost.
+	// For more information, see Capacity considerations (https://docs.aws.amazon.com/eks/latest/userguide/eks-outposts-capacity-considerations.html)
+	// in the Amazon EKS User Guide.
+	ControlPlanePlacement *ControlPlanePlacementResponse `locationName:"controlPlanePlacement" type:"structure"`
+
+	// The ARN of the Outpost that you specified for use with your local Amazon
+	// EKS cluster on Outposts.
+	//
+	// OutpostArns is a required field
+	OutpostArns []*string `locationName:"outpostArns" type:"list" required:"true"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OutpostConfigResponse) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s OutpostConfigResponse) GoString() string {
+	return s.String()
+}
+
+// SetControlPlaneInstanceType sets the ControlPlaneInstanceType field's value.
+func (s *OutpostConfigResponse) SetControlPlaneInstanceType(v string) *OutpostConfigResponse {
+	s.ControlPlaneInstanceType = &v
+	return s
+}
+
+// SetControlPlanePlacement sets the ControlPlanePlacement field's value.
+func (s *OutpostConfigResponse) SetControlPlanePlacement(v *ControlPlanePlacementResponse) *OutpostConfigResponse {
+	s.ControlPlanePlacement = v
+	return s
+}
+
+// SetOutpostArns sets the OutpostArns field's value.
+func (s *OutpostConfigResponse) SetOutpostArns(v []*string) *OutpostConfigResponse {
+	s.OutpostArns = v
+	return s
+}
+
+// Identifies the Key Management Service (KMS) key used to encrypt the secrets.
 type Provider struct {
 	_ struct{} `type:"structure"`
 
-	// Amazon Resource Name (ARN) or alias of the customer master key (CMK). The
-	// CMK must be symmetric, created in the same region as the cluster, and if
-	// the CMK was created in a different account, the user must have access to
-	// the CMK. For more information, see Allowing Users in Other Accounts to Use
-	// a CMK (https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-modifying-external-accounts.html)
-	// in the AWS Key Management Service Developer Guide.
+	// Amazon Resource Name (ARN) or alias of the KMS key. The KMS key must be symmetric,
+	// created in the same region as the cluster, and if the KMS key was created
+	// in a different account, the user must have access to the KMS key. For more
+	// information, see Allowing Users in Other Accounts to Use a KMS key (https://docs.aws.amazon.com/kms/latest/developerguide/key-policy-modifying-external-accounts.html)
+	// in the Key Management Service Developer Guide.
 	KeyArn *string `locationName:"keyArn" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Provider) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Provider) GoString() string {
 	return s.String()
 }
@@ -7108,32 +10262,165 @@ func (s *Provider) SetKeyArn(v string) *Provider {
 	return s
 }
 
+type RegisterClusterInput struct {
+	_ struct{} `type:"structure"`
+
+	// Unique, case-sensitive identifier that you provide to ensure the idempotency
+	// of the request.
+	ClientRequestToken *string `locationName:"clientRequestToken" type:"string" idempotencyToken:"true"`
+
+	// The configuration settings required to connect the Kubernetes cluster to
+	// the Amazon EKS control plane.
+	//
+	// ConnectorConfig is a required field
+	ConnectorConfig *ConnectorConfigRequest `locationName:"connectorConfig" type:"structure" required:"true"`
+
+	// Define a unique name for this cluster for your Region.
+	//
+	// Name is a required field
+	Name *string `locationName:"name" min:"1" type:"string" required:"true"`
+
+	// The metadata that you apply to the cluster to assist with categorization
+	// and organization. Each tag consists of a key and an optional value, both
+	// of which you define. Cluster tags do not propagate to any other resources
+	// associated with the cluster.
+	Tags map[string]*string `locationName:"tags" min:"1" type:"map"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s RegisterClusterInput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s RegisterClusterInput) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *RegisterClusterInput) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "RegisterClusterInput"}
+	if s.ConnectorConfig == nil {
+		invalidParams.Add(request.NewErrParamRequired("ConnectorConfig"))
+	}
+	if s.Name == nil {
+		invalidParams.Add(request.NewErrParamRequired("Name"))
+	}
+	if s.Name != nil && len(*s.Name) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("Name", 1))
+	}
+	if s.Tags != nil && len(s.Tags) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("Tags", 1))
+	}
+	if s.ConnectorConfig != nil {
+		if err := s.ConnectorConfig.Validate(); err != nil {
+			invalidParams.AddNested("ConnectorConfig", err.(request.ErrInvalidParams))
+		}
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetClientRequestToken sets the ClientRequestToken field's value.
+func (s *RegisterClusterInput) SetClientRequestToken(v string) *RegisterClusterInput {
+	s.ClientRequestToken = &v
+	return s
+}
+
+// SetConnectorConfig sets the ConnectorConfig field's value.
+func (s *RegisterClusterInput) SetConnectorConfig(v *ConnectorConfigRequest) *RegisterClusterInput {
+	s.ConnectorConfig = v
+	return s
+}
+
+// SetName sets the Name field's value.
+func (s *RegisterClusterInput) SetName(v string) *RegisterClusterInput {
+	s.Name = &v
+	return s
+}
+
+// SetTags sets the Tags field's value.
+func (s *RegisterClusterInput) SetTags(v map[string]*string) *RegisterClusterInput {
+	s.Tags = v
+	return s
+}
+
+type RegisterClusterOutput struct {
+	_ struct{} `type:"structure"`
+
+	// An object representing an Amazon EKS cluster.
+	Cluster *Cluster `locationName:"cluster" type:"structure"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s RegisterClusterOutput) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s RegisterClusterOutput) GoString() string {
+	return s.String()
+}
+
+// SetCluster sets the Cluster field's value.
+func (s *RegisterClusterOutput) SetCluster(v *Cluster) *RegisterClusterOutput {
+	s.Cluster = v
+	return s
+}
+
 // An object representing the remote access configuration for the managed node
 // group.
 type RemoteAccessConfig struct {
 	_ struct{} `type:"structure"`
 
 	// The Amazon EC2 SSH key that provides access for SSH communication with the
-	// worker nodes in the managed node group. For more information, see Amazon
-	// EC2 Key Pairs (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html)
+	// nodes in the managed node group. For more information, see Amazon EC2 key
+	// pairs and Linux instances (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html)
 	// in the Amazon Elastic Compute Cloud User Guide for Linux Instances.
 	Ec2SshKey *string `locationName:"ec2SshKey" type:"string"`
 
-	// The security groups that are allowed SSH access (port 22) to the worker nodes.
-	// If you specify an Amazon EC2 SSH key but do not specify a source security
-	// group when you create a managed node group, then port 22 on the worker nodes
-	// is opened to the internet (0.0.0.0/0). For more information, see Security
-	// Groups for Your VPC (https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html)
+	// The security groups that are allowed SSH access (port 22) to the nodes. If
+	// you specify an Amazon EC2 SSH key but do not specify a source security group
+	// when you create a managed node group, then port 22 on the nodes is opened
+	// to the internet (0.0.0.0/0). For more information, see Security Groups for
+	// Your VPC (https://docs.aws.amazon.com/vpc/latest/userguide/VPC_SecurityGroups.html)
 	// in the Amazon Virtual Private Cloud User Guide.
 	SourceSecurityGroups []*string `locationName:"sourceSecurityGroups" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s RemoteAccessConfig) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s RemoteAccessConfig) GoString() string {
 	return s.String()
 }
@@ -7166,12 +10453,20 @@ type ResourceInUseException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceInUseException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceInUseException) GoString() string {
 	return s.String()
 }
@@ -7228,12 +10523,20 @@ type ResourceLimitExceededException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceLimitExceededException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceLimitExceededException) GoString() string {
 	return s.String()
 }
@@ -7297,12 +10600,20 @@ type ResourceNotFoundException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceNotFoundException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ResourceNotFoundException) GoString() string {
 	return s.String()
 }
@@ -7345,6 +10656,71 @@ func (s *ResourceNotFoundException) RequestID() string {
 	return s.RespMetadata.RequestID
 }
 
+// Required resources (such as service-linked roles) were created and are still
+// propagating. Retry later.
+type ResourcePropagationDelayException struct {
+	_            struct{}                  `type:"structure"`
+	RespMetadata protocol.ResponseMetadata `json:"-" xml:"-"`
+
+	Message_ *string `locationName:"message" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ResourcePropagationDelayException) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s ResourcePropagationDelayException) GoString() string {
+	return s.String()
+}
+
+func newErrorResourcePropagationDelayException(v protocol.ResponseMetadata) error {
+	return &ResourcePropagationDelayException{
+		RespMetadata: v,
+	}
+}
+
+// Code returns the exception type name.
+func (s *ResourcePropagationDelayException) Code() string {
+	return "ResourcePropagationDelayException"
+}
+
+// Message returns the exception's message.
+func (s *ResourcePropagationDelayException) Message() string {
+	if s.Message_ != nil {
+		return *s.Message_
+	}
+	return ""
+}
+
+// OrigErr always returns nil, satisfies awserr.Error interface.
+func (s *ResourcePropagationDelayException) OrigErr() error {
+	return nil
+}
+
+func (s *ResourcePropagationDelayException) Error() string {
+	return fmt.Sprintf("%s: %s", s.Code(), s.Message())
+}
+
+// Status code returns the HTTP status code for the request's response error.
+func (s *ResourcePropagationDelayException) StatusCode() int {
+	return s.RespMetadata.StatusCode
+}
+
+// RequestID returns the service's response RequestID for request.
+func (s *ResourcePropagationDelayException) RequestID() string {
+	return s.RespMetadata.RequestID
+}
+
 // These errors are usually caused by a server-side issue.
 type ServerException struct {
 	_            struct{}                  `type:"structure"`
@@ -7361,12 +10737,20 @@ type ServerException struct {
 	NodegroupName *string `locationName:"nodegroupName" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ServerException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ServerException) GoString() string {
 	return s.String()
 }
@@ -7417,12 +10801,20 @@ type ServiceUnavailableException struct {
 	Message_ *string `locationName:"message" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ServiceUnavailableException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s ServiceUnavailableException) GoString() string {
 	return s.String()
 }
@@ -7480,12 +10872,20 @@ type TagResourceInput struct {
 	Tags map[string]*string `locationName:"tags" min:"1" type:"map" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s TagResourceInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s TagResourceInput) GoString() string {
 	return s.String()
 }
@@ -7528,14 +10928,86 @@ type TagResourceOutput struct {
 	_ struct{} `type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s TagResourceOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s TagResourceOutput) GoString() string {
 	return s.String()
+}
+
+// A property that allows a node to repel a set of pods. For more information,
+// see Node taints on managed node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+type Taint struct {
+	_ struct{} `type:"structure"`
+
+	// The effect of the taint.
+	Effect *string `locationName:"effect" type:"string" enum:"TaintEffect"`
+
+	// The key of the taint.
+	Key *string `locationName:"key" min:"1" type:"string"`
+
+	// The value of the taint.
+	Value *string `locationName:"value" type:"string"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s Taint) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s Taint) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *Taint) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "Taint"}
+	if s.Key != nil && len(*s.Key) < 1 {
+		invalidParams.Add(request.NewErrParamMinLen("Key", 1))
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetEffect sets the Effect field's value.
+func (s *Taint) SetEffect(v string) *Taint {
+	s.Effect = &v
+	return s
+}
+
+// SetKey sets the Key field's value.
+func (s *Taint) SetKey(v string) *Taint {
+	s.Key = &v
+	return s
+}
+
+// SetValue sets the Value field's value.
+func (s *Taint) SetValue(v string) *Taint {
+	s.Value = &v
+	return s
 }
 
 // At least one of your specified cluster subnets is in an Availability Zone
@@ -7559,12 +11031,20 @@ type UnsupportedAvailabilityZoneException struct {
 	ValidZones []*string `locationName:"validZones" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UnsupportedAvailabilityZoneException) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UnsupportedAvailabilityZoneException) GoString() string {
 	return s.String()
 }
@@ -7608,7 +11088,7 @@ func (s *UnsupportedAvailabilityZoneException) RequestID() string {
 }
 
 type UntagResourceInput struct {
-	_ struct{} `type:"structure"`
+	_ struct{} `type:"structure" nopayload:"true"`
 
 	// The Amazon Resource Name (ARN) of the resource from which to delete tags.
 	// Currently, the supported resources are Amazon EKS clusters and managed node
@@ -7623,12 +11103,20 @@ type UntagResourceInput struct {
 	TagKeys []*string `location:"querystring" locationName:"tagKeys" min:"1" type:"list" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UntagResourceInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UntagResourceInput) GoString() string {
 	return s.String()
 }
@@ -7671,12 +11159,20 @@ type UntagResourceOutput struct {
 	_ struct{} `type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UntagResourceOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UntagResourceOutput) GoString() string {
 	return s.String()
 }
@@ -7704,12 +11200,20 @@ type Update struct {
 	Type *string `locationName:"type" type:"string" enum:"UpdateType"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Update) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s Update) GoString() string {
 	return s.String()
 }
@@ -7772,8 +11276,18 @@ type UpdateAddonInput struct {
 	// ClusterName is a required field
 	ClusterName *string `location:"uri" locationName:"name" min:"1" type:"string" required:"true"`
 
-	// How to resolve parameter value conflicts when applying the new version of
-	// the add-on to the cluster.
+	// How to resolve field value conflicts for an Amazon EKS add-on if you've changed
+	// a value from the Amazon EKS default value. Conflicts are handled based on
+	// the option you choose:
+	//
+	//    * None – Amazon EKS doesn't change the value. The update might fail.
+	//
+	//    * Overwrite – Amazon EKS overwrites the changed value back to the Amazon
+	//    EKS default value.
+	//
+	//    * Preserve – Amazon EKS preserves the value. If you choose this option,
+	//    we recommend that you test any field and value changes on a non-production
+	//    cluster before updating the add-on on your production cluster.
 	ResolveConflicts *string `locationName:"resolveConflicts" type:"string" enum:"ResolveConflicts"`
 
 	// The Amazon Resource Name (ARN) of an existing IAM role to bind to the add-on's
@@ -7790,12 +11304,20 @@ type UpdateAddonInput struct {
 	ServiceAccountRoleArn *string `locationName:"serviceAccountRoleArn" min:"1" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateAddonInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateAddonInput) GoString() string {
 	return s.String()
 }
@@ -7868,12 +11390,20 @@ type UpdateAddonOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateAddonOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateAddonOutput) GoString() string {
 	return s.String()
 }
@@ -7893,13 +11423,13 @@ type UpdateClusterConfigInput struct {
 
 	// Enable or disable exporting the Kubernetes control plane logs for your cluster
 	// to CloudWatch Logs. By default, cluster control plane logs aren't exported
-	// to CloudWatch Logs. For more information, see Amazon EKS Cluster Control
-	// Plane Logs (https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)
+	// to CloudWatch Logs. For more information, see Amazon EKS cluster control
+	// plane logs (https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html)
 	// in the Amazon EKS User Guide .
 	//
 	// CloudWatch Logs ingestion, archive storage, and data scanning rates apply
-	// to exported control plane logs. For more information, see Amazon CloudWatch
-	// Pricing (http://aws.amazon.com/cloudwatch/pricing/).
+	// to exported control plane logs. For more information, see CloudWatch Pricing
+	// (http://aws.amazon.com/cloudwatch/pricing/).
 	Logging *Logging `locationName:"logging" type:"structure"`
 
 	// The name of the Amazon EKS cluster to update.
@@ -7911,12 +11441,20 @@ type UpdateClusterConfigInput struct {
 	ResourcesVpcConfig *VpcConfigRequest `locationName:"resourcesVpcConfig" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterConfigInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterConfigInput) GoString() string {
 	return s.String()
 }
@@ -7968,12 +11506,20 @@ type UpdateClusterConfigOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterConfigOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterConfigOutput) GoString() string {
 	return s.String()
 }
@@ -8002,12 +11548,20 @@ type UpdateClusterVersionInput struct {
 	Version *string `locationName:"version" type:"string" required:"true"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterVersionInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterVersionInput) GoString() string {
 	return s.String()
 }
@@ -8056,12 +11610,20 @@ type UpdateClusterVersionOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterVersionOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateClusterVersionOutput) GoString() string {
 	return s.String()
 }
@@ -8083,12 +11645,20 @@ type UpdateLabelsPayload struct {
 	RemoveLabels []*string `locationName:"removeLabels" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateLabelsPayload) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateLabelsPayload) GoString() string {
 	return s.String()
 }
@@ -8128,14 +11698,30 @@ type UpdateNodegroupConfigInput struct {
 
 	// The scaling configuration details for the Auto Scaling group after the update.
 	ScalingConfig *NodegroupScalingConfig `locationName:"scalingConfig" type:"structure"`
+
+	// The Kubernetes taints to be applied to the nodes in the node group after
+	// the update. For more information, see Node taints on managed node groups
+	// (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+	Taints *UpdateTaintsPayload `locationName:"taints" type:"structure"`
+
+	// The node group update configuration.
+	UpdateConfig *NodegroupUpdateConfig `locationName:"updateConfig" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupConfigInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupConfigInput) GoString() string {
 	return s.String()
 }
@@ -8158,6 +11744,16 @@ func (s *UpdateNodegroupConfigInput) Validate() error {
 	if s.ScalingConfig != nil {
 		if err := s.ScalingConfig.Validate(); err != nil {
 			invalidParams.AddNested("ScalingConfig", err.(request.ErrInvalidParams))
+		}
+	}
+	if s.Taints != nil {
+		if err := s.Taints.Validate(); err != nil {
+			invalidParams.AddNested("Taints", err.(request.ErrInvalidParams))
+		}
+	}
+	if s.UpdateConfig != nil {
+		if err := s.UpdateConfig.Validate(); err != nil {
+			invalidParams.AddNested("UpdateConfig", err.(request.ErrInvalidParams))
 		}
 	}
 
@@ -8197,6 +11793,18 @@ func (s *UpdateNodegroupConfigInput) SetScalingConfig(v *NodegroupScalingConfig)
 	return s
 }
 
+// SetTaints sets the Taints field's value.
+func (s *UpdateNodegroupConfigInput) SetTaints(v *UpdateTaintsPayload) *UpdateNodegroupConfigInput {
+	s.Taints = v
+	return s
+}
+
+// SetUpdateConfig sets the UpdateConfig field's value.
+func (s *UpdateNodegroupConfigInput) SetUpdateConfig(v *NodegroupUpdateConfig) *UpdateNodegroupConfigInput {
+	s.UpdateConfig = v
+	return s
+}
+
 type UpdateNodegroupConfigOutput struct {
 	_ struct{} `type:"structure"`
 
@@ -8204,12 +11812,20 @@ type UpdateNodegroupConfigOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupConfigOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupConfigOutput) GoString() string {
 	return s.String()
 }
@@ -8271,12 +11887,20 @@ type UpdateNodegroupVersionInput struct {
 	Version *string `locationName:"version" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupVersionInput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupVersionInput) GoString() string {
 	return s.String()
 }
@@ -8352,12 +11976,20 @@ type UpdateNodegroupVersionOutput struct {
 	Update *Update `locationName:"update" type:"structure"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupVersionOutput) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateNodegroupVersionOutput) GoString() string {
 	return s.String()
 }
@@ -8379,12 +12011,20 @@ type UpdateParam struct {
 	Value *string `locationName:"value" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateParam) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s UpdateParam) GoString() string {
 	return s.String()
 }
@@ -8401,6 +12041,78 @@ func (s *UpdateParam) SetValue(v string) *UpdateParam {
 	return s
 }
 
+// An object representing the details of an update to a taints payload. For
+// more information, see Node taints on managed node groups (https://docs.aws.amazon.com/eks/latest/userguide/node-taints-managed-node-groups.html).
+type UpdateTaintsPayload struct {
+	_ struct{} `type:"structure"`
+
+	// Kubernetes taints to be added or updated.
+	AddOrUpdateTaints []*Taint `locationName:"addOrUpdateTaints" type:"list"`
+
+	// Kubernetes taints to be removed.
+	RemoveTaints []*Taint `locationName:"removeTaints" type:"list"`
+}
+
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s UpdateTaintsPayload) String() string {
+	return awsutil.Prettify(s)
+}
+
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
+func (s UpdateTaintsPayload) GoString() string {
+	return s.String()
+}
+
+// Validate inspects the fields of the type to determine if they are valid.
+func (s *UpdateTaintsPayload) Validate() error {
+	invalidParams := request.ErrInvalidParams{Context: "UpdateTaintsPayload"}
+	if s.AddOrUpdateTaints != nil {
+		for i, v := range s.AddOrUpdateTaints {
+			if v == nil {
+				continue
+			}
+			if err := v.Validate(); err != nil {
+				invalidParams.AddNested(fmt.Sprintf("%s[%v]", "AddOrUpdateTaints", i), err.(request.ErrInvalidParams))
+			}
+		}
+	}
+	if s.RemoveTaints != nil {
+		for i, v := range s.RemoveTaints {
+			if v == nil {
+				continue
+			}
+			if err := v.Validate(); err != nil {
+				invalidParams.AddNested(fmt.Sprintf("%s[%v]", "RemoveTaints", i), err.(request.ErrInvalidParams))
+			}
+		}
+	}
+
+	if invalidParams.Len() > 0 {
+		return invalidParams
+	}
+	return nil
+}
+
+// SetAddOrUpdateTaints sets the AddOrUpdateTaints field's value.
+func (s *UpdateTaintsPayload) SetAddOrUpdateTaints(v []*Taint) *UpdateTaintsPayload {
+	s.AddOrUpdateTaints = v
+	return s
+}
+
+// SetRemoveTaints sets the RemoveTaints field's value.
+func (s *UpdateTaintsPayload) SetRemoveTaints(v []*Taint) *UpdateTaintsPayload {
+	s.RemoveTaints = v
+	return s
+}
+
 // An object representing the VPC configuration to use for an Amazon EKS cluster.
 type VpcConfigRequest struct {
 	_ struct{} `type:"structure"`
@@ -8409,11 +12121,10 @@ type VpcConfigRequest struct {
 	// API server endpoint. If you enable private access, Kubernetes API requests
 	// from within your cluster's VPC use the private VPC endpoint. The default
 	// value for this parameter is false, which disables private access for your
-	// Kubernetes API server. If you disable private access and you have worker
-	// nodes or AWS Fargate pods in the cluster, then ensure that publicAccessCidrs
-	// includes the necessary CIDR blocks for communication with the worker nodes
-	// or Fargate pods. For more information, see Amazon EKS Cluster Endpoint Access
-	// Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+	// Kubernetes API server. If you disable private access and you have nodes or
+	// Fargate pods in the cluster, then ensure that publicAccessCidrs includes
+	// the necessary CIDR blocks for communication with the nodes or Fargate pods.
+	// For more information, see Amazon EKS cluster endpoint access control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 	// in the Amazon EKS User Guide .
 	EndpointPrivateAccess *bool `locationName:"endpointPrivateAccess" type:"boolean"`
 
@@ -8421,47 +12132,49 @@ type VpcConfigRequest struct {
 	// API server endpoint. If you disable public access, your cluster's Kubernetes
 	// API server can only receive requests from within the cluster VPC. The default
 	// value for this parameter is true, which enables public access for your Kubernetes
-	// API server. For more information, see Amazon EKS Cluster Endpoint Access
-	// Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+	// API server. For more information, see Amazon EKS cluster endpoint access
+	// control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 	// in the Amazon EKS User Guide .
 	EndpointPublicAccess *bool `locationName:"endpointPublicAccess" type:"boolean"`
 
 	// The CIDR blocks that are allowed access to your cluster's public Kubernetes
 	// API server endpoint. Communication to the endpoint from addresses outside
 	// of the CIDR blocks that you specify is denied. The default value is 0.0.0.0/0.
-	// If you've disabled private endpoint access and you have worker nodes or AWS
-	// Fargate pods in the cluster, then ensure that you specify the necessary CIDR
-	// blocks. For more information, see Amazon EKS Cluster Endpoint Access Control
-	// (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+	// If you've disabled private endpoint access and you have nodes or Fargate
+	// pods in the cluster, then ensure that you specify the necessary CIDR blocks.
+	// For more information, see Amazon EKS cluster endpoint access control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 	// in the Amazon EKS User Guide .
 	PublicAccessCidrs []*string `locationName:"publicAccessCidrs" type:"list"`
 
 	// Specify one or more security groups for the cross-account elastic network
-	// interfaces that Amazon EKS creates to use to allow communication between
-	// your worker nodes and the Kubernetes control plane. If you don't specify
-	// any security groups, then familiarize yourself with the difference between
-	// Amazon EKS defaults for clusters deployed with Kubernetes:
-	//
-	//    * 1.14 Amazon EKS platform version eks.2 and earlier
-	//
-	//    * 1.14 Amazon EKS platform version eks.3 and later
-	//
-	// For more information, see Amazon EKS security group considerations (https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html)
+	// interfaces that Amazon EKS creates to use that allow communication between
+	// your nodes and the Kubernetes control plane. If you don't specify any security
+	// groups, then familiarize yourself with the difference between Amazon EKS
+	// defaults for clusters deployed with Kubernetes. For more information, see
+	// Amazon EKS security group considerations (https://docs.aws.amazon.com/eks/latest/userguide/sec-group-reqs.html)
 	// in the Amazon EKS User Guide .
 	SecurityGroupIds []*string `locationName:"securityGroupIds" type:"list"`
 
-	// Specify subnets for your Amazon EKS worker nodes. Amazon EKS creates cross-account
+	// Specify subnets for your Amazon EKS nodes. Amazon EKS creates cross-account
 	// elastic network interfaces in these subnets to allow communication between
-	// your worker nodes and the Kubernetes control plane.
+	// your nodes and the Kubernetes control plane.
 	SubnetIds []*string `locationName:"subnetIds" type:"list"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s VpcConfigRequest) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s VpcConfigRequest) GoString() string {
 	return s.String()
 }
@@ -8509,10 +12222,10 @@ type VpcConfigResponse struct {
 	// is enabled. If the Amazon EKS private API server endpoint is enabled, Kubernetes
 	// API requests that originate from within your cluster's VPC use the private
 	// VPC endpoint instead of traversing the internet. If this value is disabled
-	// and you have worker nodes or AWS Fargate pods in the cluster, then ensure
-	// that publicAccessCidrs includes the necessary CIDR blocks for communication
-	// with the worker nodes or Fargate pods. For more information, see Amazon EKS
-	// Cluster Endpoint Access Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+	// and you have nodes or Fargate pods in the cluster, then ensure that publicAccessCidrs
+	// includes the necessary CIDR blocks for communication with the nodes or Fargate
+	// pods. For more information, see Amazon EKS cluster endpoint access control
+	// (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 	// in the Amazon EKS User Guide .
 	EndpointPrivateAccess *bool `locationName:"endpointPrivateAccess" type:"boolean"`
 
@@ -8525,14 +12238,14 @@ type VpcConfigResponse struct {
 	// The CIDR blocks that are allowed access to your cluster's public Kubernetes
 	// API server endpoint. Communication to the endpoint from addresses outside
 	// of the listed CIDR blocks is denied. The default value is 0.0.0.0/0. If you've
-	// disabled private endpoint access and you have worker nodes or AWS Fargate
-	// pods in the cluster, then ensure that the necessary CIDR blocks are listed.
-	// For more information, see Amazon EKS Cluster Endpoint Access Control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
+	// disabled private endpoint access and you have nodes or Fargate pods in the
+	// cluster, then ensure that the necessary CIDR blocks are listed. For more
+	// information, see Amazon EKS cluster endpoint access control (https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html)
 	// in the Amazon EKS User Guide .
 	PublicAccessCidrs []*string `locationName:"publicAccessCidrs" type:"list"`
 
 	// The security groups associated with the cross-account elastic network interfaces
-	// that are used to allow communication between your worker nodes and the Kubernetes
+	// that are used to allow communication between your nodes and the Kubernetes
 	// control plane.
 	SecurityGroupIds []*string `locationName:"securityGroupIds" type:"list"`
 
@@ -8543,12 +12256,20 @@ type VpcConfigResponse struct {
 	VpcId *string `locationName:"vpcId" type:"string"`
 }
 
-// String returns the string representation
+// String returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s VpcConfigResponse) String() string {
 	return awsutil.Prettify(s)
 }
 
-// GoString returns the string representation
+// GoString returns the string representation.
+//
+// API parameter values that are decorated as "sensitive" in the API will not
+// be included in the string output. The member name will be present, but the
+// value will be replaced with "sensitive".
 func (s VpcConfigResponse) GoString() string {
 	return s.String()
 }
@@ -8604,6 +12325,21 @@ const (
 
 	// AMITypesAl2Arm64 is a AMITypes enum value
 	AMITypesAl2Arm64 = "AL2_ARM_64"
+
+	// AMITypesCustom is a AMITypes enum value
+	AMITypesCustom = "CUSTOM"
+
+	// AMITypesBottlerocketArm64 is a AMITypes enum value
+	AMITypesBottlerocketArm64 = "BOTTLEROCKET_ARM_64"
+
+	// AMITypesBottlerocketX8664 is a AMITypes enum value
+	AMITypesBottlerocketX8664 = "BOTTLEROCKET_x86_64"
+
+	// AMITypesBottlerocketArm64Nvidia is a AMITypes enum value
+	AMITypesBottlerocketArm64Nvidia = "BOTTLEROCKET_ARM_64_NVIDIA"
+
+	// AMITypesBottlerocketX8664Nvidia is a AMITypes enum value
+	AMITypesBottlerocketX8664Nvidia = "BOTTLEROCKET_x86_64_NVIDIA"
 )
 
 // AMITypes_Values returns all elements of the AMITypes enum
@@ -8612,6 +12348,11 @@ func AMITypes_Values() []string {
 		AMITypesAl2X8664,
 		AMITypesAl2X8664Gpu,
 		AMITypesAl2Arm64,
+		AMITypesCustom,
+		AMITypesBottlerocketArm64,
+		AMITypesBottlerocketX8664,
+		AMITypesBottlerocketArm64Nvidia,
+		AMITypesBottlerocketX8664Nvidia,
 	}
 }
 
@@ -8630,6 +12371,15 @@ const (
 
 	// AddonIssueCodeConfigurationConflict is a AddonIssueCode enum value
 	AddonIssueCodeConfigurationConflict = "ConfigurationConflict"
+
+	// AddonIssueCodeAdmissionRequestDenied is a AddonIssueCode enum value
+	AddonIssueCodeAdmissionRequestDenied = "AdmissionRequestDenied"
+
+	// AddonIssueCodeUnsupportedAddonModification is a AddonIssueCode enum value
+	AddonIssueCodeUnsupportedAddonModification = "UnsupportedAddonModification"
+
+	// AddonIssueCodeK8sResourceNotFound is a AddonIssueCode enum value
+	AddonIssueCodeK8sResourceNotFound = "K8sResourceNotFound"
 )
 
 // AddonIssueCode_Values returns all elements of the AddonIssueCode enum
@@ -8640,6 +12390,9 @@ func AddonIssueCode_Values() []string {
 		AddonIssueCodeClusterUnreachable,
 		AddonIssueCodeInsufficientNumberOfReplicas,
 		AddonIssueCodeConfigurationConflict,
+		AddonIssueCodeAdmissionRequestDenied,
+		AddonIssueCodeUnsupportedAddonModification,
+		AddonIssueCodeK8sResourceNotFound,
 	}
 }
 
@@ -8664,6 +12417,9 @@ const (
 
 	// AddonStatusDegraded is a AddonStatus enum value
 	AddonStatusDegraded = "DEGRADED"
+
+	// AddonStatusUpdateFailed is a AddonStatus enum value
+	AddonStatusUpdateFailed = "UPDATE_FAILED"
 )
 
 // AddonStatus_Values returns all elements of the AddonStatus enum
@@ -8676,6 +12432,7 @@ func AddonStatus_Values() []string {
 		AddonStatusDeleting,
 		AddonStatusDeleteFailed,
 		AddonStatusDegraded,
+		AddonStatusUpdateFailed,
 	}
 }
 
@@ -8696,6 +12453,38 @@ func CapacityTypes_Values() []string {
 }
 
 const (
+	// ClusterIssueCodeAccessDenied is a ClusterIssueCode enum value
+	ClusterIssueCodeAccessDenied = "AccessDenied"
+
+	// ClusterIssueCodeClusterUnreachable is a ClusterIssueCode enum value
+	ClusterIssueCodeClusterUnreachable = "ClusterUnreachable"
+
+	// ClusterIssueCodeConfigurationConflict is a ClusterIssueCode enum value
+	ClusterIssueCodeConfigurationConflict = "ConfigurationConflict"
+
+	// ClusterIssueCodeInternalFailure is a ClusterIssueCode enum value
+	ClusterIssueCodeInternalFailure = "InternalFailure"
+
+	// ClusterIssueCodeResourceLimitExceeded is a ClusterIssueCode enum value
+	ClusterIssueCodeResourceLimitExceeded = "ResourceLimitExceeded"
+
+	// ClusterIssueCodeResourceNotFound is a ClusterIssueCode enum value
+	ClusterIssueCodeResourceNotFound = "ResourceNotFound"
+)
+
+// ClusterIssueCode_Values returns all elements of the ClusterIssueCode enum
+func ClusterIssueCode_Values() []string {
+	return []string{
+		ClusterIssueCodeAccessDenied,
+		ClusterIssueCodeClusterUnreachable,
+		ClusterIssueCodeConfigurationConflict,
+		ClusterIssueCodeInternalFailure,
+		ClusterIssueCodeResourceLimitExceeded,
+		ClusterIssueCodeResourceNotFound,
+	}
+}
+
+const (
 	// ClusterStatusCreating is a ClusterStatus enum value
 	ClusterStatusCreating = "CREATING"
 
@@ -8710,6 +12499,9 @@ const (
 
 	// ClusterStatusUpdating is a ClusterStatus enum value
 	ClusterStatusUpdating = "UPDATING"
+
+	// ClusterStatusPending is a ClusterStatus enum value
+	ClusterStatusPending = "PENDING"
 )
 
 // ClusterStatus_Values returns all elements of the ClusterStatus enum
@@ -8720,6 +12512,71 @@ func ClusterStatus_Values() []string {
 		ClusterStatusDeleting,
 		ClusterStatusFailed,
 		ClusterStatusUpdating,
+		ClusterStatusPending,
+	}
+}
+
+const (
+	// ConfigStatusCreating is a ConfigStatus enum value
+	ConfigStatusCreating = "CREATING"
+
+	// ConfigStatusDeleting is a ConfigStatus enum value
+	ConfigStatusDeleting = "DELETING"
+
+	// ConfigStatusActive is a ConfigStatus enum value
+	ConfigStatusActive = "ACTIVE"
+)
+
+// ConfigStatus_Values returns all elements of the ConfigStatus enum
+func ConfigStatus_Values() []string {
+	return []string{
+		ConfigStatusCreating,
+		ConfigStatusDeleting,
+		ConfigStatusActive,
+	}
+}
+
+const (
+	// ConnectorConfigProviderEksAnywhere is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderEksAnywhere = "EKS_ANYWHERE"
+
+	// ConnectorConfigProviderAnthos is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderAnthos = "ANTHOS"
+
+	// ConnectorConfigProviderGke is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderGke = "GKE"
+
+	// ConnectorConfigProviderAks is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderAks = "AKS"
+
+	// ConnectorConfigProviderOpenshift is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderOpenshift = "OPENSHIFT"
+
+	// ConnectorConfigProviderTanzu is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderTanzu = "TANZU"
+
+	// ConnectorConfigProviderRancher is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderRancher = "RANCHER"
+
+	// ConnectorConfigProviderEc2 is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderEc2 = "EC2"
+
+	// ConnectorConfigProviderOther is a ConnectorConfigProvider enum value
+	ConnectorConfigProviderOther = "OTHER"
+)
+
+// ConnectorConfigProvider_Values returns all elements of the ConnectorConfigProvider enum
+func ConnectorConfigProvider_Values() []string {
+	return []string{
+		ConnectorConfigProviderEksAnywhere,
+		ConnectorConfigProviderAnthos,
+		ConnectorConfigProviderGke,
+		ConnectorConfigProviderAks,
+		ConnectorConfigProviderOpenshift,
+		ConnectorConfigProviderTanzu,
+		ConnectorConfigProviderRancher,
+		ConnectorConfigProviderEc2,
+		ConnectorConfigProviderOther,
 	}
 }
 
@@ -8765,6 +12622,15 @@ const (
 
 	// ErrorCodeConfigurationConflict is a ErrorCode enum value
 	ErrorCodeConfigurationConflict = "ConfigurationConflict"
+
+	// ErrorCodeAdmissionRequestDenied is a ErrorCode enum value
+	ErrorCodeAdmissionRequestDenied = "AdmissionRequestDenied"
+
+	// ErrorCodeUnsupportedAddonModification is a ErrorCode enum value
+	ErrorCodeUnsupportedAddonModification = "UnsupportedAddonModification"
+
+	// ErrorCodeK8sResourceNotFound is a ErrorCode enum value
+	ErrorCodeK8sResourceNotFound = "K8sResourceNotFound"
 )
 
 // ErrorCode_Values returns all elements of the ErrorCode enum
@@ -8784,6 +12650,9 @@ func ErrorCode_Values() []string {
 		ErrorCodeClusterUnreachable,
 		ErrorCodeInsufficientNumberOfReplicas,
 		ErrorCodeConfigurationConflict,
+		ErrorCodeAdmissionRequestDenied,
+		ErrorCodeUnsupportedAddonModification,
+		ErrorCodeK8sResourceNotFound,
 	}
 }
 
@@ -8812,6 +12681,22 @@ func FargateProfileStatus_Values() []string {
 		FargateProfileStatusDeleting,
 		FargateProfileStatusCreateFailed,
 		FargateProfileStatusDeleteFailed,
+	}
+}
+
+const (
+	// IpFamilyIpv4 is a IpFamily enum value
+	IpFamilyIpv4 = "ipv4"
+
+	// IpFamilyIpv6 is a IpFamily enum value
+	IpFamilyIpv6 = "ipv6"
+)
+
+// IpFamily_Values returns all elements of the IpFamily enum
+func IpFamily_Values() []string {
+	return []string{
+		IpFamilyIpv4,
+		IpFamilyIpv6,
 	}
 }
 
@@ -8897,6 +12782,9 @@ const (
 
 	// NodegroupIssueCodeClusterUnreachable is a NodegroupIssueCode enum value
 	NodegroupIssueCodeClusterUnreachable = "ClusterUnreachable"
+
+	// NodegroupIssueCodeEc2subnetMissingIpv6assignment is a NodegroupIssueCode enum value
+	NodegroupIssueCodeEc2subnetMissingIpv6assignment = "Ec2SubnetMissingIpv6Assignment"
 )
 
 // NodegroupIssueCode_Values returns all elements of the NodegroupIssueCode enum
@@ -8920,6 +12808,7 @@ func NodegroupIssueCode_Values() []string {
 		NodegroupIssueCodeAccessDenied,
 		NodegroupIssueCodeInternalFailure,
 		NodegroupIssueCodeClusterUnreachable,
+		NodegroupIssueCodeEc2subnetMissingIpv6assignment,
 	}
 }
 
@@ -8965,6 +12854,9 @@ const (
 
 	// ResolveConflictsNone is a ResolveConflicts enum value
 	ResolveConflictsNone = "NONE"
+
+	// ResolveConflictsPreserve is a ResolveConflicts enum value
+	ResolveConflictsPreserve = "PRESERVE"
 )
 
 // ResolveConflicts_Values returns all elements of the ResolveConflicts enum
@@ -8972,6 +12864,27 @@ func ResolveConflicts_Values() []string {
 	return []string{
 		ResolveConflictsOverwrite,
 		ResolveConflictsNone,
+		ResolveConflictsPreserve,
+	}
+}
+
+const (
+	// TaintEffectNoSchedule is a TaintEffect enum value
+	TaintEffectNoSchedule = "NO_SCHEDULE"
+
+	// TaintEffectNoExecute is a TaintEffect enum value
+	TaintEffectNoExecute = "NO_EXECUTE"
+
+	// TaintEffectPreferNoSchedule is a TaintEffect enum value
+	TaintEffectPreferNoSchedule = "PREFER_NO_SCHEDULE"
+)
+
+// TaintEffect_Values returns all elements of the TaintEffect enum
+func TaintEffect_Values() []string {
+	return []string{
+		TaintEffectNoSchedule,
+		TaintEffectNoExecute,
+		TaintEffectPreferNoSchedule,
 	}
 }
 
@@ -9000,6 +12913,12 @@ const (
 	// UpdateParamTypeLabelsToRemove is a UpdateParamType enum value
 	UpdateParamTypeLabelsToRemove = "LabelsToRemove"
 
+	// UpdateParamTypeTaintsToAdd is a UpdateParamType enum value
+	UpdateParamTypeTaintsToAdd = "TaintsToAdd"
+
+	// UpdateParamTypeTaintsToRemove is a UpdateParamType enum value
+	UpdateParamTypeTaintsToRemove = "TaintsToRemove"
+
 	// UpdateParamTypeMaxSize is a UpdateParamType enum value
 	UpdateParamTypeMaxSize = "MaxSize"
 
@@ -9012,6 +12931,18 @@ const (
 	// UpdateParamTypePublicAccessCidrs is a UpdateParamType enum value
 	UpdateParamTypePublicAccessCidrs = "PublicAccessCidrs"
 
+	// UpdateParamTypeLaunchTemplateName is a UpdateParamType enum value
+	UpdateParamTypeLaunchTemplateName = "LaunchTemplateName"
+
+	// UpdateParamTypeLaunchTemplateVersion is a UpdateParamType enum value
+	UpdateParamTypeLaunchTemplateVersion = "LaunchTemplateVersion"
+
+	// UpdateParamTypeIdentityProviderConfig is a UpdateParamType enum value
+	UpdateParamTypeIdentityProviderConfig = "IdentityProviderConfig"
+
+	// UpdateParamTypeEncryptionConfig is a UpdateParamType enum value
+	UpdateParamTypeEncryptionConfig = "EncryptionConfig"
+
 	// UpdateParamTypeAddonVersion is a UpdateParamType enum value
 	UpdateParamTypeAddonVersion = "AddonVersion"
 
@@ -9020,6 +12951,12 @@ const (
 
 	// UpdateParamTypeResolveConflicts is a UpdateParamType enum value
 	UpdateParamTypeResolveConflicts = "ResolveConflicts"
+
+	// UpdateParamTypeMaxUnavailable is a UpdateParamType enum value
+	UpdateParamTypeMaxUnavailable = "MaxUnavailable"
+
+	// UpdateParamTypeMaxUnavailablePercentage is a UpdateParamType enum value
+	UpdateParamTypeMaxUnavailablePercentage = "MaxUnavailablePercentage"
 )
 
 // UpdateParamType_Values returns all elements of the UpdateParamType enum
@@ -9033,13 +12970,21 @@ func UpdateParamType_Values() []string {
 		UpdateParamTypeDesiredSize,
 		UpdateParamTypeLabelsToAdd,
 		UpdateParamTypeLabelsToRemove,
+		UpdateParamTypeTaintsToAdd,
+		UpdateParamTypeTaintsToRemove,
 		UpdateParamTypeMaxSize,
 		UpdateParamTypeMinSize,
 		UpdateParamTypeReleaseVersion,
 		UpdateParamTypePublicAccessCidrs,
+		UpdateParamTypeLaunchTemplateName,
+		UpdateParamTypeLaunchTemplateVersion,
+		UpdateParamTypeIdentityProviderConfig,
+		UpdateParamTypeEncryptionConfig,
 		UpdateParamTypeAddonVersion,
 		UpdateParamTypeServiceAccountRoleArn,
 		UpdateParamTypeResolveConflicts,
+		UpdateParamTypeMaxUnavailable,
+		UpdateParamTypeMaxUnavailablePercentage,
 	}
 }
 
@@ -9080,6 +13025,15 @@ const (
 	// UpdateTypeConfigUpdate is a UpdateType enum value
 	UpdateTypeConfigUpdate = "ConfigUpdate"
 
+	// UpdateTypeAssociateIdentityProviderConfig is a UpdateType enum value
+	UpdateTypeAssociateIdentityProviderConfig = "AssociateIdentityProviderConfig"
+
+	// UpdateTypeDisassociateIdentityProviderConfig is a UpdateType enum value
+	UpdateTypeDisassociateIdentityProviderConfig = "DisassociateIdentityProviderConfig"
+
+	// UpdateTypeAssociateEncryptionConfig is a UpdateType enum value
+	UpdateTypeAssociateEncryptionConfig = "AssociateEncryptionConfig"
+
 	// UpdateTypeAddonUpdate is a UpdateType enum value
 	UpdateTypeAddonUpdate = "AddonUpdate"
 )
@@ -9091,6 +13045,9 @@ func UpdateType_Values() []string {
 		UpdateTypeEndpointAccessUpdate,
 		UpdateTypeLoggingUpdate,
 		UpdateTypeConfigUpdate,
+		UpdateTypeAssociateIdentityProviderConfig,
+		UpdateTypeDisassociateIdentityProviderConfig,
+		UpdateTypeAssociateEncryptionConfig,
 		UpdateTypeAddonUpdate,
 	}
 }

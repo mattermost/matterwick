@@ -47,10 +47,16 @@ type MattermostSpec struct {
 	// LicenseSecret is the name of the secret containing a Mattermost license.
 	// +optional
 	LicenseSecret string `json:"licenseSecret,omitempty"`
-	// IngressName defines the name to be used when creating the ingress rules
+	// IngressName defines the host to be used when creating the ingress rules.
+	// Deprecated: Use Spec.Ingress.Host instead.
+	// +optional
 	IngressName string `json:"ingressName"`
+	// IngressAnnotations defines annotations passed to the Ingress associated with Mattermost.
+	// Deprecated: Use Spec.Ingress.Annotations.
 	// +optional
 	IngressAnnotations map[string]string `json:"ingressAnnotations,omitempty"`
+	// UseIngressTLS specifies whether TLS secret should be configured for Ingress.
+	// Deprecated: Use Spec.Ingress.TLSSecret.
 	// +optional
 	UseIngressTLS bool `json:"useIngressTLS,omitempty"`
 	// +optional
@@ -59,6 +65,16 @@ type MattermostSpec struct {
 	ServiceAnnotations map[string]string `json:"serviceAnnotations,omitempty"`
 	// +optional
 	ResourceLabels map[string]string `json:"resourceLabels,omitempty"`
+
+	// TODO: Before adding Ingress section Operator would always create the Ingress.
+	// Therefore to preserve it as a default behavior this field needs to be optional
+	// otherwise Ingress.Enabled will default to false.
+	// After we drop old Ingress fields in new CR version this no longer needs to be a pointer
+	// and we can default to not creating Ingress. We can also then remove the accessor methods.
+
+	// Ingress defines configuration for Ingress resource created by the Operator.
+	// +optional
+	Ingress *Ingress `json:"ingress,omitempty"`
 	// Volumes allows for mounting volumes from various sources into the
 	// Mattermost application pods.
 	// +optional
@@ -72,6 +88,13 @@ type MattermostSpec struct {
 	// Specify Mattermost image pull secrets.
 	// +optional
 	ImagePullSecrets []v1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// Custom DNS configuration to use for the Mattermost Installation pods.
+	// +optional
+	DNSConfig *v1.PodDNSConfig `json:"dnsConfig,omitempty"`
+	// Custom DNS policy to use for the Mattermost Installation pods.
+	// +optional
+	DNSPolicy v1.DNSPolicy `json:"dnsPolicy,omitempty"`
 
 	// External Services
 	Database      Database      `json:"database,omitempty"`
@@ -89,6 +112,74 @@ type MattermostSpec struct {
 	// These settings generally don't need to be changed.
 	// +optional
 	Probes Probes `json:"probes,omitempty"`
+
+	// PodTemplate defines configuration for the template for Mattermost pods.
+	// +optional
+	PodTemplate *PodTemplate `json:"podTemplate,omitempty"`
+
+	// UpdateJob defines configuration for the template for the update job.
+	// +optional
+	UpdateJob *UpdateJob `json:"updateJob,omitempty"`
+
+	// PodExtensions specify custom extensions for Mattermost pods.
+	// This can be used for custom readiness checks etc.
+	// These settings generally don't need to be changed.
+	// +optional
+	PodExtensions PodExtensions `json:"podExtensions,omitempty"`
+
+	// ResourcePatch specifies JSON patches that can be applied to resources created by Mattermost Operator.
+	//
+	// WARNING: ResourcePatch is highly experimental and subject to change.
+	// Some patches may be impossible to perform or may impact the stability of Mattermost server.
+	//
+	// Use at your own risk when no other options are available.
+	ResourcePatch *ResourcePatch `json:"resourcePatch,omitempty"`
+}
+
+// ResourcePatch allows defined custom  patches to resources.
+type ResourcePatch struct {
+	Service    *Patch `json:"service,omitempty"`
+	Deployment *Patch `json:"deployment,omitempty"`
+}
+
+type Patch struct {
+	Disable bool   `json:"disable,omitempty"`
+	Patch   string `json:"patch,omitempty"`
+}
+
+// TODO:
+// For future extendability we are creating new struct for additional hosts instead of using simple []string.
+// Moving forward we might want to drop `Host` field and support only `Hosts` but we cannot break
+// compatibility for now.
+
+// Ingress defines configuration for Ingress resource created by the Operator.
+type Ingress struct {
+	// Enabled determines whether the Operator should create Ingress resource or not.
+	// Disabling ingress on existing installation will cause Operator to remove it.
+	Enabled bool `json:"enabled"`
+	// Host defines the Ingress host to be used when creating the ingress rules.
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// Hosts allows specifying additional domain names for Mattermost to use.
+	// +optional
+	Hosts []IngressHost `json:"hosts,omitempty"`
+
+	// Annotations defines annotations passed to the Ingress associated with Mattermost.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+	// TLSSecret specifies secret used for configuring TLS for Ingress.
+	// If empty TLS will not be configured.
+	// +optional
+	TLSSecret string `json:"tlsSecret,omitempty"`
+	// IngressClass will be set on Ingress resource to associate it with specified IngressClass resource.
+	// +optional
+	IngressClass *string `json:"ingressClass,omitempty"`
+}
+
+// IngressHost specifies additional hosts configuration.
+type IngressHost struct {
+	HostName string `json:"hostName,omitempty"`
 }
 
 // Scheduling defines the configuration related to scheduling of the Mattermost pods
@@ -105,6 +196,10 @@ type Scheduling struct {
 	// If specified, affinity will define the pod's scheduling constraints
 	// +optional
 	Affinity *v1.Affinity `json:"affinity,omitempty"`
+	// Defines tolerations for the Mattermost app server pods
+	// More info: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+	// +optional
+	Tolerations []v1.Toleration `json:"tolerations,omitempty"`
 }
 
 // Probes defines configuration of liveness and readiness probe for Mattermost pods.
@@ -117,6 +212,45 @@ type Probes struct {
 	ReadinessProbe v1.Probe `json:"readinessProbe,omitempty"`
 }
 
+// PodTemplate defines configuration for the template for Mattermost pods.
+type PodTemplate struct {
+	// Defines the security context for the Mattermost app server pods.
+	// +optional
+	SecurityContext *v1.PodSecurityContext `json:"securityContext,omitempty"`
+	// Defines the security context for the Mattermost app server container.
+	// +optional
+	ContainerSecurityContext *v1.SecurityContext `json:"containerSecurityContext,omitempty"`
+	// Defines annotations to add to the Mattermost app server pods.
+	// Overrides of default prometheus annotations are ignored.
+	// +optional
+	ExtraAnnotations map[string]string `json:"extraAnnotations,omitempty"`
+	// Defines labels to add to the Mattermost app server pods.
+	// Overrides what is set in ResourceLabels, does not override default labels (app and cluster labels).
+	// +optional
+	ExtraLabels map[string]string `json:"extraLabels,omitempty"`
+}
+
+// UpdateJob defines configuration for the template for the update job pod.
+type UpdateJob struct {
+	// Determines whether to disable the Operator's creation of the update job.
+	// +optional
+	Disabled bool `json:"disabled,omitempty"`
+	// Defines annotations to add to the update job pod.
+	// +optional
+	ExtraAnnotations map[string]string `json:"extraAnnotations,omitempty"`
+	// Defines labels to add to the update job pod.
+	// Overrides what is set in ResourceLabels, does not override default label (app label).
+	// +optional
+	ExtraLabels map[string]string `json:"extraLabels,omitempty"`
+}
+
+// PodExtensions specify customized extensions for a pod.
+type PodExtensions struct {
+	// Additional InitContainers injected to pods.
+	// The setting does not override InitContainers defined by the Operator.
+	InitContainers []v1.Container `json:"initContainers,omitempty"`
+}
+
 // Database defines the database configuration for Mattermost.
 type Database struct {
 	// Defines the configuration of and external database.
@@ -125,6 +259,11 @@ type Database struct {
 	// Defines the configuration of database managed by Kubernetes operator.
 	// +optional
 	OperatorManaged *OperatorManagedDatabase `json:"operatorManaged,omitempty"`
+
+	// DisableReadinessCheck instructs Operator to not add init container responsible for checking DB access.
+	// Can be used to define custom init containers specified in `spec.PodExtensions.InitContainers`.
+	// +optional
+	DisableReadinessCheck bool `json:"disableReadinessCheck,omitempty"`
 }
 
 // ExternalDatabase defines the configuration of the external database that should be used by Mattermost.
@@ -135,6 +274,7 @@ type ExternalDatabase struct {
 	// It can also contain optional fields, such as:
 	//   - Key: MM_SQLSETTINGS_DATASOURCEREPLICAS | Value: Connection string to read replicas of the database.
 	//   - Key: DB_CONNECTION_CHECK_URL | Value: The URL used for checking that the database is accessible.
+	//     Omitting this value in the secret will cause Operator to skip adding init container for database check.
 	Secret string `json:"secret,omitempty"`
 }
 
@@ -235,6 +375,9 @@ type RunningState string
 const (
 	// Reconciling is the state when the Mattermost instance is being updated
 	Reconciling RunningState = "reconciling"
+	// Ready is the state when the Mattermost instance is ready to start serving
+	// traffic but not fully stable.
+	Ready RunningState = "ready"
 	// Stable is the state when the Mattermost instance is fully running
 	Stable RunningState = "stable"
 )
@@ -260,6 +403,26 @@ type MattermostStatus struct {
 	// that are running with the desired image.
 	// +optional
 	UpdatedReplicas int32 `json:"updatedReplicas,omitempty"`
+	// The last observed Generation of the Mattermost resource that was acted on.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// The last observed error in the deployment of this Mattermost instance
+	// +optional
+	Error string `json:"error,omitempty"`
+	// Status of specified resource patches.
+	ResourcePatch *ResourcePatchStatus `json:"resourcePatch,omitempty"`
+}
+
+// ResourcePatchStatus defines status of ResourcePatch
+type ResourcePatchStatus struct {
+	ServicePatch    *PatchStatus `json:"servicePatch,omitempty"`
+	DeploymentPatch *PatchStatus `json:"deploymentPatch,omitempty"`
+}
+
+// PatchStatus represents status of particular patch.
+type PatchStatus struct {
+	Applied bool   `json:"applied,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // +genclient

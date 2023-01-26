@@ -47,7 +47,24 @@ const (
 	// Workspace archive is being imported from another service or
 	// on-premise
 	InstallationStateImportInProgress = "import-in-progress"
-	// InstallationStateDeletionRequested is an installation to be deleted.
+	// InstallationStateImportComplete is an installation whose import
+	// is complete but whose completion has not yet been noted by the
+	// AWAT. It is otherwise the same as a stable state.
+	InstallationStateImportComplete = "import-complete"
+	// InstallationStateDeletionPendingRequested is an installation that is marked
+	// to be moved to the deletion-pending state.
+	InstallationStateDeletionPendingRequested = "deletion-pending-requested"
+	// InstallationStateDeletionPendingInProgress is an installation that is being
+	// placed into a deletion-pending state.
+	InstallationStateDeletionPendingInProgress = "deletion-pending-in-progress"
+	// InstallationStateDeletionPending is an installation that is pending
+	// deletion.
+	InstallationStateDeletionPending = "deletion-pending"
+	// InstallationStateDeletionCancellationRequested is an installation that is
+	// requested to have its pending deletion cancelled.
+	InstallationStateDeletionCancellationRequested = "deletion-cancellation-requested"
+	// InstallationStateDeletionRequested is an installation that deletion has
+	// been requested on.
 	InstallationStateDeletionRequested = "deletion-requested"
 	// InstallationStateDeletionInProgress is an installation being deleted.
 	InstallationStateDeletionInProgress = "deletion-in-progress"
@@ -96,6 +113,11 @@ var AllInstallationStates = []string{
 	InstallationStateUpdateInProgress,
 	InstallationStateUpdateFailed,
 	InstallationStateImportInProgress,
+	InstallationStateImportComplete,
+	InstallationStateDeletionPendingRequested,
+	InstallationStateDeletionPendingInProgress,
+	InstallationStateDeletionPending,
+	InstallationStateDeletionCancellationRequested,
 	InstallationStateDeletionRequested,
 	InstallationStateDeletionInProgress,
 	InstallationStateDeletionFinalCleanup,
@@ -126,10 +148,23 @@ var AllInstallationStatesPendingWork = []string{
 	InstallationStateWakeUpRequested,
 	InstallationStateUpdateRequested,
 	InstallationStateUpdateInProgress,
+	InstallationStateDNSMigrationHibernating,
+	InstallationStateDeletionPendingRequested,
+	InstallationStateDeletionPendingInProgress,
+	InstallationStateDeletionCancellationRequested,
 	InstallationStateDeletionRequested,
 	InstallationStateDeletionInProgress,
 	InstallationStateDeletionFinalCleanup,
-	InstallationStateDNSMigrationHibernating,
+}
+
+// InstallationStateWorkPriority is a map of states to their priority. Default priority is 0.
+// States with higher priority will be processed first.
+var InstallationStateWorkPriority = map[string]int{
+	InstallationStateCreationRequested:            5,
+	InstallationStateCreationNoCompatibleClusters: 4,
+	InstallationStateCreationPreProvisioning:      3,
+	InstallationStateCreationInProgress:           2,
+	InstallationStateCreationDNS:                  1,
 }
 
 // AllInstallationRequestStates is a list of all states that an installation can
@@ -142,8 +177,10 @@ var AllInstallationRequestStates = []string{
 	InstallationStateHibernationRequested,
 	InstallationStateWakeUpRequested,
 	InstallationStateUpdateRequested,
-	InstallationStateDeletionRequested,
 	InstallationStateDNSMigrationHibernating,
+	InstallationStateDeletionPendingRequested,
+	InstallationStateDeletionCancellationRequested,
+	InstallationStateDeletionRequested,
 }
 
 // ValidTransitionState returns whether an installation can be transitioned into
@@ -175,8 +212,19 @@ var (
 			InstallationStateUpdateInProgress,
 			InstallationStateUpdateFailed,
 		},
-		InstallationStateDeletionRequested: {
+		InstallationStateDeletionPendingRequested: {
 			InstallationStateStable,
+			InstallationStateUpdateRequested,
+			InstallationStateUpdateInProgress,
+			InstallationStateUpdateFailed,
+			InstallationStateHibernating,
+			InstallationStateDeletionPendingRequested,
+			InstallationStateDeletionPendingInProgress,
+		},
+		InstallationStateDeletionCancellationRequested: {
+			InstallationStateDeletionPending,
+		},
+		InstallationStateDeletionRequested: {
 			InstallationStateCreationRequested,
 			InstallationStateCreationPreProvisioning,
 			InstallationStateCreationInProgress,
@@ -184,13 +232,6 @@ var (
 			InstallationStateCreationNoCompatibleClusters,
 			InstallationStateCreationFinalTasks,
 			InstallationStateCreationFailed,
-			InstallationStateUpdateRequested,
-			InstallationStateUpdateInProgress,
-			InstallationStateUpdateFailed,
-			InstallationStateImportInProgress,
-			InstallationStateHibernationRequested,
-			InstallationStateHibernationInProgress,
-			InstallationStateHibernating,
 			InstallationStateDeletionRequested,
 			InstallationStateDeletionInProgress,
 			InstallationStateDeletionFinalCleanup,

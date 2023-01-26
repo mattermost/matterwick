@@ -12,6 +12,18 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	// NetworkingCalico is Calico networking plugin.
+	NetworkingCalico = "calico"
+	// NetworkingAmazon is Amazon networking plugin.
+	NetworkingAmazon = "amazon-vpc-routed-eni"
+)
+
+var (
+	defaultEKSRoleARN       string
+	defaultNodeGroupRoleARN string
+)
+
 // CreateClusterRequest specifies the parameters for a new cluster.
 type CreateClusterRequest struct {
 	Provider               string                         `json:"provider,omitempty"`
@@ -29,6 +41,34 @@ type CreateClusterRequest struct {
 	Annotations            []string                       `json:"annotations,omitempty"`
 	Networking             string                         `json:"networking,omitempty"`
 	VPC                    string                         `json:"vpc,omitempty"`
+	MaxPodsPerNode         int64
+	EKSConfig              *EKSConfig `json:"EKSConfig,omitempty"`
+}
+
+// EKSConfig is EKS cluster configuration.
+type EKSConfig struct {
+	ClusterRoleARN *string                 `json:"clusterRoleARN,omitempty"`
+	NodeGroups     map[string]EKSNodeGroup `json:"nodeGroups,omitempty"`
+}
+
+func (request *CreateClusterRequest) setUtilityDefaults(utilityName string) {
+	reqDesiredUtilityVersion, ok := request.DesiredUtilityVersions[utilityName]
+	if !ok {
+		request.DesiredUtilityVersions[utilityName] = DefaultUtilityVersions[utilityName]
+		return
+	}
+	if reqDesiredUtilityVersion.Chart == "" {
+		reqDesiredUtilityVersion.Chart = DefaultUtilityVersions[utilityName].Chart
+	}
+	if reqDesiredUtilityVersion.ValuesPath == "" {
+		reqDesiredUtilityVersion.ValuesPath = DefaultUtilityVersions[utilityName].ValuesPath
+	}
+}
+
+func (request *CreateClusterRequest) setUtilitiesDefaults() {
+	for utilityName := range DefaultUtilityVersions {
+		request.setUtilityDefaults(utilityName)
+	}
 }
 
 // SetDefaults sets the default values for a cluster create request.
@@ -57,55 +97,28 @@ func (request *CreateClusterRequest) SetDefaults() {
 	if request.NodeMaxCount == 0 {
 		request.NodeMaxCount = request.NodeMinCount
 	}
-	if len(request.Networking) == 0 {
-		request.Networking = "amazon-vpc-routed-eni"
+	if request.MaxPodsPerNode == 0 {
+		request.MaxPodsPerNode = 200
 	}
+	if len(request.Networking) == 0 {
+		request.Networking = NetworkingCalico
+	}
+	if request.EKSConfig != nil {
+		if request.EKSConfig.ClusterRoleARN == nil {
+			request.EKSConfig.ClusterRoleARN = &defaultEKSRoleARN
+		}
+
+		for _, ng := range request.EKSConfig.NodeGroups {
+			if ng.RoleARN == nil {
+				ng.RoleARN = &defaultNodeGroupRoleARN
+			}
+		}
+	}
+
 	if request.DesiredUtilityVersions == nil {
 		request.DesiredUtilityVersions = make(map[string]*HelmUtilityVersion)
 	}
-	if _, ok := request.DesiredUtilityVersions[PrometheusOperatorCanonicalName]; !ok {
-		request.DesiredUtilityVersions[PrometheusOperatorCanonicalName] = PrometheusOperatorDefaultVersion
-	} else if request.DesiredUtilityVersions[PrometheusOperatorCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[PrometheusOperatorCanonicalName].ValuesPath = PrometheusOperatorDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[ThanosCanonicalName]; !ok {
-		request.DesiredUtilityVersions[ThanosCanonicalName] = ThanosDefaultVersion
-	} else if request.DesiredUtilityVersions[ThanosCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[ThanosCanonicalName].ValuesPath = ThanosDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[NginxCanonicalName]; !ok {
-		request.DesiredUtilityVersions[NginxCanonicalName] = NginxDefaultVersion
-	} else if request.DesiredUtilityVersions[NginxCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[NginxCanonicalName].ValuesPath = NginxDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[NginxInternalCanonicalName]; !ok {
-		request.DesiredUtilityVersions[NginxInternalCanonicalName] = NginxInternalDefaultVersion
-	} else if request.DesiredUtilityVersions[NginxInternalCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[NginxInternalCanonicalName].ValuesPath = NginxInternalDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[FluentbitCanonicalName]; !ok {
-		request.DesiredUtilityVersions[FluentbitCanonicalName] = FluentbitDefaultVersion
-	} else if request.DesiredUtilityVersions[FluentbitCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[FluentbitCanonicalName].ValuesPath = FluentbitDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[TeleportCanonicalName]; !ok {
-		request.DesiredUtilityVersions[TeleportCanonicalName] = TeleportDefaultVersion
-	} else if request.DesiredUtilityVersions[TeleportCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[TeleportCanonicalName].ValuesPath = TeleportDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[PgbouncerCanonicalName]; !ok {
-		request.DesiredUtilityVersions[PgbouncerCanonicalName] = PgbouncerDefaultVersion
-	} else if request.DesiredUtilityVersions[PgbouncerCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[PgbouncerCanonicalName].ValuesPath = PgbouncerDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[StackroxCanonicalName]; !ok {
-		request.DesiredUtilityVersions[StackroxCanonicalName] = StackroxDefaultVersion
-	} else if request.DesiredUtilityVersions[StackroxCanonicalName].Values() == "" {
-		request.DesiredUtilityVersions[StackroxCanonicalName].ValuesPath = StackroxDefaultVersion.ValuesPath
-	}
-	if _, ok := request.DesiredUtilityVersions[KubecostCanonicalName]; !ok {
-		request.DesiredUtilityVersions[KubecostCanonicalName] = KubecostDefaultVersion
-	}
+	request.setUtilitiesDefaults()
 }
 
 // Validate validates the values of a cluster create request.
@@ -125,7 +138,19 @@ func (request *CreateClusterRequest) Validate() error {
 	if request.NodeMaxCount != request.NodeMinCount {
 		return errors.Errorf("node min (%d) and max (%d) counts must match", request.NodeMinCount, request.NodeMaxCount)
 	}
+	if request.MaxPodsPerNode < 10 {
+		return errors.Errorf("max pods per node (%d) must be 10 or greater", request.MaxPodsPerNode)
+	}
 	// TODO: check zones and instance types?
+
+	if request.EKSConfig != nil {
+		if request.EKSConfig.ClusterRoleARN == nil || *request.EKSConfig.ClusterRoleARN == "" {
+			return errors.New("cluster role ARN for EKS cluster cannot be empty")
+		}
+		if len(request.EKSConfig.NodeGroups) == 0 {
+			return errors.New("at least 1 node group is required when using EKS")
+		}
+	}
 
 	if !contains(GetSupportedCniList(), request.Networking) {
 		return errors.Errorf("unsupported cluster networking option %s", request.Networking)
@@ -196,9 +221,10 @@ func NewUpdateClusterRequestFromReader(reader io.Reader) (*UpdateClusterRequest,
 
 // PatchUpgradeClusterRequest specifies the parameters for upgrading a cluster.
 type PatchUpgradeClusterRequest struct {
-	Version       *string        `json:"version,omitempty"`
-	KopsAMI       *string        `json:"kops-ami,omitempty"`
-	RotatorConfig *RotatorConfig `json:"rotatorConfig,omitempty"`
+	Version        *string        `json:"version,omitempty"`
+	KopsAMI        *string        `json:"kops-ami,omitempty"`
+	RotatorConfig  *RotatorConfig `json:"rotatorConfig,omitempty"`
+	MaxPodsPerNode *int64
 }
 
 // Validate validates the values of a cluster upgrade request.
@@ -206,28 +232,13 @@ func (p *PatchUpgradeClusterRequest) Validate() error {
 	if p.Version != nil && !ValidClusterVersion(*p.Version) {
 		return errors.Errorf("unsupported cluster version %s", *p.Version)
 	}
+	if p.MaxPodsPerNode != nil && *p.MaxPodsPerNode < 10 {
+		return errors.Errorf("max pods per node (%d) must be 10 or greater", *p.MaxPodsPerNode)
+	}
 
 	if p.RotatorConfig != nil {
-		if p.RotatorConfig.UseRotator == nil {
-			return errors.Errorf("rotator config use rotator should be set")
-		}
-
-		if *p.RotatorConfig.UseRotator {
-			if p.RotatorConfig.EvictGracePeriod == nil {
-				return errors.Errorf("rotator config evict grace period should be set")
-			}
-			if p.RotatorConfig.MaxDrainRetries == nil {
-				return errors.Errorf("rotator config max drain retries should be set")
-			}
-			if p.RotatorConfig.MaxScaling == nil {
-				return errors.Errorf("rotator config max scaling should be set")
-			}
-			if p.RotatorConfig.WaitBetweenDrains == nil {
-				return errors.Errorf("rotator config wait between drains should be set")
-			}
-			if p.RotatorConfig.WaitBetweenRotations == nil {
-				return errors.Errorf("rotator config wait between rotations should be set")
-			}
+		if err := p.RotatorConfig.Validate(); err != nil {
+			return err
 		}
 	}
 
@@ -246,6 +257,10 @@ func (p *PatchUpgradeClusterRequest) Apply(metadata *KopsMetadata) bool {
 	if p.KopsAMI != nil && *p.KopsAMI != metadata.AMI {
 		applied = true
 		changes.AMI = *p.KopsAMI
+	}
+	if p.MaxPodsPerNode != nil && *p.MaxPodsPerNode != metadata.MaxPodsPerNode {
+		applied = true
+		changes.MaxPodsPerNode = *p.MaxPodsPerNode
 	}
 
 	if metadata.RotatorRequest == nil {
@@ -278,9 +293,10 @@ func NewUpgradeClusterRequestFromReader(reader io.Reader) (*PatchUpgradeClusterR
 
 // PatchClusterSizeRequest specifies the parameters for resizing a cluster.
 type PatchClusterSizeRequest struct {
-	NodeInstanceType *string `json:"node-instance-type,omitempty"`
-	NodeMinCount     *int64  `json:"node-min-count,omitempty"`
-	NodeMaxCount     *int64  `json:"node-max-count,omitempty"`
+	NodeInstanceType *string        `json:"node-instance-type,omitempty"`
+	NodeMinCount     *int64         `json:"node-min-count,omitempty"`
+	NodeMaxCount     *int64         `json:"node-max-count,omitempty"`
+	RotatorConfig    *RotatorConfig `json:"rotatorConfig,omitempty"`
 }
 
 // Validate validates the values of a PatchClusterSizeRequest.
@@ -294,6 +310,12 @@ func (p *PatchClusterSizeRequest) Validate() error {
 	if p.NodeMinCount != nil && p.NodeMaxCount != nil &&
 		*p.NodeMaxCount < *p.NodeMinCount {
 		return errors.Errorf("node max count (%d) can't be less than min count (%d)", *p.NodeMaxCount, *p.NodeMinCount)
+	}
+
+	if p.RotatorConfig != nil {
+		if err := p.RotatorConfig.Validate(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -317,8 +339,13 @@ func (p *PatchClusterSizeRequest) Apply(metadata *KopsMetadata) bool {
 		changes.NodeMaxCount = *p.NodeMaxCount
 	}
 
+	if metadata.RotatorRequest == nil {
+		metadata.RotatorRequest = &RotatorMetadata{}
+	}
+
 	if applied {
 		metadata.ChangeRequest = changes
+		metadata.RotatorRequest.Config = p.RotatorConfig
 	}
 
 	return applied
@@ -343,6 +370,7 @@ func NewResizeClusterRequestFromReader(reader io.Reader) (*PatchClusterSizeReque
 // ProvisionClusterRequest contains metadata related to changing the installed cluster state.
 type ProvisionClusterRequest struct {
 	DesiredUtilityVersions map[string]*HelmUtilityVersion `json:"utility-versions,omitempty"`
+	Force                  bool                           `json:"force"`
 }
 
 // NewProvisionClusterRequestFromReader will create an UpdateClusterRequest from an io.Reader with JSON data.
@@ -352,5 +380,6 @@ func NewProvisionClusterRequestFromReader(reader io.Reader) (*ProvisionClusterRe
 	if err != nil && err != io.EOF {
 		return nil, errors.Wrap(err, "failed to decode provision cluster request")
 	}
+
 	return &provisionClusterRequest, nil
 }

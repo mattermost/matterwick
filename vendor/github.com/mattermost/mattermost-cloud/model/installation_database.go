@@ -10,6 +10,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// DefaultMattermostDatabaseUsername the default database username for an installation
+const DefaultMattermostDatabaseUsername = "mmcloud"
+
 const (
 	// InstallationDatabaseMysqlOperator is a database hosted in kubernetes via the operator.
 	InstallationDatabaseMysqlOperator = "mysql-operator"
@@ -28,8 +31,18 @@ const (
 	// database hosted via Amazon RDS.
 	InstallationDatabaseMultiTenantRDSPostgres = "aws-multitenant-rds-postgres"
 	// InstallationDatabaseMultiTenantRDSPostgresPGBouncer is a PostgreSQL
-	// multitenant database hosted via Amazon RDS that has pooled connections.
+	// multitenant database hosted via Amazon RDS that has pooled connections
+	// through PGBouncer.
 	InstallationDatabaseMultiTenantRDSPostgresPGBouncer = "aws-multitenant-rds-postgres-pgbouncer"
+	// InstallationDatabasePerseus is a PostgreSQL multitenant database hosted
+	// via Amazon RDS that has pooled connections through Perseus.
+	InstallationDatabasePerseus = "perseus"
+	// InstallationDatabaseExternal is a database that is created and managed
+	// outside of the cloud provisioner. No provisioning or teardown is performed
+	// on this database type. An AWS secret with connection strings and
+	// credentials must be specified on installation creation when using this
+	// database type.
+	InstallationDatabaseExternal = "external"
 
 	// DatabaseEngineTypeMySQL is a MySQL database.
 	DatabaseEngineTypeMySQL = "mysql"
@@ -38,6 +51,9 @@ const (
 	// DatabaseEngineTypePostgresProxy is a PostgreSQL database that is
 	// configured for proxied connections.
 	DatabaseEngineTypePostgresProxy = "postgres-proxy"
+	// DatabaseEngineTypePostgresProxyPerseus is a PostgreSQL database that is
+	// configured for proxied connections from Perseus.
+	DatabaseEngineTypePostgresProxyPerseus = "postgres-proxy-perseus"
 )
 
 // Database is the interface for managing Mattermost databases.
@@ -58,9 +74,10 @@ type Database interface {
 // TODO(gsagula): Consider renaming this interface to InstallationDatabaseInterface. For reference,
 // https://github.com/mattermost/mattermost-cloud/pull/209#discussion_r424597373
 type InstallationDatabaseStoreInterface interface {
+	GetInstallation(id string, includeGroupConfig, includeGroupConfigOverrides bool) (*Installation, error)
 	GetClusterInstallations(filter *ClusterInstallationFilter) ([]*ClusterInstallation, error)
-	GetMultitenantDatabase(multitenantdatabaseID string) (*MultitenantDatabase, error)
 	GetMultitenantDatabases(filter *MultitenantDatabaseFilter) ([]*MultitenantDatabase, error)
+	GetMultitenantDatabase(multitenantdatabaseID string) (*MultitenantDatabase, error)
 	GetMultitenantDatabaseForInstallationID(installationID string) (*MultitenantDatabase, error)
 	GetInstallationsTotalDatabaseWeight(installationIDs []string) (float64, error)
 	CreateMultitenantDatabase(multitenantDatabase *MultitenantDatabase) error
@@ -69,13 +86,22 @@ type InstallationDatabaseStoreInterface interface {
 	UnlockMultitenantDatabase(multitenantdatabaseID, lockerID string, force bool) (bool, error)
 	LockMultitenantDatabases(ids []string, lockerID string) (bool, error)
 	UnlockMultitenantDatabases(ids []string, lockerID string, force bool) (bool, error)
+	GetLogicalDatabases(filter *LogicalDatabaseFilter) ([]*LogicalDatabase, error)
+	GetLogicalDatabase(logicalDatabaseID string) (*LogicalDatabase, error)
+	GetDatabaseSchemas(filter *DatabaseSchemaFilter) ([]*DatabaseSchema, error)
+	GetDatabaseSchema(databaseSchemaID string) (*DatabaseSchema, error)
 	GetSingleTenantDatabaseConfigForInstallation(installationID string) (*SingleTenantDatabaseConfig, error)
+	GetProxyDatabaseResourcesForInstallation(installationID string) (*DatabaseResourceGrouping, error)
+	GetOrCreateProxyDatabaseResourcesForInstallation(installationID, multitenantDatabaseID string) (*DatabaseResourceGrouping, error)
+	DeleteInstallationProxyDatabaseResources(multitenantDatabase *MultitenantDatabase, databaseSchema *DatabaseSchema) error
+	GetGroupDTOs(filter *GroupFilter) ([]*GroupDTO, error)
 }
 
 // ClusterUtilityDatabaseStoreInterface is the interface necessary for SQLStore
 // functionality to update cluster utilities as needed.
 type ClusterUtilityDatabaseStoreInterface interface {
 	GetMultitenantDatabases(filter *MultitenantDatabaseFilter) ([]*MultitenantDatabase, error)
+	GetLogicalDatabases(filter *LogicalDatabaseFilter) ([]*LogicalDatabase, error)
 }
 
 // MysqlOperatorDatabase is a database backed by the MySQL operator.
@@ -142,12 +168,6 @@ func (d *MysqlOperatorDatabase) RefreshResourceMetadata(store InstallationDataba
 	return nil
 }
 
-// InternalDatabase returns true if the installation's database is internal
-// to the kubernetes cluster it is running on.
-func (i *Installation) InternalDatabase() bool {
-	return i.Database == InstallationDatabaseMysqlOperator
-}
-
 // IsSupportedDatabase returns true if the given database string is supported.
 func IsSupportedDatabase(database string) bool {
 	switch database {
@@ -156,7 +176,9 @@ func IsSupportedDatabase(database string) bool {
 	case InstallationDatabaseMultiTenantRDSMySQL:
 	case InstallationDatabaseMultiTenantRDSPostgres:
 	case InstallationDatabaseMultiTenantRDSPostgresPGBouncer:
+	case InstallationDatabasePerseus:
 	case InstallationDatabaseMysqlOperator:
+	case InstallationDatabaseExternal:
 	default:
 		return false
 	}
@@ -164,11 +186,31 @@ func IsSupportedDatabase(database string) bool {
 	return true
 }
 
-// IsSingleTenantRDS returns true if the given database is single tenant db.
+// InternalDatabase returns true if the installation's database is internal
+// to the kubernetes cluster it is running on.
+func (i *Installation) InternalDatabase() bool {
+	return i.Database == InstallationDatabaseMysqlOperator
+}
+
+// IsSingleTenantRDS returns true if the given database is single tenant RDS db.
 func IsSingleTenantRDS(database string) bool {
 	switch database {
 	case InstallationDatabaseSingleTenantRDSMySQL:
 	case InstallationDatabaseSingleTenantRDSPostgres:
+	default:
+		return false
+	}
+
+	return true
+}
+
+// IsMultiTenantRDS returns true if the given database is multitenant RDS db.
+func IsMultiTenantRDS(database string) bool {
+	switch database {
+	case InstallationDatabaseMultiTenantRDSMySQL:
+	case InstallationDatabaseMultiTenantRDSPostgres:
+	case InstallationDatabaseMultiTenantRDSPostgresPGBouncer:
+	case InstallationDatabasePerseus:
 	default:
 		return false
 	}

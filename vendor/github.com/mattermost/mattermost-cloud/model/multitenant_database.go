@@ -6,14 +6,38 @@ package model
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
+
+	"github.com/pkg/errors"
 )
+
+// defaultProxyDatabaseMaxInstallationsPerLogicalDatabase is the default value
+// used for MaxInstallationsPerLogicalDatabase when new multitenant databases
+// are created.
+var defaultProxyDatabaseMaxInstallationsPerLogicalDatabase int64 = 10
+
+// SetDefaultProxyDatabaseMaxInstallationsPerLogicalDatabase is used to define
+// a new value for defaultProxyDatabaseMaxInstallationsPerLogicalDatabase.
+func SetDefaultProxyDatabaseMaxInstallationsPerLogicalDatabase(val int64) error {
+	if val < 1 {
+		return errors.New("MaxInstallationsPerLogicalDatabase must be set to 1 or higher")
+	}
+	defaultProxyDatabaseMaxInstallationsPerLogicalDatabase = val
+
+	return nil
+}
+
+// GetDefaultProxyDatabaseMaxInstallationsPerLogicalDatabase returns the value
+// of defaultProxyDatabaseMaxInstallationsPerLogicalDatabase.
+func GetDefaultProxyDatabaseMaxInstallationsPerLogicalDatabase() int64 {
+	return defaultProxyDatabaseMaxInstallationsPerLogicalDatabase
+}
 
 // MultitenantDatabase represents database infrastructure that contains multiple
 // installation databases.
 type MultitenantDatabase struct {
 	ID                                 string
+	RdsClusterID                       string
 	VpcID                              string
 	DatabaseType                       string
 	State                              string
@@ -21,45 +45,48 @@ type MultitenantDatabase struct {
 	ReaderEndpoint                     string
 	Installations                      MultitenantDatabaseInstallations
 	MigratedInstallations              MultitenantDatabaseInstallations
-	SharedLogicalDatabaseMappings      SharedLogicalDatabases `json:"SharedLogicalDatabaseMappings,omitempty"`
-	MaxInstallationsPerLogicalDatabase int64                  `json:"MaxInstallationsPerLogicalDatabase,omitempty"`
+	MaxInstallationsPerLogicalDatabase int64 `json:"MaxInstallationsPerLogicalDatabase,omitempty"`
 	CreateAt                           int64
 	DeleteAt                           int64
 	LockAcquiredBy                     *string
 	LockAcquiredAt                     int64
 }
 
-// AddInstallationToLogicalDatabaseMapping adds a new installation to the next
-// available logical database.
-func (d *MultitenantDatabase) AddInstallationToLogicalDatabaseMapping(installationID string) {
-	if d.SharedLogicalDatabaseMappings == nil {
-		d.SharedLogicalDatabaseMappings = make(SharedLogicalDatabases)
-	}
+// CreationDateString returns a standardized date string for a multitenant
+// database string.
+func (d *MultitenantDatabase) CreationDateString() string {
+	return GetDateString(d.CreateAt)
+}
 
-	// Ensure we always are adding installations to the logical databases that
-	// are most full for maximum efficiency.
-	var selectedLogicalDatabase string
-	for logicalDatabase, installations := range d.SharedLogicalDatabaseMappings {
-		if len(installations) > int(d.MaxInstallationsPerLogicalDatabase) {
-			continue
-		}
-		if len(selectedLogicalDatabase) == 0 {
-			selectedLogicalDatabase = logicalDatabase
-			continue
-		}
-		if len(installations) > len(d.SharedLogicalDatabaseMappings[selectedLogicalDatabase]) {
-			selectedLogicalDatabase = logicalDatabase
-		}
-	}
+// LogicalDatabase represents a logical database inside a MultitenantDatabase.
+type LogicalDatabase struct {
+	ID                    string
+	MultitenantDatabaseID string
+	Name                  string
+	CreateAt              int64
+	DeleteAt              int64
+	LockAcquiredBy        *string
+	LockAcquiredAt        int64
+}
 
-	if len(selectedLogicalDatabase) == 0 {
-		// None of the existing logical databases had room so create a new one with
-		// a unique ID.
-		d.SharedLogicalDatabaseMappings[fmt.Sprintf("cloud_%s", NewID())] = []string{installationID}
-		return
-	}
+// DatabaseSchema represents a database schema inside a LogicalDatabase.
+type DatabaseSchema struct {
+	ID                string
+	LogicalDatabaseID string
+	InstallationID    string
+	Name              string
+	CreateAt          int64
+	DeleteAt          int64
+	LockAcquiredBy    *string
+	LockAcquiredAt    int64
+}
 
-	d.SharedLogicalDatabaseMappings[selectedLogicalDatabase] = append(d.SharedLogicalDatabaseMappings[selectedLogicalDatabase], installationID)
+// DatabaseResourceGrouping represents the complete set of database resources
+// that comprise proxy database information.
+type DatabaseResourceGrouping struct {
+	MultitenantDatabase *MultitenantDatabase
+	LogicalDatabase     *LogicalDatabase
+	DatabaseSchema      *DatabaseSchema
 }
 
 // GetReaderEndpoint returns the best available reader endpoint for a multitenant
@@ -106,38 +133,8 @@ func (i *MultitenantDatabaseInstallations) Remove(installationID string) {
 	}
 }
 
-// SharedLogicalDatabases is a mapping of logical databases to installations.
-type SharedLogicalDatabases map[string][]string
-
-// GetLogicalDatabaseName returns the logical database that an installation
-// belongs to or an empty string if it hasn't been assigned.
-func (l *SharedLogicalDatabases) GetLogicalDatabaseName(installationID string) string {
-	for logicalDatabase, installations := range *l {
-		for _, installation := range installations {
-			if installation == installationID {
-				return logicalDatabase
-			}
-		}
-	}
-
-	return ""
-}
-
-// RemoveInstallation removes an installation entry from the logical database
-// mapping.
-func (l *SharedLogicalDatabases) RemoveInstallation(installationID string) {
-	for logicalDatabase, installations := range *l {
-		for i, installation := range installations {
-			if installation == installationID {
-				(*l)[logicalDatabase] = append(installations[:i], installations[i+1:]...)
-				return
-			}
-		}
-	}
-}
-
-// MultitenantDatabaseFilter filters results based on a specific installation ID, Vpc ID and a number of
-// installation's limit.
+// MultitenantDatabaseFilter describes the parameters used to constrain a set of
+// MultitenantDatabases.
 type MultitenantDatabaseFilter struct {
 	Paging
 	LockerID               string
@@ -148,28 +145,95 @@ type MultitenantDatabaseFilter struct {
 	MaxInstallationsLimit  int
 }
 
+// LogicalDatabaseFilter describes the parameters used to constrain a set of
+// LogicalDatabase.
+type LogicalDatabaseFilter struct {
+	Paging
+	MultitenantDatabaseID string
+}
+
+// DatabaseSchemaFilter describes the parameters used to constrain a set of
+// DatabaseSchema.
+type DatabaseSchemaFilter struct {
+	Paging
+	LogicalDatabaseID string
+	InstallationID    string
+}
+
 // MultitenantDatabasesFromReader decodes a json-encoded list of multitenant databases from the given io.Reader.
 func MultitenantDatabasesFromReader(reader io.Reader) ([]*MultitenantDatabase, error) {
-	databases := []*MultitenantDatabase{}
+	multitenantDatabases := []*MultitenantDatabase{}
 	decoder := json.NewDecoder(reader)
 
-	err := decoder.Decode(&databases)
+	err := decoder.Decode(&multitenantDatabases)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
 
-	return databases, nil
+	return multitenantDatabases, nil
 }
 
 // MultitenantDatabaseFromReader decodes a json-encoded multitenant database from the given io.Reader.
 func MultitenantDatabaseFromReader(reader io.Reader) (*MultitenantDatabase, error) {
-	database := &MultitenantDatabase{}
+	multitenantDatabase := &MultitenantDatabase{}
 	decoder := json.NewDecoder(reader)
 
-	err := decoder.Decode(&database)
+	err := decoder.Decode(&multitenantDatabase)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
 
-	return database, nil
+	return multitenantDatabase, nil
+}
+
+// LogicalDatabasesFromReader decodes a json-encoded list of logical databases from the given io.Reader.
+func LogicalDatabasesFromReader(reader io.Reader) ([]*LogicalDatabase, error) {
+	logicalDatabases := []*LogicalDatabase{}
+	decoder := json.NewDecoder(reader)
+
+	err := decoder.Decode(&logicalDatabases)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	return logicalDatabases, nil
+}
+
+// LogicalDatabaseFromReader decodes a json-encoded logical database from the given io.Reader.
+func LogicalDatabaseFromReader(reader io.Reader) (*LogicalDatabase, error) {
+	logicalDatabase := &LogicalDatabase{}
+	decoder := json.NewDecoder(reader)
+
+	err := decoder.Decode(&logicalDatabase)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	return logicalDatabase, nil
+}
+
+// DatababseSchemasFromReader decodes a json-encoded list of database schemas from the given io.Reader.
+func DatababseSchemasFromReader(reader io.Reader) ([]*DatabaseSchema, error) {
+	databaseSchemas := []*DatabaseSchema{}
+	decoder := json.NewDecoder(reader)
+
+	err := decoder.Decode(&databaseSchemas)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	return databaseSchemas, nil
+}
+
+// DatababseSchemaFromReader decodes a json-encoded database schema from the given io.Reader.
+func DatababseSchemaFromReader(reader io.Reader) (*DatabaseSchema, error) {
+	databaseSchema := &DatabaseSchema{}
+	decoder := json.NewDecoder(reader)
+
+	err := decoder.Decode(&databaseSchema)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	return databaseSchema, nil
 }

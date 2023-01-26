@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-
-	"github.com/pkg/errors"
 )
 
 const (
@@ -24,145 +22,130 @@ const (
 	// FluentbitCanonicalName is the canonical string representation of fluentbit
 	FluentbitCanonicalName = "fluentbit"
 	// TeleportCanonicalName is the canonical string representation of teleport
-	TeleportCanonicalName = "teleport"
+	TeleportCanonicalName = "teleport-kube-agent"
 	// PgbouncerCanonicalName is the canonical string representation of pgbouncer
 	PgbouncerCanonicalName = "pgbouncer"
-	// StackroxCanonicalName is the canonical string representation of stackrox
-	StackroxCanonicalName = "stackrox-secured-cluster-services"
-	// KubecostCanonicalName is the canonical string representation of kubecost
-	KubecostCanonicalName = "kubecost"
+	// PromtailCanonicalName is the canonical string representation of promtail
+	PromtailCanonicalName = "promtail"
+	// RtcdCanonicalName is the canonical string representation of RTCD
+	RtcdCanonicalName = "rtcd"
+	// NodeProblemDetectorCanonicalName is the canonical string representation of node problem detector
+	NodeProblemDetectorCanonicalName = "node-problem-detector"
+	// MetricsServerCanonicalName is the canonical string representation of metrics server
+	MetricsServerCanonicalName = "metrics-server"
+	// VeleroCanonicalName is the canonical string representation of velero
+	VeleroCanonicalName = "velero"
+	// CloudproberCanonicalName is the canonical string representation of Cloudprber
+	CloudproberCanonicalName = "cloudprober"
 	// GitlabOAuthTokenKey is the name of the Environment Variable which
 	// may contain an OAuth token for accessing GitLab repositories over
 	// HTTPS, used for fetching values files
 	GitlabOAuthTokenKey = "GITLAB_OAUTH_TOKEN"
 )
 
+// gitlabToken is the token that will be used for remote helm charts.
+var gitlabToken string
+
+// SetGitlabToken is used to define the gitlab token that will be used for remote
+// helm charts.
+func SetGitlabToken(val string) {
+	gitlabToken = val
+}
+
+// GetGitlabToken returns the value of gitlabToken.
+func GetGitlabToken() string {
+	return gitlabToken
+}
+
+// DefaultUtilityVersions holds the default values for all the HelmUtilityVersions
+var DefaultUtilityVersions map[string]*HelmUtilityVersion = map[string]*HelmUtilityVersion{
+	// PrometheusOperatorCanonicalName defines the default version and values path for the Helm chart
+	PrometheusOperatorCanonicalName: {Chart: "40.5.0", ValuesPath: ""},
+	// ThanosCanonicalName defines the default version and values path for the Helm chart
+	ThanosCanonicalName: {Chart: "10.5.4", ValuesPath: ""},
+	// NginxCanonicalName defines the default version and values path for the Helm chart
+	NginxCanonicalName: {Chart: "4.2.0", ValuesPath: ""},
+	// NginxInternalCanonicalName defines the default version and values path for the Helm chart
+	NginxInternalCanonicalName: {Chart: "4.2.0", ValuesPath: ""},
+	// FluentbitCanonicalName defines the default version and values path for the Helm chart
+	FluentbitCanonicalName: {Chart: "0.20.1", ValuesPath: ""},
+	// TeleportCanonicalName defines the default version and values path for the Helm chart
+	TeleportCanonicalName: {Chart: "6.2.8", ValuesPath: ""},
+	// PgbouncerCanonicalName defines the default version and values path for the Helm chart
+	PgbouncerCanonicalName: {Chart: "1.2.0", ValuesPath: ""},
+	// PromtailCanonicalName defines the default version and values path for the Helm chart
+	PromtailCanonicalName: {Chart: "6.2.2", ValuesPath: ""},
+	// RtcdCanonicalName defines the default version and values path for the Helm chart
+	RtcdCanonicalName: {Chart: "1.1.0", ValuesPath: ""},
+	// NodeProblemDetectorCanonicalName defines the default version and values path for the Helm chart
+	NodeProblemDetectorCanonicalName: {Chart: "2.0.5", ValuesPath: ""},
+	// MetricsServerCanonicalName defines the default version and values path for the Helm chart
+	MetricsServerCanonicalName: {Chart: "3.8.2", ValuesPath: ""},
+	// VeleroCanonicalName defines the default version for the Helm chart
+	VeleroCanonicalName: {Chart: "2.31.3", ValuesPath: ""},
+	// CloudproberCanonicalName defines the default version for the Helm chart
+	CloudproberCanonicalName: {Chart: "0.1.1", ValuesPath: ""},
+}
+
+var defaultUtilityValuesFileNames map[string]string = map[string]string{
+	PrometheusOperatorCanonicalName:  "prometheus_operator_values.yaml",
+	ThanosCanonicalName:              "thanos_values.yaml",
+	NginxCanonicalName:               "nginx_values.yaml",
+	NginxInternalCanonicalName:       "nginx_internal_values.yaml",
+	FluentbitCanonicalName:           "fluent-bit_values.yaml",
+	TeleportCanonicalName:            "teleport_values.yaml",
+	PgbouncerCanonicalName:           "pgbouncer_values.yaml",
+	PromtailCanonicalName:            "promtail_values.yaml",
+	RtcdCanonicalName:                "rtcd_values.yaml",
+	NodeProblemDetectorCanonicalName: "node_problem_detector_values.yaml",
+	MetricsServerCanonicalName:       "metrics_server_values.yaml",
+	VeleroCanonicalName:              "velero_values.yaml",
+	CloudproberCanonicalName:         "cloudprober_values.yaml",
+}
+
 var (
-	// PrometheusOperatorDefaultVersion defines the default version for the Helm chart
-	PrometheusOperatorDefaultVersion = &HelmUtilityVersion{Chart: "9.4.4", ValuesPath: ""}
-	// ThanosDefaultVersion defines the default version for the Helm chart
-	ThanosDefaultVersion = &HelmUtilityVersion{Chart: "3.2.2", ValuesPath: ""}
-	// NginxDefaultVersion defines the default version for the Helm chart
-	NginxDefaultVersion = &HelmUtilityVersion{Chart: "2.15.0", ValuesPath: ""}
-	// NginxInternalDefaultVersion defines the default version for the Helm chart
-	NginxInternalDefaultVersion = &HelmUtilityVersion{Chart: "2.15.0", ValuesPath: ""}
-	// FluentbitDefaultVersion defines the default version for the Helm chart
-	FluentbitDefaultVersion = &HelmUtilityVersion{Chart: "0.15.8", ValuesPath: ""}
-	// TeleportDefaultVersion defines the default version for the Helm chart
-	TeleportDefaultVersion = &HelmUtilityVersion{Chart: "0.3.0", ValuesPath: ""}
-	// PgbouncerDefaultVersion defines the default version for the Helm chart
-	PgbouncerDefaultVersion = &HelmUtilityVersion{Chart: "1.1.0", ValuesPath: ""}
-	// StackroxDefaultVersion defines the default version for the Helm chart
-	StackroxDefaultVersion = &HelmUtilityVersion{Chart: "62.0.0", ValuesPath: ""}
-	// KubecostDefaultVersion defines the default version for the Helm chart
-	KubecostDefaultVersion = &HelmUtilityVersion{Chart: "1.83.1", ValuesPath: ""}
+	// TODO make these configurable if the gitlab repo must ever be
+	// moved, or if we ever need to specify a different branch or folder
+	// (environment) name to pull the values files from
+	gitlabProjectPath    string = "/api/v4/projects/%d/repository/files/%s" + `%%2F` + "%s?ref=%s"
+	defaultProjectNumber int    = 295
+	defaultEnvironment          = "dev"
+	defaultBranch               = "master"
 )
 
 // SetUtilityDefaults is used to set Utility default version and values.
 func SetUtilityDefaults(url string) {
-	if PrometheusOperatorDefaultVersion.ValuesPath == "" {
-		PrometheusOperatorDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fprometheus_operator_values.yaml?ref=master", url)
-	}
-	if ThanosDefaultVersion.ValuesPath == "" {
-		ThanosDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fthanos_values.yaml?ref=master", url)
-	}
-	if NginxDefaultVersion.ValuesPath == "" {
-		NginxDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fnginx_values.yaml?ref=master", url)
-	}
-	if NginxInternalDefaultVersion.ValuesPath == "" {
-		NginxInternalDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fnginx_internal_values.yaml?ref=master", url)
-	}
-	if FluentbitDefaultVersion.ValuesPath == "" {
-		FluentbitDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Ffluent-bit_values.yaml?ref=master", url)
-	}
-	if TeleportDefaultVersion.ValuesPath == "" {
-		TeleportDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fteleport_values.yaml?ref=master", url)
-	}
-	if PgbouncerDefaultVersion.ValuesPath == "" {
-		PgbouncerDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fpgbouncer_values.yaml?ref=master", url)
-	}
-	if StackroxDefaultVersion.ValuesPath == "" {
-		StackroxDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fstackrox_values.yaml?ref=master", url)
-	}
-	if KubecostDefaultVersion.ValuesPath == "" {
-		KubecostDefaultVersion.ValuesPath = fmt.Sprintf("%s/api/v4/projects/33/repository/files/dev%%2Fkubecost_values.yaml?ref=master", url)
+	for utility, filename := range defaultUtilityValuesFileNames {
+		if DefaultUtilityVersions[utility].ValuesPath == "" {
+			DefaultUtilityVersions[utility].ValuesPath = fmt.Sprintf("%s%s", url, buildValuesPath(filename))
+		}
 	}
 }
 
-// UnmarshalJSON is a custom JSON unmarshaler that can handle both the
-// old Version string type and the new type. It is entirely
-// self-contained, including types, so that it can be easily removed
-// when no more clusters exist with the old version format.
-// TODO DELETE THIS
-func (h *UtilityGroupVersions) UnmarshalJSON(bytes []byte) error {
-	type utilityGroupVersions struct {
-		PrometheusOperator *HelmUtilityVersion
-		Thanos             *HelmUtilityVersion
-		Nginx              *HelmUtilityVersion
-		NginxInternal      *HelmUtilityVersion
-		Fluentbit          *HelmUtilityVersion
-		Teleport           *HelmUtilityVersion
-		Pgbouncer          *HelmUtilityVersion
-		Stackrox           *HelmUtilityVersion
-		Kubecost           *HelmUtilityVersion
-	}
-	type oldUtilityGroupVersions struct {
-		PrometheusOperator string
-		Thanos             string
-		Nginx              string
-		NginxInternal      string
-		Fluentbit          string
-		Teleport           string
-		Pgbouncer          string
-		Stackrox           string
-		Kubecost           string
-	}
-
-	var utilGrpVers *utilityGroupVersions = &utilityGroupVersions{}
-	var oldUtilGrpVers *oldUtilityGroupVersions = &oldUtilityGroupVersions{}
-	err := json.Unmarshal(bytes, utilGrpVers)
-	if err != nil {
-		secondErr := json.Unmarshal(bytes, oldUtilGrpVers)
-		if secondErr != nil {
-			return fmt.Errorf("%s and %s", errors.Wrap(err, "failed to unmarshal to new HelmUtilityVersion"), errors.Wrap(secondErr, "failed to unmarshal to old HelmUtilityVersion type"))
-		}
-
-		h.PrometheusOperator = &HelmUtilityVersion{Chart: oldUtilGrpVers.PrometheusOperator}
-		h.Thanos = &HelmUtilityVersion{Chart: oldUtilGrpVers.Thanos}
-		h.Nginx = &HelmUtilityVersion{Chart: oldUtilGrpVers.Nginx}
-		h.NginxInternal = &HelmUtilityVersion{Chart: oldUtilGrpVers.NginxInternal}
-		h.Fluentbit = &HelmUtilityVersion{Chart: oldUtilGrpVers.Fluentbit}
-		h.Teleport = &HelmUtilityVersion{Chart: oldUtilGrpVers.Teleport}
-		h.Pgbouncer = &HelmUtilityVersion{Chart: oldUtilGrpVers.Pgbouncer}
-		h.Stackrox = &HelmUtilityVersion{Chart: oldUtilGrpVers.Stackrox}
-		h.Kubecost = &HelmUtilityVersion{Chart: oldUtilGrpVers.Kubecost}
-		return nil
-	}
-
-	h.PrometheusOperator = utilGrpVers.PrometheusOperator
-	h.Thanos = utilGrpVers.Thanos
-	h.Nginx = utilGrpVers.Nginx
-	h.NginxInternal = utilGrpVers.NginxInternal
-	h.Fluentbit = utilGrpVers.Fluentbit
-	h.Teleport = utilGrpVers.Teleport
-	h.Pgbouncer = utilGrpVers.Pgbouncer
-	h.Stackrox = utilGrpVers.Stackrox
-	h.Kubecost = utilGrpVers.Kubecost
-	return nil
+func buildValuesPath(filename string) string {
+	return fmt.Sprintf(gitlabProjectPath,
+		defaultProjectNumber,
+		defaultEnvironment,
+		filename,
+		defaultBranch)
 }
 
 // UtilityGroupVersions holds the concrete metadata for any cluster
 // utilities
 type UtilityGroupVersions struct {
-	PrometheusOperator *HelmUtilityVersion
-	Thanos             *HelmUtilityVersion
-	Nginx              *HelmUtilityVersion
-	NginxInternal      *HelmUtilityVersion
-	Fluentbit          *HelmUtilityVersion
-	Teleport           *HelmUtilityVersion
-	Pgbouncer          *HelmUtilityVersion
-	Stackrox           *HelmUtilityVersion
-	Kubecost           *HelmUtilityVersion
+	PrometheusOperator  *HelmUtilityVersion
+	Thanos              *HelmUtilityVersion
+	Nginx               *HelmUtilityVersion
+	NginxInternal       *HelmUtilityVersion
+	Fluentbit           *HelmUtilityVersion
+	Teleport            *HelmUtilityVersion
+	Pgbouncer           *HelmUtilityVersion
+	Promtail            *HelmUtilityVersion
+	Rtcd                *HelmUtilityVersion
+	NodeProblemDetector *HelmUtilityVersion
+	MetricsServer       *HelmUtilityVersion
+	Velero              *HelmUtilityVersion
+	Cloudprober         *HelmUtilityVersion
 }
 
 // AsMap returns the UtilityGroupVersion represented as a map with the
@@ -170,15 +153,19 @@ type UtilityGroupVersions struct {
 // struct making up the values
 func (h *UtilityGroupVersions) AsMap() map[string]*HelmUtilityVersion {
 	return map[string]*HelmUtilityVersion{
-		PrometheusOperatorCanonicalName: h.PrometheusOperator,
-		ThanosCanonicalName:             h.Thanos,
-		NginxCanonicalName:              h.Nginx,
-		NginxInternalCanonicalName:      h.NginxInternal,
-		FluentbitCanonicalName:          h.Fluentbit,
-		TeleportCanonicalName:           h.Teleport,
-		PgbouncerCanonicalName:          h.Pgbouncer,
-		StackroxCanonicalName:           h.Stackrox,
-		KubecostCanonicalName:           h.Kubecost,
+		PrometheusOperatorCanonicalName:  h.PrometheusOperator,
+		ThanosCanonicalName:              h.Thanos,
+		NginxCanonicalName:               h.Nginx,
+		NginxInternalCanonicalName:       h.NginxInternal,
+		FluentbitCanonicalName:           h.Fluentbit,
+		TeleportCanonicalName:            h.Teleport,
+		PgbouncerCanonicalName:           h.Pgbouncer,
+		PromtailCanonicalName:            h.Promtail,
+		RtcdCanonicalName:                h.Rtcd,
+		NodeProblemDetectorCanonicalName: h.NodeProblemDetector,
+		MetricsServerCanonicalName:       h.MetricsServer,
+		VeleroCanonicalName:              h.Velero,
+		CloudproberCanonicalName:         h.Cloudprober,
 	}
 }
 
@@ -227,26 +214,16 @@ func (c *Cluster) SetUtilityActualVersion(utility string, version *HelmUtilityVe
 // SetUtilityDesiredVersions takes a map of string to string representing
 // any metadata related to the utility group and stores it as a []byte
 // in Cluster so that it can be inserted into the database
-func (c *Cluster) SetUtilityDesiredVersions(versions map[string]*HelmUtilityVersion) error {
-	desiredVersions := make(map[string]*HelmUtilityVersion)
+func (c *Cluster) SetUtilityDesiredVersions(desiredVersions map[string]*HelmUtilityVersion) {
 	if c.UtilityMetadata == nil {
 		c.UtilityMetadata = new(UtilityMetadata)
 	}
-	// at create time there will be no actual versions and it's ok
-	// create will have defaults
-	for k, v := range c.UtilityMetadata.ActualVersions.AsMap() {
-		desiredVersions[k] = v
+	if desiredVersions == nil {
+		desiredVersions = map[string]*HelmUtilityVersion{}
 	}
-
-	for utility, version := range versions {
-		desiredVersions[utility] = version
-	}
-
 	for utility, version := range desiredVersions {
 		setUtilityVersion(&c.UtilityMetadata.DesiredVersions, utility, version)
 	}
-
-	return nil
 }
 
 // DesiredUtilityVersion fetches the desired version of a utility from the
@@ -265,6 +242,9 @@ func (c *Cluster) DesiredUtilityVersion(utility string) *HelmUtilityVersion {
 // ActualUtilityVersion fetches the desired version of a utility from the
 // Cluster object
 func (c *Cluster) ActualUtilityVersion(utility string) *HelmUtilityVersion {
+	if c.UtilityMetadata == nil {
+		return nil
+	}
 	return getUtilityVersion(c.UtilityMetadata.ActualVersions, utility)
 }
 
@@ -284,27 +264,9 @@ func UtilityMetadataFromReader(reader io.Reader) (*UtilityMetadata, error) {
 // Gets the version for a utility from a utilityVersions struct using
 // the utility's name's string representation for lookup
 func getUtilityVersion(versions UtilityGroupVersions, utility string) *HelmUtilityVersion {
-	switch utility {
-	case PrometheusOperatorCanonicalName:
-		return versions.PrometheusOperator
-	case ThanosCanonicalName:
-		return versions.Thanos
-	case NginxCanonicalName:
-		return versions.Nginx
-	case NginxInternalCanonicalName:
-		return versions.NginxInternal
-	case FluentbitCanonicalName:
-		return versions.Fluentbit
-	case TeleportCanonicalName:
-		return versions.Teleport
-	case PgbouncerCanonicalName:
-		return versions.Pgbouncer
-	case StackroxCanonicalName:
-		return versions.Stackrox
-	case KubecostCanonicalName:
-		return versions.Kubecost
+	if r, ok := versions.AsMap()[utility]; ok {
+		return r
 	}
-
 	return nil
 }
 
@@ -328,10 +290,18 @@ func setUtilityVersion(versions *UtilityGroupVersions, utility string, desiredVe
 		versions.Teleport = desiredVersion
 	case PgbouncerCanonicalName:
 		versions.Pgbouncer = desiredVersion
-	case StackroxCanonicalName:
-		versions.Stackrox = desiredVersion
-	case KubecostCanonicalName:
-		versions.Kubecost = desiredVersion
+	case PromtailCanonicalName:
+		versions.Promtail = desiredVersion
+	case RtcdCanonicalName:
+		versions.Rtcd = desiredVersion
+	case NodeProblemDetectorCanonicalName:
+		versions.NodeProblemDetector = desiredVersion
+	case MetricsServerCanonicalName:
+		versions.MetricsServer = desiredVersion
+	case VeleroCanonicalName:
+		versions.Velero = desiredVersion
+	case CloudproberCanonicalName:
+		versions.Cloudprober = desiredVersion
 	}
 }
 
@@ -351,4 +321,12 @@ func (u *HelmUtilityVersion) Version() string {
 // values file
 func (u *HelmUtilityVersion) Values() string {
 	return u.ValuesPath
+}
+
+// IsEmpty returns true if the HelmUtilityVersion is nil or if either
+// of the values inside are undefined
+func (u *HelmUtilityVersion) IsEmpty() bool {
+	return u == nil ||
+		u.ValuesPath == "" ||
+		u.Chart == ""
 }

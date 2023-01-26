@@ -10,9 +10,9 @@ import (
 	"io"
 )
 
+//go:generate provisioner-code-gen generate --out-file=installation_gen.go --boilerplate-file=../hack/boilerplate/boilerplate.generatego.txt --type=github.com/mattermost/mattermost-cloud/model.Installation --generator=get_id,get_state,is_deleted,as_resources
+
 const (
-	// V1alphaCRVersion is a ClusterInstallation CR alpha version.
-	V1alphaCRVersion = "mattermost.com/v1alpha1"
 	// V1betaCRVersion is a Mattermost CR beta version.
 	V1betaCRVersion = "installation.mattermost.com/v1beta1"
 	// DefaultCRVersion is a default CR version used for new installations.
@@ -32,11 +32,14 @@ type Installation struct {
 	GroupSequence              *int64 `json:"GroupSequence,omitempty"`
 	Version                    string
 	Image                      string
-	DNS                        string
+	Name                       string
 	Database                   string
+	SingleTenantDatabaseConfig *SingleTenantDatabaseConfig `json:"SingleTenantDatabaseConfig,omitempty"`
+	ExternalDatabaseConfig     *ExternalDatabaseConfig     `json:"ExternalDatabaseConfig,omitempty"`
 	Filestore                  string
 	License                    string
 	MattermostEnv              EnvVarMap
+	PriorityEnv                EnvVarMap
 	Size                       string
 	Affinity                   string
 	State                      string
@@ -46,8 +49,7 @@ type Installation struct {
 	APISecurityLock            bool
 	LockAcquiredBy             *string
 	LockAcquiredAt             int64
-	GroupOverrides             map[string]string           `json:"GroupOverrides,omitempty"`
-	SingleTenantDatabaseConfig *SingleTenantDatabaseConfig `json:"SingleTenantDatabaseConfig,omitempty"`
+	GroupOverrides             map[string]string `json:"GroupOverrides,omitempty"`
 
 	// configconfigMergedWithGroup is set when the installation configuration
 	// has been overridden with group configuration. This value can then be
@@ -73,6 +75,7 @@ type InstallationFilter struct {
 	GroupID         string
 	State           string
 	DNS             string
+	Name            string
 }
 
 // Clone returns a deep copy the installation.
@@ -85,19 +88,45 @@ func (i *Installation) Clone() *Installation {
 }
 
 // ToDTO expands installation to InstallationDTO.
-func (i *Installation) ToDTO(annotations []*Annotation) *InstallationDTO {
+func (i *Installation) ToDTO(annotations []*Annotation, dnsRecords []*InstallationDNS) *InstallationDTO {
+	dns := ""
+	if len(dnsRecords) > 0 {
+		dns = dnsRecords[0].DomainName
+	}
 	return &InstallationDTO{
 		Installation: i,
 		Annotations:  annotations,
+		DNSRecords:   dnsRecords,
+		DNS:          dns,
 	}
+}
+
+// CreationDateString returns a standardized date string for an installation's
+// creation.
+func (i *Installation) CreationDateString() string {
+	return GetDateString(i.CreateAt)
+}
+
+// DeletionDateString returns a standardized date string for an installation's
+// deletion or 'n/a' if not deleted.
+func (i *Installation) DeletionDateString() string {
+	if !i.IsDeleted() {
+		return "n/a"
+	}
+
+	return TimeFromMillis(i.DeleteAt).Format("Jan 2 2006")
 }
 
 // GetDatabaseWeight returns a value corresponding to the
 // TODO: maybe consider installation size in the future as well?
 func (i *Installation) GetDatabaseWeight() float64 {
-	if i.State == InstallationStateHibernationRequested ||
-		i.State == InstallationStateHibernationInProgress ||
-		i.State == InstallationStateHibernating {
+	switch i.State {
+	case InstallationStateHibernationRequested,
+		InstallationStateHibernationInProgress,
+		InstallationStateHibernating,
+		InstallationStateDeletionPendingRequested,
+		InstallationStateDeletionPendingInProgress,
+		InstallationStateDeletionPending:
 		return HibernatingDatabaseWeight
 	}
 
@@ -178,6 +207,22 @@ func (i *Installation) MergeWithGroup(group *Group, includeOverrides bool) {
 		}
 		i.MattermostEnv[key] = value
 	}
+}
+
+// GetEnvVars returns Mattermost environment variables that will be applied to the installation.
+// If the installation was not merged with group, group env vars may impact the actual result.
+func (i Installation) GetEnvVars() EnvVarMap {
+	envs := make(map[string]EnvVar, len(i.MattermostEnv))
+
+	// First apply standard env, then override PriorityEnv.
+	for k, v := range i.MattermostEnv {
+		envs[k] = v
+	}
+	for k, v := range i.PriorityEnv {
+		envs[k] = v
+	}
+
+	return envs
 }
 
 // InstallationFromReader decodes a json-encoded installation from the given io.Reader.

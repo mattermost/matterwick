@@ -12,8 +12,6 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-
-	mmv1alpha1 "github.com/mattermost/mattermost-operator/apis/mattermost/v1alpha1"
 )
 
 // requireAnnotatedInstallations if set, installations need to be annotated with at least one annotation.
@@ -38,21 +36,28 @@ func SetDeployOperators(mysql, minio bool) {
 
 // CreateInstallationRequest specifies the parameters for a new installation.
 type CreateInstallationRequest struct {
-	OwnerID         string
-	GroupID         string
-	Version         string
-	Image           string
-	DNS             string
-	License         string
-	Size            string
-	Affinity        string
-	Database        string
-	Filestore       string
-	APISecurityLock bool
-	MattermostEnv   EnvVarMap
-	Annotations     []string
+	Name    string
+	OwnerID string
+	GroupID string
+	Version string
+	Image   string
+	// Deprecated: Use DNSNames instead.
+	DNS                       string
+	DNSNames                  []string
+	License                   string
+	Size                      string
+	Affinity                  string
+	Database                  string
+	Filestore                 string
+	APISecurityLock           bool
+	MattermostEnv             EnvVarMap
+	PriorityEnv               EnvVarMap
+	Annotations               []string
+	GroupSelectionAnnotations []string
 	// SingleTenantDatabaseConfig is ignored if Database is not single tenant mysql or postgres.
 	SingleTenantDatabaseConfig SingleTenantDatabaseRequest
+	// ExternalDatabaseConfig is ignored if Database is not single external.
+	ExternalDatabaseConfig ExternalDatabaseRequest
 }
 
 // https://man7.org/linux/man-pages/man7/hostname.7.html
@@ -60,6 +65,20 @@ var hostnamePattern *regexp.Regexp = regexp.MustCompile(`[a-zA-Z0-9][\.a-z-A-Z\-
 
 // SetDefaults sets the default values for an installation create request.
 func (request *CreateInstallationRequest) SetDefaults() {
+	// If DNS is provided add it on the beginning of DNSNames slice.
+	if request.DNS != "" {
+		request.DNSNames = append([]string{request.DNS}, request.DNSNames...)
+	}
+	request.DNS = strings.ToLower(request.DNS)
+	for i := range request.DNSNames {
+		request.DNSNames[i] = strings.ToLower(request.DNSNames[i])
+	}
+
+	// For backwards compatibility set Name based on DNS
+	if request.Name == "" && request.DNS != "" {
+		request.Name = strings.Split(request.DNS, ".")[0]
+	}
+	request.Name = strings.ToLower(request.Name)
 	if request.Version == "" {
 		request.Version = "stable"
 	}
@@ -85,15 +104,21 @@ func (request *CreateInstallationRequest) SetDefaults() {
 
 // Validate validates the values of an installation create request.
 func (request *CreateInstallationRequest) Validate() error {
+	if request.Name == "" {
+		return errors.New("name needs to be specified")
+	}
 	if request.OwnerID == "" {
 		return errors.New("must specify owner")
 	}
-	if err := isValidDNS(request.DNS); err != nil {
+
+	err := request.validateDNSNames()
+	if err != nil {
 		return err
 	}
-	_, err := mmv1alpha1.GetClusterSize(request.Size)
+
+	_, err = GetInstallationSize(request.Size)
 	if err != nil {
-		return errors.Wrap(err, "invalid size")
+		return errors.Wrap(err, "invalid Installation size")
 	}
 	_, err = url.Parse(request.DNS)
 	if err != nil {
@@ -109,15 +134,27 @@ func (request *CreateInstallationRequest) Validate() error {
 		return errors.Errorf("unsupported filestore %s", request.Filestore)
 	}
 	err = request.MattermostEnv.Validate()
+	if err != nil {
+		return errors.Wrap(err, "invalid env var settings")
+	}
+	err = request.PriorityEnv.Validate()
+	if err != nil {
+		return errors.Wrap(err, "invalid priority env var settings")
+	}
+
 	if requireAnnotatedInstallations {
 		if len(request.Annotations) == 0 {
 			return errors.Errorf("at least one annotation is required")
 		}
 	}
 
-	if err != nil {
-		return errors.Wrap(err, "invalid env var settings")
+	for _, ann := range request.GroupSelectionAnnotations {
+		err := validateAnnotationName(ann)
+		if err != nil {
+			return errors.Wrap(err, "invalid group selection annotation")
+		}
 	}
+
 	if IsSingleTenantRDS(request.Database) {
 		err = request.SingleTenantDatabaseConfig.Validate()
 		if err != nil {
@@ -125,13 +162,46 @@ func (request *CreateInstallationRequest) Validate() error {
 		}
 	}
 
-	if !deployMinioOperator && request.Filestore == "minio-operator" {
+	if request.Database == InstallationDatabaseExternal {
+		err = request.ExternalDatabaseConfig.Validate()
+		if err != nil {
+			return errors.Wrap(err, "external database config is invalid")
+		}
+	}
+
+	if !deployMinioOperator && request.Filestore == InstallationFilestoreMinioOperator {
 		return errors.Errorf("minio filestore cannot be used when minio operator is not deployed")
 	}
-	if !deployMySQLOperator && request.Database == "mysql-operator" {
+	if !deployMySQLOperator && request.Database == InstallationDatabaseMysqlOperator {
 		return errors.Errorf("mysql operator database cannot be used when mysql operator is not deployed")
 	}
 	return checkSpaces(request)
+}
+
+func (request *CreateInstallationRequest) validateDNSNames() error {
+	if len(request.DNSNames) == 0 {
+		return errors.New("at least one DNS name is required")
+	}
+
+	for _, dns := range request.DNSNames {
+		if err := isValidDNS(dns); err != nil {
+			return err
+		}
+
+		err := ensureDNSMatchesName(dns, request.Name)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureDNSMatchesName(dns string, name string) error {
+	dnsPrefix := strings.Split(dns, ".")[0]
+	if dnsPrefix != name {
+		return errors.Errorf("domain name must start with Installation Name")
+	}
+	return nil
 }
 
 func isValidDNS(dns string) error {
@@ -218,6 +288,7 @@ type GetInstallationsRequest struct {
 	GroupID                     string
 	State                       string
 	DNS                         string
+	Name                        string
 	IncludeGroupConfig          bool
 	IncludeGroupConfigOverrides bool
 }
@@ -229,6 +300,7 @@ func (request *GetInstallationsRequest) ApplyToURL(u *url.URL) {
 	q.Add("group", request.GroupID)
 	q.Add("state", request.State)
 	q.Add("dns_name", request.DNS)
+	q.Add("name", request.Name)
 	if !request.IncludeGroupConfig {
 		q.Add("include_group_config", "false")
 	}
@@ -247,6 +319,7 @@ type PatchInstallationRequest struct {
 	Version       *string
 	Size          *string
 	License       *string
+	PriorityEnv   EnvVarMap
 	MattermostEnv EnvVarMap
 }
 
@@ -259,7 +332,7 @@ func (p *PatchInstallationRequest) Validate() error {
 		return errors.New("provided image update value was blank")
 	}
 	if p.Size != nil {
-		_, err := mmv1alpha1.GetClusterSize(*p.Size)
+		_, err := GetInstallationSize(*p.Size)
 		if err != nil {
 			return errors.Wrap(err, "invalid size")
 		}
@@ -299,6 +372,11 @@ func (p *PatchInstallationRequest) Apply(installation *Installation) bool {
 			applied = true
 		}
 	}
+	if p.PriorityEnv != nil {
+		if installation.PriorityEnv.ClearOrPatch(&p.PriorityEnv) {
+			applied = true
+		}
+	}
 
 	return applied
 }
@@ -317,4 +395,20 @@ func NewPatchInstallationRequestFromReader(reader io.Reader) (*PatchInstallation
 	}
 
 	return &patchInstallationRequest, nil
+}
+
+// AssignInstallationGroupRequest specifies request body for installation group assignment.
+type AssignInstallationGroupRequest struct {
+	GroupSelectionAnnotations []string
+}
+
+// NewAssignInstallationGroupRequestFromReader will create a AssignInstallationGroupRequest from an io.Reader with JSON data.
+func NewAssignInstallationGroupRequestFromReader(reader io.Reader) (*AssignInstallationGroupRequest, error) {
+	var assignGroupRequest AssignInstallationGroupRequest
+	err := json.NewDecoder(reader).Decode(&assignGroupRequest)
+	if err != nil && err != io.EOF {
+		return nil, errors.Wrap(err, "failed to decode assign group request")
+	}
+
+	return &assignGroupRequest, nil
 }
