@@ -451,8 +451,8 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		DNS:         fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:        size,
 		Affinity:    "multitenant",
-		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
-		Filestore:   cloudModel.InstallationFilestoreAwsS3,
+		Database:    cloudModel.InstallationDatabasePerseus,
+		Filestore:   cloudModel.InstallationFilestoreBifrost,
 		Annotations: []string{defaultMultiTenantAnnotation},
 	}
 	if withLicense {
@@ -1055,7 +1055,7 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 
 	client := mattermostModel.NewAPIv4Client(mmURL)
 
-	//check if Mattermost is available
+	// check if Mattermost is available
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 	err = checkMMPing(ctx, client)

@@ -551,6 +551,56 @@ func (c *Client) DeleteInstallation(installationID string) error {
 	}
 }
 
+// CancelInstallationDeletion cancels the deletion of an installation that is
+// still pending deletion
+func (c *Client) CancelInstallationDeletion(installationID string) error {
+	resp, err := c.doPost(c.buildURL("/api/installation/%s/cancel_deletion", installationID), nil)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return nil
+
+	default:
+		return errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// AddInstallationDNS creates new DNS record for installation.
+func (c *Client) AddInstallationDNS(installationID string, request *AddDNSRecordRequest) (*InstallationDTO, error) {
+	resp, err := c.doPost(c.buildURL("/api/installation/%s/dns", installationID), request)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return InstallationDTOFromReader(resp.Body)
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// SetInstallationDomainPrimary sets Installation domain as primary.
+func (c *Client) SetInstallationDomainPrimary(installationID, installationDNSID string) (*InstallationDTO, error) {
+	resp, err := c.doPost(c.buildURL("/api/installation/%s/dns/%s/set-primary", installationID, installationDNSID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return InstallationDTOFromReader(resp.Body)
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
 // RestoreInstallationDatabase requests installation db restoration from the configured provisioning server.
 func (c *Client) RestoreInstallationDatabase(installationID, backupID string) (*InstallationDBRestorationOperation, error) {
 	resp, err := c.doPost(c.buildURL("/api/installations/operations/database/restorations"),
@@ -895,21 +945,7 @@ func (c *Client) SetClusterInstallationConfig(clusterInstallationID string, conf
 
 // RunMattermostCLICommandOnClusterInstallation runs a Mattermost CLI command against a cluster installation.
 func (c *Client) RunMattermostCLICommandOnClusterInstallation(clusterInstallationID string, subcommand []string) ([]byte, error) {
-	resp, err := c.doPost(c.buildURL("/api/cluster_installation/%s/mattermost_cli", clusterInstallationID), subcommand)
-	if err != nil {
-		return nil, err
-	}
-	defer closeBody(resp)
-
-	bytes, _ := ioutil.ReadAll(resp.Body)
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return bytes, nil
-
-	default:
-		return bytes, errors.Errorf("failed with status code %d", resp.StatusCode)
-	}
+	return c.ExecClusterInstallationCLI(clusterInstallationID, "mattermost", subcommand)
 }
 
 // ExecClusterInstallationCLI runs a valid exec command against a cluster installation.
@@ -932,7 +968,7 @@ func (c *Client) ExecClusterInstallationCLI(clusterInstallationID, command strin
 }
 
 // CreateGroup requests the creation of a group from the configured provisioning server.
-func (c *Client) CreateGroup(request *CreateGroupRequest) (*Group, error) {
+func (c *Client) CreateGroup(request *CreateGroupRequest) (*GroupDTO, error) {
 	resp, err := c.doPost(c.buildURL("/api/groups"), request)
 	if err != nil {
 		return nil, err
@@ -941,7 +977,7 @@ func (c *Client) CreateGroup(request *CreateGroupRequest) (*Group, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return GroupFromReader(resp.Body)
+		return GroupDTOFromReader(resp.Body)
 
 	default:
 		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
@@ -949,7 +985,7 @@ func (c *Client) CreateGroup(request *CreateGroupRequest) (*Group, error) {
 }
 
 // UpdateGroup updates the installation group.
-func (c *Client) UpdateGroup(request *PatchGroupRequest) (*Group, error) {
+func (c *Client) UpdateGroup(request *PatchGroupRequest) (*GroupDTO, error) {
 	resp, err := c.doPut(c.buildURL("/api/group/%s", request.ID), request)
 	if err != nil {
 		return nil, err
@@ -958,7 +994,7 @@ func (c *Client) UpdateGroup(request *PatchGroupRequest) (*Group, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return GroupFromReader(resp.Body)
+		return GroupDTOFromReader(resp.Body)
 
 	default:
 		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
@@ -983,7 +1019,7 @@ func (c *Client) DeleteGroup(groupID string) error {
 }
 
 // GetGroup fetches the specified group from the configured provisioning server.
-func (c *Client) GetGroup(groupID string) (*Group, error) {
+func (c *Client) GetGroup(groupID string) (*GroupDTO, error) {
 	resp, err := c.doGet(c.buildURL("/api/group/%s", groupID))
 	if err != nil {
 		return nil, err
@@ -992,7 +1028,7 @@ func (c *Client) GetGroup(groupID string) (*Group, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return GroupFromReader(resp.Body)
+		return GroupDTOFromReader(resp.Body)
 
 	case http.StatusNotFound:
 		return nil, nil
@@ -1003,7 +1039,7 @@ func (c *Client) GetGroup(groupID string) (*Group, error) {
 }
 
 // GetGroups fetches the list of groups from the configured provisioning server.
-func (c *Client) GetGroups(request *GetGroupsRequest) ([]*Group, error) {
+func (c *Client) GetGroups(request *GetGroupsRequest) ([]*GroupDTO, error) {
 	u, err := url.Parse(c.buildURL("/api/groups"))
 	if err != nil {
 		return nil, err
@@ -1019,7 +1055,7 @@ func (c *Client) GetGroups(request *GetGroupsRequest) ([]*Group, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return GroupsFromReader(resp.Body)
+		return GroupDTOsFromReader(resp.Body)
 
 	default:
 		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
@@ -1083,6 +1119,23 @@ func (c *Client) JoinGroup(groupID, installationID string) error {
 	}
 }
 
+// AssignGroup joins an installation to the group selected by annotations, leaving any existing group.
+func (c *Client) AssignGroup(installationID string, assignRequest AssignInstallationGroupRequest) error {
+	resp, err := c.doPost(c.buildURL("/api/installation/%s/group/assign", installationID), assignRequest)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+
+	default:
+		return errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
 // LeaveGroup removes an installation from its group, if any.
 func (c *Client) LeaveGroup(installationID string, request *LeaveGroupRequest) error {
 	u, err := url.Parse(c.buildURL("/api/installation/%s/group", installationID))
@@ -1107,9 +1160,43 @@ func (c *Client) LeaveGroup(installationID string, request *LeaveGroupRequest) e
 	}
 }
 
+// AddGroupAnnotations adds annotations to the given group.
+func (c *Client) AddGroupAnnotations(groupID string, annotationsRequest *AddAnnotationsRequest) (*GroupDTO, error) {
+	resp, err := c.doPost(c.buildURL("/api/group/%s/annotations", groupID), annotationsRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return GroupDTOFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// DeleteGroupAnnotation deletes annotation from the given group.
+func (c *Client) DeleteGroupAnnotation(groupID string, annotationName string) error {
+	resp, err := c.doDelete(c.buildURL("/api/group/%s/annotation/%s", groupID, annotationName))
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+
+	default:
+		return errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
 // GetMultitenantDatabases fetches the list of multitenant databases from the configured provisioning server.
-func (c *Client) GetMultitenantDatabases(request *GetDatabasesRequest) ([]*MultitenantDatabase, error) {
-	u, err := url.Parse(c.buildURL("/api/databases"))
+func (c *Client) GetMultitenantDatabases(request *GetMultitenantDatabasesRequest) ([]*MultitenantDatabase, error) {
+	u, err := url.Parse(c.buildURL("/api/databases/multitenant_databases"))
 	if err != nil {
 		return nil, err
 	}
@@ -1131,9 +1218,9 @@ func (c *Client) GetMultitenantDatabases(request *GetDatabasesRequest) ([]*Multi
 	}
 }
 
-// UpdateMultitenantDatabase updates a multitenant database.
-func (c *Client) UpdateMultitenantDatabase(databaseID string, request *PatchDatabaseRequest) (*MultitenantDatabase, error) {
-	resp, err := c.doPut(c.buildURL("/api/database/%s", databaseID), request)
+// GetMultitenantDatabase fetches the multitenant database from the configured provisioning server.
+func (c *Client) GetMultitenantDatabase(multitenantDatabaseID string) (*MultitenantDatabase, error) {
+	resp, err := c.doGet(c.buildURL("/api/databases/multitenant_database/%s", multitenantDatabaseID))
 	if err != nil {
 		return nil, err
 	}
@@ -1142,6 +1229,132 @@ func (c *Client) UpdateMultitenantDatabase(databaseID string, request *PatchData
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return MultitenantDatabaseFromReader(resp.Body)
+
+	case http.StatusNotFound:
+		return nil, nil
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// UpdateMultitenantDatabase updates a multitenant database.
+func (c *Client) UpdateMultitenantDatabase(databaseID string, request *PatchMultitenantDatabaseRequest) (*MultitenantDatabase, error) {
+	resp, err := c.doPut(c.buildURL("/api/databases/multitenant_database/%s", databaseID), request)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return MultitenantDatabaseFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// DeleteMultitenantDatabase marks multitenant database as deleted.
+func (c *Client) DeleteMultitenantDatabase(databaseID string, force bool) error {
+	u := c.buildURL("/api/databases/multitenant_database/%s?force=%t", databaseID, force)
+	resp, err := c.doDelete(u)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+
+	default:
+		return errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// GetLogicalDatabases fetches the list of logical databases from the configured provisioning server.
+func (c *Client) GetLogicalDatabases(request *GetLogicalDatabasesRequest) ([]*LogicalDatabase, error) {
+	u, err := url.Parse(c.buildURL("/api/databases/logical_databases"))
+	if err != nil {
+		return nil, err
+	}
+
+	request.ApplyToURL(u)
+
+	resp, err := c.doGet(u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return LogicalDatabasesFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// GetLogicalDatabase fetches the logical database from the configured provisioning server.
+func (c *Client) GetLogicalDatabase(logicalDatabaseID string) (*LogicalDatabase, error) {
+	resp, err := c.doGet(c.buildURL("/api/databases/logical_database/%s", logicalDatabaseID))
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return LogicalDatabaseFromReader(resp.Body)
+
+	case http.StatusNotFound:
+		return nil, nil
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// GetDatabaseSchemas fetches the list of database schemas from the configured provisioning server.
+func (c *Client) GetDatabaseSchemas(request *GetDatabaseSchemaRequest) ([]*DatabaseSchema, error) {
+	u, err := url.Parse(c.buildURL("/api/databases/database_schemas"))
+	if err != nil {
+		return nil, err
+	}
+
+	request.ApplyToURL(u)
+
+	resp, err := c.doGet(u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return DatababseSchemasFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// GetDatabaseSchema fetches the database schema from the configured provisioning server.
+func (c *Client) GetDatabaseSchema(multitenantDatabaseID string) (*DatabaseSchema, error) {
+	resp, err := c.doGet(c.buildURL("/api/databases/database_schema/%s", multitenantDatabaseID))
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return DatababseSchemaFromReader(resp.Body)
+
+	case http.StatusNotFound:
+		return nil, nil
 
 	default:
 		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
@@ -1294,76 +1507,178 @@ func (c *Client) makeSecurityCall(resourceType, id, securityType, action string)
 }
 
 // MigrateClusterInstallation requests the migration of cluster installation(s) from the configured provisioning server.
-func (c *Client) MigrateClusterInstallation(request *MigrateClusterInstallationRequest) error {
+func (c *Client) MigrateClusterInstallation(request *MigrateClusterInstallationRequest) (*MigrateClusterInstallationResponse, error) {
 	resp, err := c.doPost(c.buildURL("/api/cluster_installations/migrate"), request)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeBody(resp)
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return MigrateClusterInstallationResponseFromReader(resp.Body)
 
 	default:
-		return errors.Errorf("failed with status code %d", resp.StatusCode)
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
 	}
 }
 
 // MigrateDNS requests the migration of cluster installation(s) from the configured provisioning server.
-func (c *Client) MigrateDNS(request *MigrateClusterInstallationRequest) error {
+func (c *Client) MigrateDNS(request *MigrateClusterInstallationRequest) (*MigrateClusterInstallationResponse, error) {
 	resp, err := c.doPost(c.buildURL("/api/cluster_installations/migrate/dns"), request)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeBody(resp)
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return MigrateClusterInstallationResponseFromReader(resp.Body)
 
 	default:
-		return errors.Errorf("filed with status code %d", resp.StatusCode)
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
 	}
 }
 
 // DeleteInActiveClusterInstallationsByCluster requests the deletion of inactive cluster installation(s) from the configured provisioning server.
-func (c *Client) DeleteInActiveClusterInstallationsByCluster(clusterID string) error {
+func (c *Client) DeleteInActiveClusterInstallationsByCluster(clusterID string) (*MigrateClusterInstallationResponse, error) {
 	resp, err := c.doDelete(c.buildURL("/api/cluster_installations/migrate/delete_inactive/%s", clusterID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeBody(resp)
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return MigrateClusterInstallationResponseFromReader(resp.Body)
 
 	default:
-		return errors.Errorf("failed with status code %d", resp.StatusCode)
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
 	}
 }
 
 // DeleteInActiveClusterInstallationByID requests the deletion of specific inactive cluster installation from the configured provisioning server.
-func (c *Client) DeleteInActiveClusterInstallationByID(clusterInstallationID string) error {
+func (c *Client) DeleteInActiveClusterInstallationByID(clusterInstallationID string) (*ClusterInstallation, error) {
 	resp, err := c.doDelete(c.buildURL("/api/cluster_installations/migrate/delete_inactive/cluster_installation/%s", clusterInstallationID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeBody(resp)
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
+		return ClusterInstallationFromReader(resp.Body)
 
 	default:
-		return errors.Errorf("failed with status code %d", resp.StatusCode)
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
 	}
 }
 
 // SwitchClusterRoles requests the migration of cluster installation(s) from the configured provisioning server.
-func (c *Client) SwitchClusterRoles(request *MigrateClusterInstallationRequest) error {
+func (c *Client) SwitchClusterRoles(request *MigrateClusterInstallationRequest) (*MigrateClusterInstallationResponse, error) {
 	resp, err := c.doPost(c.buildURL("/api/cluster_installations/migrate/switch_cluster_roles"), request)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return MigrateClusterInstallationResponseFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// ListStateChangeEvents request events lists from the configured provisioning server.
+func (c *Client) ListStateChangeEvents(request *ListStateChangeEventsRequest) ([]*StateChangeEventData, error) {
+	u, err := url.Parse(c.buildURL("/api/events/state_change"))
+	if err != nil {
+		return nil, err
+	}
+
+	request.ApplyToURL(u)
+
+	resp, err := c.doGet(u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return NewStateChangeEventsDataFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// CreateSubscription requests the creation of a subscription from the configured provisioning server.
+func (c *Client) CreateSubscription(request *CreateSubscriptionRequest) (*Subscription, error) {
+	resp, err := c.doPost(c.buildURL("/api/subscriptions"), request)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return NewSubscriptionFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// GetSubscription fetches the subscription from the configured provisioning server.
+func (c *Client) GetSubscription(subID string) (*Subscription, error) {
+	resp, err := c.doGet(c.buildURL("/api/subscription/%s", subID))
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return NewSubscriptionFromReader(resp.Body)
+
+	case http.StatusNotFound:
+		return nil, nil
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// ListSubscriptions requests list of subscriptions from the configured provisioning server.
+func (c *Client) ListSubscriptions(request *ListSubscriptionsRequest) ([]*Subscription, error) {
+	u, err := url.Parse(c.buildURL("/api/subscriptions"))
+	if err != nil {
+		return nil, err
+	}
+
+	request.ApplyToURL(u)
+
+	resp, err := c.doGet(u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return NewSubscriptionsFromReader(resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
+// DeleteSubscription deletes the given subscription.
+func (c *Client) DeleteSubscription(subID string) error {
+	resp, err := c.doDelete(c.buildURL("/api/subscription/%s", subID))
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,8 @@ const (
 	ClusterInstallationStateDeleted = "deleted"
 	// ClusterInstallationStateReconciling is a cluster installation that in undergoing changes and is not yet stable.
 	ClusterInstallationStateReconciling = "reconciling"
+	// ClusterInstallationStateReady is a cluster installation in a ready state where it is nearly stable.
+	ClusterInstallationStateReady = "ready"
 	// ClusterInstallationStateStable is a cluster installation in a stable state and undergoing no changes.
 	ClusterInstallationStateStable = "stable"
 )
@@ -32,6 +34,7 @@ var AllClusterInstallationStates = []string{
 	ClusterInstallationStateDeletionFailed,
 	ClusterInstallationStateDeleted,
 	ClusterInstallationStateReconciling,
+	ClusterInstallationStateReady,
 	ClusterInstallationStateStable,
 }
 
@@ -45,5 +48,14 @@ var AllClusterInstallationStates = []string{
 var AllClusterInstallationStatesPendingWork = []string{
 	ClusterInstallationStateCreationRequested,
 	ClusterInstallationStateReconciling,
+	ClusterInstallationStateReady,
 	ClusterInstallationStateDeletionRequested,
+}
+
+// ClusterInstallationStateWorkPriority is a map of states to their priority. Default priority is 0.
+// States with higher priority will be processed first.
+var ClusterInstallationStateWorkPriority = map[string]int{
+	ClusterInstallationStateCreationRequested: 3,
+	ClusterInstallationStateReconciling:       2,
+	ClusterInstallationStateReady:             1,
 }

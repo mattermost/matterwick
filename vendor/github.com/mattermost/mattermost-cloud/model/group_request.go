@@ -6,10 +6,19 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/url"
 
 	"github.com/pkg/errors"
+)
+
+const (
+	forceInstallationRestartEnvVar = "CLOUD_PROVISIONER_ENFORCED_RESTART"
+
+	// ShowInstallationCountQueryParameter the query parameter name for GET /groups in order to enable
+	// or disable the installation count on the output.
+	ShowInstallationCountQueryParameter = "show_installation_count"
 )
 
 // CreateGroupRequest specifies the parameters for a new group.
@@ -21,6 +30,7 @@ type CreateGroupRequest struct {
 	MaxRolling      int64
 	APISecurityLock bool
 	MattermostEnv   EnvVarMap
+	Annotations     []string
 }
 
 // Validate validates the values of a group create request.
@@ -65,7 +75,8 @@ type PatchGroupRequest struct {
 	Image         *string
 	MattermostEnv EnvVarMap
 
-	ForceSequenceUpdate bool
+	ForceSequenceUpdate       bool
+	ForceInstallationsRestart bool
 }
 
 // Apply applies the patch to the given group.
@@ -101,6 +112,15 @@ func (p *PatchGroupRequest) Apply(group *Group) bool {
 	// This special value allows us to bump the group sequence number even when
 	// the patch contains no group modifications.
 	if p.ForceSequenceUpdate {
+		applied = true
+	}
+
+	// Force restart of pods even if nothing have changed. This is done by
+	// setting non-meaningful environment variable.
+	// We keep it separate from ForceSequenceUpdate in case we want to run force
+	// update that does not require restarting pods.
+	if p.ForceInstallationsRestart {
+		group.MattermostEnv[forceInstallationRestartEnvVar] = EnvVar{Value: fmt.Sprintf("force-restart-at-sequence-%d", group.Sequence)}
 		applied = true
 	}
 
@@ -140,13 +160,16 @@ func NewPatchGroupRequestFromReader(reader io.Reader) (*PatchGroupRequest, error
 // GetGroupsRequest describes the parameters to request a list of groups.
 type GetGroupsRequest struct {
 	Paging
+	WithInstallationCount bool
 }
 
 // ApplyToURL modifies the given url to include query string parameters for the request.
 func (request *GetGroupsRequest) ApplyToURL(u *url.URL) {
 	q := u.Query()
+	if request.WithInstallationCount {
+		q.Add(ShowInstallationCountQueryParameter, "true")
+	}
 	request.Paging.AddToQuery(q)
-
 	u.RawQuery = q.Encode()
 }
 
