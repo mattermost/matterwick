@@ -1,6 +1,6 @@
 # Build the matterwick
-ARG DOCKER_BUILD_IMAGE=golang:1.14.6
-ARG DOCKER_BASE_IMAGE=alpine:3.12
+ARG DOCKER_BUILD_IMAGE=golang:1.19.5
+ARG DOCKER_BASE_IMAGE=alpine:3.16
 
 FROM ${DOCKER_BUILD_IMAGE} AS build
 WORKDIR /matterwick/
