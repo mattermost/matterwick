@@ -1,6 +1,8 @@
 ## Docker Build Versions
-DOCKER_BUILD_IMAGE = golang:1.14.6
-DOCKER_BASE_IMAGE = alpine:3.12
+GOLANG_VERSION := $(shell cat go.mod | grep "^go " | cut -d " " -f 2)
+DOCKER_BUILD_IMAGE = golang:$(GOLANG_VERSION)
+# Hardcode base image to alpine sha for verson 3.16.3
+DOCKER_BASE_IMAGE = alpine@sha256:3d426b0bfc361d6e8303f51459f17782b219dece42a1c7fe463b6014b189c86d
 MATTERWICK_IMAGE ?= mattermost/matterwick:test
 
 
