@@ -19,7 +19,7 @@ jobs:
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
-        tags: mattermost/matterwick:${{ github.ref_name }}
+        tags: mattermost/matterwick:citest
         push: ${{ startsWith(github.ref, 'refs/tags/') }}
 
     - name: build-push-master
