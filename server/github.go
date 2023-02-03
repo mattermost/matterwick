@@ -229,7 +229,7 @@ func (s *Server) areChecksSuccessfulForPr(pr *model.PullRequest, org string) (bo
 	return false, nil
 }
 
-func (s *Server) PullRequestWithBranchNameExists(pr *model.PullRequest) (*model.PullRequest, error) {
+func (s *Server) pullRequestWithBranchNameExists(pr *model.PullRequest) (*model.PullRequest, error) {
 	client := newGithubClient(s.Config.GithubAccessToken)
 	prs, _, err := client.PullRequests.List(context.Background(), pr.RepoOwner, pr.RepoName, &github.PullRequestListOptions{
 		Head:  pr.HeadLabel,

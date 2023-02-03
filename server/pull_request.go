@@ -81,7 +81,7 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 				if pr.RepoName == mattermostWebAppRepo {
 					searchSisterPR.RepoName = mattermostServerRepo
 				}
-				sisterPR, _ := s.PullRequestWithBranchNameExists(&searchSisterPR)
+				sisterPR, _ := s.pullRequestWithBranchNameExists(&searchSisterPR)
 				if sisterPR != nil {
 					// We want to update the siser PR spinwick using the current PR sha
 					sisterPR.Sha = pr.Sha
