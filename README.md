@@ -27,5 +27,3 @@ The above assumes you have a .kube/config.json file that is already authenticate
 For use with ngrok, you can input `ngrok http 8077`. You can then point your github webhook at the ngrok URL.
 To rebuild the go code run `make build`. 
 You do not need to rebuild the docker image unless you make changes to the Dockerfile. You must restart your docker container after a `make build` in order to see changes
-
-

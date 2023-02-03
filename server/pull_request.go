@@ -67,11 +67,33 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
 			if s.isSpinWickHALabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true, false)
+				s.handleUpdateSpinWick(pr, true, false, false)
 			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true, true)
+				s.handleUpdateSpinWick(pr, true, true, false)
 			} else {
-				s.handleUpdateSpinWick(pr, false, false)
+				s.handleUpdateSpinWick(pr, false, false, false)
+			}
+
+			if pr.RepoName == mattermostWebAppRepo || pr.RepoName == mattermostServerRepo {
+				mlog.Info("No SpinWick label found, checking for sister PR", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
+				searchSisterPR := *pr
+				searchSisterPR.RepoName = mattermostWebAppRepo
+				if pr.RepoName == mattermostWebAppRepo {
+					searchSisterPR.RepoName = mattermostServerRepo
+				}
+				sisterPR, _ := s.PullRequestWithBranchNameExists(&searchSisterPR)
+				if sisterPR != nil {
+					// We want to update the siser PR spinwick using the current PR sha
+					sisterPR.Sha = pr.Sha
+					mlog.Info("Sister PR found, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
+					if s.isSpinWickHALabel(sisterPR.Labels) {
+						s.handleUpdateSpinWick(sisterPR, true, false, true)
+					} else if s.isSpinWickCloudWithCWSLabel(sisterPR.Labels) {
+						s.handleUpdateSpinWick(sisterPR, true, true, true)
+					} else {
+						s.handleUpdateSpinWick(sisterPR, false, false, true)
+					}
+				}
 			}
 		}
 	case "closed":

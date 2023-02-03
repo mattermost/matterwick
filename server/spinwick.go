@@ -479,7 +479,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	return request
 }
 
-func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) {
+func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool, updateSister bool) {
 	// other repos we are not updating
 	request := &spinwick.Request{
 		InstallationID: "n/a",
@@ -491,7 +491,7 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCl
 	if pr.RepoName == cwsRepoName {
 		request = s.updateKubeSpinWick(pr)
 	} else {
-		request = s.updateSpinWick(pr, withLicense, withCloudInfra)
+		request = s.updateSpinWick(pr, withLicense, withCloudInfra, updateSister)
 	}
 
 	if request.Error != nil {
@@ -609,7 +609,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = error is returned
 // - cloud installation found and updated = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) *spinwick.Request {
+func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool, updateSister bool) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -643,6 +643,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	// Remove old message to reduce the amount of similar messages and avoid confusion
 	serverNewCommitMessages := []string{
 		"New commit detected.",
+		"New commit detected on sister pull request.",
 	}
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	if errComments != nil {
@@ -650,7 +651,11 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	} else {
 		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
 	}
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected. SpinWick will upgrade if the updated docker image is available.")
+	sisterPart := ""
+	if updateSister {
+		sisterPart = " on sister pull request"
+	}
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected"+sisterPart+". SpinWick will upgrade if the updated docker image is available.")
 
 	reg, err := s.Builds.dockerRegistryClient(s)
 	if err != nil {
@@ -718,7 +723,11 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	}
 
 	mmURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
-	msg := fmt.Sprintf("Mattermost test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, mmURL)
+	sisterPart = ""
+	if updateSister {
+		sisterPart = " from sister pull request"
+	}
+	msg := fmt.Sprintf("Mattermost test server updated with git commit `%s`%s.\n\nAccess here: %s", pr.Sha, sisterPart, mmURL)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	return request

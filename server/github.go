@@ -66,6 +66,7 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 		Number:    *pullRequest.Number,
 		Username:  *pullRequest.User.Login,
 		FullName:  "",
+		HeadLabel: *pullRequest.Head.Label,
 		Ref:       *pullRequest.Head.Ref,
 		Sha:       *pullRequest.Head.SHA,
 		State:     *pullRequest.State,
@@ -226,4 +227,24 @@ func (s *Server) areChecksSuccessfulForPr(pr *model.PullRequest, org string) (bo
 		return true, nil
 	}
 	return false, nil
+}
+
+func (s *Server) PullRequestWithBranchNameExists(pr *model.PullRequest) (*model.PullRequest, error) {
+	client := newGithubClient(s.Config.GithubAccessToken)
+	prs, _, err := client.PullRequests.List(context.Background(), pr.RepoOwner, pr.RepoName, &github.PullRequestListOptions{
+		Head:  pr.HeadLabel,
+		State: "open",
+		ListOptions: github.ListOptions{
+			PerPage: 1,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(prs) == 0 {
+		return nil, nil
+	}
+
+	return s.GetPullRequestFromGithub(prs[0])
 }

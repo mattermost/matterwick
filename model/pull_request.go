@@ -16,6 +16,7 @@ type PullRequest struct {
 	FullName  string
 	Number    int
 	Username  string
+	HeadLabel string
 	Ref       string
 	Sha       string
 	Labels    []string
