@@ -434,7 +434,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		DNS:         fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:        size,
 		Affinity:    "multitenant",
-		Database:    cloudModel.InstallationDatabasePerseus,
+		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
 		Filestore:   cloudModel.InstallationFilestoreBifrost,
 		Annotations: []string{defaultMultiTenantAnnotation},
 	}
