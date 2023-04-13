@@ -38,8 +38,8 @@ const (
 	cwsImage             = "mattermost/cws-test"
 	cwsDeploymentName    = "cws-test"
 	cwsSecretName        = "customer-web-server-secret"
-	mattermostEEImage    = "mattermost/mm-ee-test"
-	mattermostTeamImage  = "mattermost/mm-te-test"
+	mattermostEEImage    = "mattermostdevelopment/mm-ee-test"
+	mattermostTeamImage  = "mattermostdevelopment/mm-te-test"
 	mattermostWebAppRepo = "mattermost-webapp"
 	mattermostServerRepo = "mattermost-server"
 
