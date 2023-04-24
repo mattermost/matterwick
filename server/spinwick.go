@@ -322,7 +322,6 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	adminCreationMsg := ""
 	_, err = cwsClient.SignUp(username, password, "/api/v1/users/signup-admin")
 	if err != nil {
-		// return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
 		adminCreationMsg = "/nAn admin account was not created"
 	}
 
