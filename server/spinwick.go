@@ -132,7 +132,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
 	_, err := cwsClient.Login(username, password)
 	if err != nil {
-		response, err := cwsClient.SignUp(username, password)
+		response, err := cwsClient.SignUp(username, password, "/api/v1/users/signup")
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
 		}
@@ -315,7 +315,20 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
-	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s", spinwickURL, deployment.Environment.CWSSplitServerID)
+
+	cwsClient := cws.NewClient(spinwickURL, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
+	username := fmt.Sprintf("user-%s@example.mattermost.com", namespace)
+	password := s.Config.CWSUserPassword
+	adminCreationMsg := ""
+	_, err = cwsClient.SignUp(username, password, "/api/v1/users/signup-admin")
+	if err != nil {
+		// return request.WithError(errors.Wrap(err, "Error occurred whilst login or creating CWS user")).ShouldReportError()
+		adminCreationMsg = "/nAn admin account was not created"
+	}
+
+	adminCreationMsg = fmt.Sprintf("/nAdmin email: %s Admin password: %s", username, password)
+
+	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s%s", spinwickURL, deployment.Environment.CWSSplitServerID, adminCreationMsg)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	request.InstallationID = deployment.Namespace

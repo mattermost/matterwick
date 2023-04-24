@@ -120,9 +120,9 @@ func (c *Client) Login(email, password string) (*User, error) {
 }
 
 // SignUp sign up a new user in the CWS service
-func (c *Client) SignUp(email, password string) (*SignupResponse, error) {
+func (c *Client) SignUp(email, password, endpoint string) (*SignupResponse, error) {
 	parameters := fmt.Sprintf(`{"email": "%s", "password": "%s"}`, email, password)
-	resp, err := c.makeRequest(c.publicURL, http.MethodPost, "/api/v1/users/signup", []byte(parameters), false)
+	resp, err := c.makeRequest(c.publicURL, http.MethodPost, endpoint, []byte(parameters), false)
 	if err != nil {
 		return nil, errors.Wrap(err, "error trying to sign up into CWS API")
 	}
