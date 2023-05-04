@@ -235,7 +235,7 @@ func (c *Client) DeleteInstallation(installationID string) error {
 // RegisterStripeWebhook Calls test portal's internal API to register a new webhook endpoint in Stripe
 func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
 	path := fmt.Sprintf("/api/v1/internal/tests/spinwick/register_stripe_webhook")
-	resp, err := c.makeRequest(c.internalURL, http.MethodPost, path, []byte(fmt.Sprintf(`{"url": "%s", "owner": "%s"}`, url, owner)))
+	resp, err := c.makeRequest(c.internalURL, http.MethodPost, path, []byte(fmt.Sprintf(`{"url": "%s", "owner": "%s"}`, url, owner)), true)
 	if err != nil {
 		return "", errors.Wrap(err, "error trying to register stripe webhook")
 	}
@@ -260,7 +260,7 @@ func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
 // DeleteStripeWebhook Calls test portal's internal API to delete a webhook endpoint in Stripe
 func (c *Client) DeleteStripeWebhook(owner string) error {
 	path := fmt.Sprintf("/api/v1/internal/tests/spinwick/stripe_webhook/%s", owner)
-	resp, err := c.makeRequest(c.internalURL, http.MethodDelete, path, nil)
+	resp, err := c.makeRequest(c.internalURL, http.MethodDelete, path, nil, true)
 	if err != nil {
 		return errors.Wrap(err, "error trying to delete stripe webhook")
 	}

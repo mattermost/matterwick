@@ -285,17 +285,23 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
-	cloudClient.CreateWebhook(&cloudModel.CreateWebhookRequest{
+	_, err = cloudClient.CreateWebhook(&cloudModel.CreateWebhookRequest{
 		// We use the namespace as the owner so it's easily fetched later
 		OwnerID: namespace.GetName(),
 		URL:     fmt.Sprintf("http://cws-test-service.%s:8077/api/v1/internal/webhook", namespace.GetName()),
 	})
 
-	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	if err != nil {
+		mlog.Error("Unable to create webhook", mlog.Err(err))
+		return request.WithError(errors.Wrap(err, "Error creating provisioner webhook")).ShouldReportError()
+	}
+
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
 
 	secret, err := cwsClient.RegisterStripeWebhook(fmt.Sprintf("http://%s", lbURL), namespace.GetName())
 	if err != nil {
 		mlog.Error("Unable to register stripe webhook", mlog.Err(err))
+		return request.WithError(errors.Wrap(err, "Error registering stripe webhook")).ShouldReportError()
 	}
 
 	base64lbURL := base64.StdEncoding.EncodeToString([]byte("http://" + lbURL))
@@ -308,7 +314,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		metav1.PatchOptions{},
 	)
 	if err != nil {
-		mlog.Error("Unable to update CWS_SITEURL secret", mlog.Err(err))
+		mlog.Error("Unable to update CWS_SITEURL or STRIPE_WEBHOOK_SIGNATURE_SECRET secret", mlog.Err(err))
 	} else {
 		// patch the deployment to force new pods that will be aware of the new secrets.
 		_, err := kc.Clientset.AppsV1().Deployments(namespaceName).Patch(
@@ -831,7 +837,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		}
 	}
 
-	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress)
+	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
 	err = cwsClient.DeleteStripeWebhook(namespaceName)
 	if err != nil {
 		mlog.Error("Failed to delete stripe webhook", mlog.Err(err))
