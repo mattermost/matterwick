@@ -60,6 +60,11 @@ type CreateInstallationResponse struct {
 	Token          string `json:"token"`
 }
 
+// RegisterStripeWebhookResponse model returned after webhook endpoint is registered in Stripe by the test portal
+type RegisterStripeWebhookResponse struct {
+	Secret string `json:"secret"`
+}
+
 // Installation model that represents a CWS installation
 type Installation struct {
 	ID             string
@@ -225,6 +230,47 @@ func (c *Client) DeleteInstallation(installationID string) error {
 		return nil
 	}
 	return readAPIError(resp)
+}
+
+// RegisterStripeWebhook Calls test portal's internal API to register a new webhook endpoint in Stripe
+func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
+	path := fmt.Sprintf("/api/v1/internal/tests/spinwick/register_stripe_webhook")
+	resp, err := c.makeRequest(c.internalURL, http.MethodPost, path, []byte(fmt.Sprintf(`{"url": "%s", "owner": "%s"}`, url, owner)), true)
+	if err != nil {
+		return "", errors.Wrap(err, "error trying to register stripe webhook")
+	}
+	defer closeBody(resp)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return "", errors.Wrap(err, "error trying to register stripe webhook")
+		}
+		var response *RegisterStripeWebhookResponse
+		err = json.Unmarshal(body, &response)
+		if err != nil {
+			return "", errors.Wrap(err, "error trying to register stripe webhook")
+		}
+		return response.Secret, nil
+	}
+
+	return "", errors.New("Error registering Stripe Webhook")
+}
+
+// DeleteStripeWebhook Calls test portal's internal API to delete a webhook endpoint in Stripe
+func (c *Client) DeleteStripeWebhook(owner string) error {
+	path := fmt.Sprintf("/api/v1/internal/tests/spinwick/stripe_webhook/%s", owner)
+	resp, err := c.makeRequest(c.internalURL, http.MethodDelete, path, nil, true)
+	if err != nil {
+		return errors.Wrap(err, "error trying to delete stripe webhook")
+	}
+	defer closeBody(resp)
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	}
+
+	return errors.New("Error deleting Stripe Webhook")
 }
 
 // GetInstallations returns the installations associated that belongs to the logged user
