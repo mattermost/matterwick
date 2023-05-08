@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/server"
 	"github.com/pkg/errors"
 )
@@ -24,9 +23,6 @@ func main() {
 		fmt.Println(errors.Wrap(err, "unable to load server config"))
 		os.Exit(1)
 	}
-	server.SetupLogging(config)
-
-	mlog.Info("Loaded config", mlog.String("filename", configFile))
 
 	s := server.New(config)
 

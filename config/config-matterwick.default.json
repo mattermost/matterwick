@@ -23,14 +23,8 @@
   "KubeClusterName": "",
   "KubeClusterRegion": "",
   "LogSettings": {
-    "EnableConsole": true,
-    "ConsoleLevel": "DEBUG",
-    "ConsoleJSON": true,
-    "EnableFile": false,
-    "FileLevel": "INFO",
-    "FileJSON": true,
-    "FileFormat": "",
-    "FileLocation": ""
+    "EnableDebug": true,
+    "ConsoleJSON": true
   },
   "CWSPublicAPIAddress": "",
   "CWSInternalAPIAddress": "",

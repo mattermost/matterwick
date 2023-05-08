@@ -8,26 +8,25 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/google/go-github/v32/github"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
-	"github.com/mattermost/mattermost-server/v5/mlog"
-	mattermostModel "github.com/mattermost/mattermost-server/v5/model"
+	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mattermost/matterwick/internal/cloudtools"
 	"github.com/mattermost/matterwick/internal/cws"
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
-
-	"github.com/google/go-github/v32/github"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	// K8s packages for CWS
 	"github.com/mattermost/mattermost-cloud/k8s"
-	log "github.com/sirupsen/logrus"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,10 +45,10 @@ const (
 	defaultMultiTenantAnnotation = "multi-tenant"
 )
 
-func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense bool, withCloudInfra bool) {
-
+func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense, withCloudInfra bool) {
+	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
 	if pr.State == "closed" {
-		mlog.Info("PR is closed/merged, will not create a test server", mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number))
+		logger.Info("PR is closed/merged, will not create a test server")
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "PR is closed/merged not creating a SpinWick Test server")
 		return
 	}
@@ -62,7 +61,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 	}
 	if pr.RepoName == cwsRepoName {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a CWS SpinWick test server")
-		request = s.createCWSSpinWick(pr)
+		request = s.createCWSSpinWick(pr, logger)
 	} else if withCloudInfra {
 		s.sendGitHubComment(
 			pr.RepoOwner,
@@ -70,7 +69,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 			pr.Number,
 			"Creating a new SpinWick test cloud server with CWS using Mattermost Cloud.",
 		)
-		request = s.createCloudSpinWickWithCWS(pr, size)
+		request = s.createCloudSpinWickWithCWS(pr, size, logger)
 	} else {
 		var commitMsg string
 		if withLicense {
@@ -79,20 +78,22 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 			commitMsg = "Creating a new SpinWick test server using Mattermost Cloud."
 		}
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, commitMsg)
-		request = s.createSpinWick(pr, size, withLicense, nil)
+		request = s.createSpinWick(pr, size, withLicense, nil, logger)
 	}
+
+	logger = logger.WithField("installation_id", request.InstallationID)
 
 	if request.Error != nil {
 		if request.Aborted {
-			mlog.Warn("Aborted creation of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Warn("Aborted creation of SpinWick")
 		} else {
-			mlog.Error("Failed to create SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Error("Failed to create SpinWick")
 		}
 		comments, err := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 		if err != nil {
-			mlog.Error("Error getting comments", mlog.Err(err))
+			logger.WithError(err).Error("Error getting comments")
 		} else {
-			s.removeOldComments(comments, pr)
+			s.removeOldComments(comments, pr, logger)
 		}
 		for _, label := range pr.Labels {
 			if s.isSpinWickLabel(label) {
@@ -105,7 +106,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 			additionalFields := map[string]string{
 				"Installation ID": request.InstallationID,
 			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Creation Failed", pr, request.Error, additionalFields)
+			s.logPrettyErrorToMattermost("[ SpinWick ] Creation Failed", pr, request.Error, additionalFields, logger)
 		}
 	}
 
@@ -113,7 +114,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 
 // createCloudSpinwickWithCWS will use the defined CWSCloudInstance to create a new user/customer and
 // instantiate a new MM cloud installation
-func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) *spinwick.Request {
+func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -170,7 +171,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	image := mattermostEEImage
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
 	if errImage != nil {
 		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
@@ -189,7 +190,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 		return request.WithError(errors.Wrap(err, "Error occurred whilst creating installation")).ShouldReportError()
 	}
 	request.InstallationID = createResponse.InstallationID
-	s.waitForInstallationStable(ctx, pr, request)
+	s.waitForInstallationStable(ctx, pr, request, logger)
 	if request.Error != nil {
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
@@ -200,7 +201,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string) 
 	return request
 }
 
-func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -208,7 +209,6 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		Aborted:        false,
 	}
 
-	logger := log.WithField("PR", fmt.Sprintf("%s: #%d", pr.RepoName, pr.Number))
 	kc, err := s.newClient(logger)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred while getting Kube Client"))
@@ -233,7 +233,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
 
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
 	if errImage != nil {
 		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
@@ -251,7 +251,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	template, err := template.ParseFiles("/matterwick/templates/cws/cws_deployment.tmpl")
 	if err != nil {
-		mlog.Error("Error loading deployment template ", mlog.Err(err))
+		logger.WithError(err).Error("Error loading deployment template ")
 	}
 
 	file, err := os.Create(deployment.DeployFilePath)
@@ -261,7 +261,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	err = template.Execute(file, deployment)
 	if err != nil {
-		mlog.Error("Error executing template ", mlog.Err(err))
+		logger.WithError(err).Error("Error executing template ")
 	}
 	file.Close()
 
@@ -277,9 +277,9 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(err, "Error deploying from manifest template")).ShouldReportError()
 	}
 
-	mlog.Info("Deployment created successfully. Cleanup complete")
+	logger.Info("Deployment created successfully. Cleanup complete")
 
-	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace)
+	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace, logger)
 
 	headers := map[string]string{
 		"x-api-key": s.Config.AWSAPIKey,
@@ -292,7 +292,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 	})
 
 	if err != nil {
-		mlog.Error("Unable to create webhook", mlog.Err(err))
+		logger.WithError(err).Error("Unable to create webhook")
 		return request.WithError(errors.Wrap(err, "Error creating provisioner webhook")).ShouldReportError()
 	}
 
@@ -300,7 +300,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	secret, err := cwsClient.RegisterStripeWebhook(fmt.Sprintf("http://%s", lbURL), namespace.GetName())
 	if err != nil {
-		mlog.Error("Unable to register stripe webhook", mlog.Err(err))
+		logger.WithError(err).Error("Unable to register stripe webhook")
 		return request.WithError(errors.Wrap(err, "Error registering stripe webhook")).ShouldReportError()
 	}
 
@@ -314,7 +314,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 		metav1.PatchOptions{},
 	)
 	if err != nil {
-		mlog.Error("Unable to update CWS_SITEURL or STRIPE_WEBHOOK_SIGNATURE_SECRET secret", mlog.Err(err))
+		logger.WithError(err).Error("Unable to update CWS_SITEURL or STRIPE_WEBHOOK_SIGNATURE_SECRET secret")
 	} else {
 		// patch the deployment to force new pods that will be aware of the new secrets.
 		_, err := kc.Clientset.AppsV1().Deployments(namespaceName).Patch(
@@ -325,16 +325,16 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 			metav1.PatchOptions{},
 		)
 		if err != nil {
-			mlog.Error("Unable to refresh the deployment", mlog.Err(err))
+			logger.WithError(err).Error("Unable to refresh the deployment")
 		}
 	}
 
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	commentsToDelete := []string{"Creating a SpinWick test CWS", "Spinwick Kubernetes namespace"}
 	if errComments != nil {
-		mlog.Error("pr_error", mlog.Err(err))
+		logger.WithError(err).Error("pr_error")
 	} else {
-		s.removeCommentsWithSpecificMessages(comments, commentsToDelete, pr)
+		s.removeCommentsWithSpecificMessages(comments, commentsToDelete, pr, logger)
 	}
 
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
@@ -349,7 +349,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = installation is created
 // - cloud installation found = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool, envVars cloudModel.EnvVarMap) *spinwick.Request {
+func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense bool, envVars cloudModel.EnvVarMap, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -372,12 +372,12 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	if errComments != nil {
-		mlog.Error("pr_error", mlog.Err(err))
+		logger.WithError(err).Error("pr_error")
 	} else {
-		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
+		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr, logger)
 	}
 
-	mlog.Info("No SpinWick found for this PR. Creating a new one.")
+	logger.Info("No SpinWick found for this PR. Creating a new one.")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
@@ -391,37 +391,37 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 	// if is server or webapp then set version to the PR git commit hash
 	if pr.RepoName == mattermostWebAppRepo {
-		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
+		logger.Info("Waiting for docker image to set up SpinWick")
 
 		// Waiting for Enterprise Image
-		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
 		if errImage != nil {
 			return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
 		}
 
 		version = s.Builds.getInstallationVersion(prNew)
 	} else if pr.RepoName == mattermostServerRepo {
-		mlog.Info("Waiting for docker image to set up SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
+		logger.Info("Waiting for docker image to set up SpinWick")
 
 		ctxEnterprise, cancelEnterprise := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancelEnterprise()
 		// Waiting for Enterprise Image
-		prNew, errImage := s.Builds.waitForImage(ctxEnterprise, s, reg, pr, image)
+		prNew, errImage := s.Builds.waitForImage(ctxEnterprise, s, reg, pr, image, logger)
 		if errImage != nil {
 			if withLicense {
 				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe.\nPlease check if the EE Pipeline was triggered and if not please trigger and re-add the `Setup HA Cloud Test Server` again.")
 				return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting. Check if EE pipeline ran")).IntentionalAbort()
 			}
 
-			mlog.Warn("Did not find the EE image, fallback to TE", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
+			logger.WithField("sha", pr.Sha).Warn("Did not find the EE image, fallback to TE")
 			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
 			//fallback to TE
 			image = mattermostTeamImage
 			ctxTeam, cancelTeam := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancelTeam()
-			prNew, errImage = s.Builds.waitForImage(ctxTeam, s, reg, pr, image)
+			prNew, errImage = s.Builds.waitForImage(ctxTeam, s, reg, pr, image, logger)
 			if errImage != nil {
-				mlog.Warn("Did not find TE image", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("sha", pr.Sha))
+				logger.WithField("sha", pr.Sha).Warn("Did not find TE image")
 				return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 			}
 		}
@@ -429,7 +429,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		version = s.Builds.getInstallationVersion(prNew)
 	}
 
-	mlog.Info("Provisioning Server - Installation request")
+	logger.Info("Provisioning Server - Installation request")
 
 	headers := map[string]string{
 		"x-api-key": s.Config.AWSAPIKey,
@@ -478,20 +478,21 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).ShouldReportError()
 	}
 	request.InstallationID = installation.ID
-	mlog.Info("Provisioner Server - installation request", mlog.String("InstallationID", request.InstallationID))
+	logger = logger.WithField("installation_id", request.InstallationID)
+	logger.Info("Provisioner Server - installation request")
 
 	wait := 1200
-	mlog.Info("Waiting for mattermost installation to become stable", mlog.Int("wait_seconds", wait))
+	logger.Info("Waiting %d seconds for mattermost installation to become stable")
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
-	s.waitForInstallationStable(ctx, pr, request)
+	s.waitForInstallationStable(ctx, pr, request, logger)
 	if request.Error != nil {
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
 
 	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
-	err = s.initializeMattermostTestServer(spinwickURL, pr.Number)
+	err = s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
 	}
@@ -503,6 +504,8 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 }
 
 func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) {
+	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
+
 	// other repos we are not updating
 	request := &spinwick.Request{
 		InstallationID: "n/a",
@@ -512,35 +515,36 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCl
 	}
 
 	if pr.RepoName == cwsRepoName {
-		request = s.updateKubeSpinWick(pr)
+		request = s.updateKubeSpinWick(pr, logger)
 	} else {
-		request = s.updateSpinWick(pr, withLicense, withCloudInfra)
+		request = s.updateSpinWick(pr, withLicense, withCloudInfra, logger)
 	}
+
+	logger = logger.WithField("installation_id", request.InstallationID)
 
 	if request.Error != nil {
 		if request.Aborted {
-			mlog.Warn("Aborted update of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Warn("Aborted update of SpinWick")
 		} else {
-			mlog.Error("Failed to update SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Error("Failed to update SpinWick")
 		}
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.SetupSpinmintFailedMessage)
 		if request.ReportError {
 			additionalFields := map[string]string{
 				"Installation ID": request.InstallationID,
 			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Update Failed", pr, request.Error, additionalFields)
+			s.logPrettyErrorToMattermost("[ SpinWick ] Update Failed", pr, request.Error, additionalFields, logger)
 		}
 	}
 }
 
-func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) updateKubeSpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
 		ReportError:    false,
 		Aborted:        false,
 	}
-	logger := log.WithField("PR", fmt.Sprintf("%s: #%d", pr.RepoName, pr.Number))
 
 	kc, err := s.newClient(logger)
 	if err != nil {
@@ -566,9 +570,9 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	if errComments != nil {
-		mlog.Error("pr_error", mlog.Err(err))
+		logger.WithError(err).Error("pr_error")
 	} else {
-		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
+		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr, logger)
 	}
 	// Now that we know this namespace exists, notify via comment that we are attempting to upgrade the deployment
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected. SpinWick will upgrade if the updated docker image is available.")
@@ -584,7 +588,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
 
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image)
+	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
 	if errImage != nil {
 		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
@@ -594,7 +598,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	deployClient := kc.Clientset.AppsV1().Deployments(namespaceName)
 	deployment, err := deployClient.Get(context.Background(), "cws-test", metav1.GetOptions{})
 	if err != nil && !k8sErrors.IsNotFound(err) {
-		mlog.Info("Attempted to update a deployment that does not exist")
+		logger.Warn("Attempted to update a deployment that does not exist")
 		return request.WithError(errors.Wrap(err, "Attempted to update a deployment that does not exist")).ShouldReportError()
 	}
 
@@ -617,10 +621,10 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		serverUpdateMessage := []string{
 			"CWS test server updated",
 		}
-		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr)
+		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr, logger)
 	}
 
-	lbURL, _ := waitForIPAssignment(kc, namespaceName)
+	lbURL, _ := waitForIPAssignment(kc, namespaceName, logger)
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
 	msg := fmt.Sprintf("CWS test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, spinwickURL)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
@@ -632,7 +636,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // - no cloud installation found = error is returned
 // - cloud installation found and updated = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool) *spinwick.Request {
+func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInfra bool, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -660,7 +664,8 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	}
 	request.InstallationID = installationID
 
-	mlog.Info("Sleeping a bit to wait for the build process to start", mlog.Int("pr", pr.Number), mlog.String("sha", pr.Sha))
+	logger = logger.WithField("sha", pr.Sha)
+	logger.Info("Sleeping a bit to wait for the build process to start")
 	time.Sleep(60 * time.Second)
 
 	// Remove old message to reduce the amount of similar messages and avoid confusion
@@ -669,9 +674,9 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	}
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	if errComments != nil {
-		mlog.Error("pr_error", mlog.Err(err))
+		logger.WithError(err).Error("pr_error")
 	} else {
-		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr)
+		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr, logger)
 	}
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected. SpinWick will upgrade if the updated docker image is available.")
 
@@ -680,12 +685,12 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		return request.WithError(errors.Wrap(err, "unable to get docker registry client")).ShouldReportError()
 	}
 
-	mlog.Info("Waiting for docker image to update SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName))
+	logger.Info("Waiting for docker image to update SpinWick")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	pr, err = s.Builds.waitForImage(ctx, s, reg, pr, image)
+	pr, err = s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
@@ -715,7 +720,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		return request.WithError(errors.New("another process already updated the installation version. Aborting")).IntentionalAbort()
 	}
 
-	mlog.Info("Provisioning Server - Upgrade request", mlog.String("SHA", pr.Sha))
+	logger.Info("Provisioning Server - Upgrade request")
 
 	_, err = cloudClient.UpdateInstallation(request.InstallationID, upgradeRequest)
 	if err != nil {
@@ -723,11 +728,11 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	}
 
 	wait := 600
-	mlog.Info("Waiting for mattermost installation to become stable", mlog.Int("wait_seconds", wait))
+	logger.Infof("Waiting %d seconds for mattermost installation to become stable", wait)
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
-	s.waitForInstallationStable(ctx, pr, request)
+	s.waitForInstallationStable(ctx, pr, request, logger)
 	if request.Error != nil {
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
@@ -737,7 +742,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		serverUpdateMessage := []string{
 			"Mattermost test server updated",
 		}
-		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr)
+		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr, logger)
 	}
 
 	mmURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
@@ -748,6 +753,8 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 }
 
 func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
+	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
+
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -756,38 +763,38 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
 	}
 
 	if pr.RepoName == cwsRepoName {
-		request = s.destroyKubeSpinWick(pr)
+		request = s.destroyKubeSpinWick(pr, logger)
 	} else if withCloud {
-		request = s.destroyCloudSpinWickWithCWS(pr)
+		request = s.destroyCloudSpinWickWithCWS(pr, logger)
 	} else {
-		request = s.destroySpinWick(pr)
+		request = s.destroySpinWick(pr, logger)
 	}
+
+	logger = logger.WithField("installation_id", request.InstallationID)
 
 	if request.Error != nil {
 		if request.Aborted {
-			mlog.Warn("Aborted deletion of SpinWick", mlog.String("abort_message", request.Error.Error()), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Warn("Aborted deletion of SpinWick")
 		} else {
-			mlog.Error("Failed to delete SpinWick", mlog.Err(request.Error), mlog.String("repo_name", pr.RepoName), mlog.Int("pr", pr.Number), mlog.String("installation_id", request.InstallationID))
+			logger.WithError(request.Error).Error("Failed to delete SpinWick")
 		}
 		if request.ReportError {
 			additionalFields := map[string]string{
 				"Installation ID": request.InstallationID,
 			}
-			s.logPrettyErrorToMattermost("[ SpinWick ] Destroy Failed", pr, request.Error, additionalFields)
+			s.logPrettyErrorToMattermost("[ SpinWick ] Destroy Failed", pr, request.Error, additionalFields, logger)
 		}
 	}
 }
 
-func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
-	mlog.Info("Received request to destroy kubernetes namespace")
+func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
+	logger.Info("Received request to destroy kubernetes namespace")
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
 		ReportError:    false,
 		Aborted:        false,
 	}
-
-	logger := log.WithField("PR", fmt.Sprintf("%s: #%d", pr.RepoName, pr.Number))
 
 	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
 
@@ -808,12 +815,12 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 
 	err = deleteNamespace(kc, namespaceName)
 	if err != nil {
-		mlog.Error("Failed while deleting namespace", mlog.Err(err))
+		logger.WithError(err).Error("Failed while deleting namespace")
 		request.Error = err
 		return request
 	}
 	request.InstallationID = namespaceName
-	mlog.Info("Kube namespace " + namespaceName + " has been destroyed")
+	logger.Infof("Kube namespace %s has been destroyed", namespaceName)
 
 	headers := map[string]string{
 		"x-api-key": s.Config.AWSAPIKey,
@@ -823,7 +830,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 		OwnerID: namespaceName,
 	})
 	if err != nil {
-		mlog.Error("Failed to get webhooks for spinwick", mlog.Err(err))
+		logger.WithError(err).Error("Failed to get webhooks for spinwick")
 		request.Error = err
 		return request
 	}
@@ -831,7 +838,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	for _, webhook := range webhooks {
 		err = cloudClient.DeleteWebhook(webhook.ID)
 		if err != nil {
-			mlog.Error("Failed to delete webhook", mlog.Err(err))
+			logger.WithError(err).Error("Failed to delete webhook")
 			request.Error = err
 			return request
 		}
@@ -840,7 +847,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
 	err = cwsClient.DeleteStripeWebhook(namespaceName)
 	if err != nil {
-		mlog.Error("Failed to delete stripe webhook", mlog.Err(err))
+		logger.WithError(err).Error("Failed to delete stripe webhook")
 		request.Error = err
 		return request
 	}
@@ -852,7 +859,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
-	s.removeOldComments(comments, pr)
+	s.removeOldComments(comments, pr, logger)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Spinwick CWS test server has been destroyed.")
 	return request
 }
@@ -860,7 +867,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest) *spinwick.Request {
 // destroyCloudSpinWickWithCWS destroys the Spinwick installation for the passed PR
 // using CWS so we can get rid of the installation but also for all the intermediate
 // metadata
-func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -888,7 +895,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 
 	request.InstallationID = installation.ID
 
-	mlog.Info("Found installation. Starting deletion...", mlog.String("id", installation.ID))
+	logger.WithField("installation_id", installation.ID).Info("Found installation. Starting deletion...")
 	err = cwsClient.DeleteInstallation(installation.ID)
 	if err != nil {
 		return request.WithInstallationID(installation.ID).
@@ -898,7 +905,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	s.waitForInstallationIsDeleted(ctx, pr, request)
+	s.waitForInstallationIsDeleted(ctx, pr, request, logger)
 
 	// Old comments created by MatterWick user will be deleted here.
 	s.commentLock.Lock()
@@ -907,7 +914,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
-	s.removeOldComments(comments, pr)
+	s.removeOldComments(comments, pr, logger)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.DestroyedSpinmintMessage)
 	return request
 }
@@ -916,7 +923,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest) *spinwick.Re
 // - no cloud installation found = empty ID string and no error
 // - cloud installation found and deleted = actual ID string and no error
 // - any errors = error is returned
-func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
+func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -934,7 +941,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	}
 	request.InstallationID = id
 
-	mlog.Info("Destroying SpinWick", mlog.Int("pr", pr.Number), mlog.String("repo_owner", pr.RepoOwner), mlog.String("repo_name", pr.RepoName), mlog.String("installation_id", request.InstallationID))
+	logger.WithField("installation_id", request.InstallationID).Info("Destroying SpinWick")
 
 	headers := map[string]string{
 		"x-api-key": s.Config.AWSAPIKey,
@@ -953,14 +960,14 @@ func (s *Server) destroySpinWick(pr *model.PullRequest) *spinwick.Request {
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
-	s.removeOldComments(comments, pr)
+	s.removeOldComments(comments, pr, logger)
 
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.DestroyedSpinmintMessage)
 
 	return request
 }
 
-func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRequest, request *spinwick.Request) {
+func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRequest, request *spinwick.Request, logger logrus.FieldLogger) {
 	channel, err := s.requestCloudWebhookChannel(request.InstallationID)
 	if err != nil {
 		request.WithError(err).ShouldReportError()
@@ -978,7 +985,10 @@ func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRe
 				continue
 			}
 
-			mlog.Info("Installation changed state", mlog.String("installation", request.InstallationID), mlog.String("state", payload.NewState))
+			logger.WithFields(logrus.Fields{
+				"installation_id": request.InstallationID,
+				"state":           payload.NewState,
+			}).Info("Installation changed state")
 
 			switch payload.NewState {
 			case cloudModel.InstallationStateStable:
@@ -1012,7 +1022,7 @@ func (s *Server) waitForInstallationStable(ctx context.Context, pr *model.PullRe
 	}
 }
 
-func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.PullRequest, request *spinwick.Request) {
+func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.PullRequest, request *spinwick.Request, logger logrus.FieldLogger) {
 	channel, err := s.requestCloudWebhookChannel(request.InstallationID)
 	if err != nil {
 		request.WithError(err).ShouldReportError()
@@ -1030,9 +1040,10 @@ func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.Pul
 				continue
 			}
 
-			mlog.Info("Installation changed state",
-				mlog.String("installation", request.InstallationID),
-				mlog.String("state", payload.NewState))
+			logger.WithFields(logrus.Fields{
+				"installation_id": request.InstallationID,
+				"state":           payload.NewState,
+			}).Info("Installation changed state")
 
 			switch payload.NewState {
 			case cloudModel.InstallationStateDeleted:
@@ -1045,11 +1056,11 @@ func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.Pul
 	}
 }
 
-func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) error {
-	mlog.Info("Initializing Mattermost installation")
+func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logger logrus.FieldLogger) error {
+	logger.Info("Initializing Mattermost installation")
 
 	wait := 600
-	mlog.Info("Waiting up to 600 seconds for DNS to propagate")
+	logger.Infof("Waiting up to %d seconds for DNS to propagate", wait)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
@@ -1074,15 +1085,15 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 		Email:    "sysadmin@example.mattermost.com",
 		Password: "Sys@dmin123",
 	}
-	_, response := client.CreateUser(user)
-	if response.StatusCode != 201 {
-		return fmt.Errorf("error creating the initial mattermost user: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	_, _, err = client.CreateUser(user)
+	if err != nil {
+		return errors.Wrap(err, "failed to create initial mattermost user")
 	}
-
 	client.Logout()
-	userLogged, response := client.Login("sysadmin", "Sys@dmin123")
-	if response.StatusCode != 200 {
-		return fmt.Errorf("error logging in with initial mattermost user: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+
+	userLogged, _, err := client.Login("sysadmin", "Sys@dmin123")
+	if err != nil {
+		return errors.Wrap(err, "failed to log in with initial mattermost user")
 	}
 
 	teamName := fmt.Sprintf("pr%d", prNumber)
@@ -1091,14 +1102,14 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 		DisplayName: teamName,
 		Type:        "O",
 	}
-	firstTeam, response := client.CreateTeam(team)
-	if response.StatusCode != 201 {
-		return fmt.Errorf("error creating the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	firstTeam, _, err := client.CreateTeam(team)
+	if err != nil {
+		return errors.Wrap(err, "failed to log in with initial team")
 	}
 
-	_, response = client.AddTeamMember(firstTeam.Id, userLogged.Id)
-	if response.StatusCode != 201 {
-		return fmt.Errorf("error adding sysadmin to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	_, _, err = client.AddTeamMember(firstTeam.Id, userLogged.Id)
+	if err != nil {
+		return errors.Wrap(err, "failed adding admin user to initial team")
 	}
 
 	testUser := &mattermostModel.User{
@@ -1106,16 +1117,16 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int) erro
 		Email:    "user-1@example.mattermost.com",
 		Password: "User-1@123",
 	}
-	testUser, response = client.CreateUser(testUser)
-	if response.StatusCode != 201 {
-		return fmt.Errorf("error creating the standard test user: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	testUser, _, err = client.CreateUser(testUser)
+	if err != nil {
+		return errors.Wrap(err, "failed to create standard test user")
 	}
-	_, response = client.AddTeamMember(firstTeam.Id, testUser.Id)
-	if response.StatusCode != 201 {
-		return fmt.Errorf("error adding standard test user to the initial team: status code = %d, message = %s", response.StatusCode, response.Error.Message)
+	_, _, err = client.AddTeamMember(firstTeam.Id, testUser.Id)
+	if err != nil {
+		return errors.Wrap(err, "failed adding standard test user to initial team")
 	}
 
-	mlog.Info("Mattermost configuration complete")
+	logger.Info("Mattermost configuration complete")
 
 	return nil
 }
@@ -1138,8 +1149,8 @@ func checkDNS(ctx context.Context, url string) error {
 
 func checkMMPing(ctx context.Context, client *mattermostModel.Client4) error {
 	for {
-		status, response := client.GetPing()
-		if response.StatusCode == 200 && status == "OK" {
+		_, response, _ := client.GetPing()
+		if response.StatusCode == http.StatusOK {
 			return nil
 		}
 
@@ -1215,16 +1226,16 @@ func (s *Server) isSpinWickCloudWithCWSLabel(labels []string) bool {
 	return false
 }
 
-func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComment, serverMessages []string, pr *model.PullRequest) {
-	mlog.Info("Removing old spinwick MatterWick comments")
+func (s *Server) removeCommentsWithSpecificMessages(comments []*github.IssueComment, serverMessages []string, pr *model.PullRequest, logger logrus.FieldLogger) {
+	logger.Info("Removing old spinwick MatterWick comments")
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username {
 			for _, message := range serverMessages {
 				if strings.Contains(*comment.Body, message) {
-					mlog.Info("Removing old spinwick comment with ID", mlog.Int64("ID", *comment.ID))
+					logger.WithField("comment_id", *comment.ID).Info("Removing old spinwick comment with ID")
 					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
-						mlog.Error("Unable to remove old spinwick MatterWick comment", mlog.Err(err))
+						logger.WithError(err).Error("Unable to remove old spinwick MatterWick comment")
 					}
 					break
 				}

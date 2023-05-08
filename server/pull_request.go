@@ -7,8 +7,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
+	"github.com/sirupsen/logrus"
 
 	"github.com/google/go-github/v32/github"
 )
@@ -18,25 +18,27 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	prNumber := event.GetNumber()
 	label := event.GetLabel().GetName()
 
-	mlog.Info("PR-Event", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("action", event.GetAction()))
+	logger := s.Logger.WithFields(logrus.Fields{"repo": repoName, "pr": prNumber, "action": event.GetAction()})
+	logger.Info("PR-Event")
+
 	pr, err := s.GetPullRequestFromGithub(event.PullRequest)
 	if err != nil {
-		mlog.Error("Unable to get PR from GitHub", mlog.Int("pr", prNumber), mlog.Err(err))
+		logger.WithError(err).Error("Unable to get PR from GitHub")
 		return
 	}
 
 	switch event.GetAction() {
 	case "opened":
-		mlog.Info("PR opened", mlog.String("repo", repoName), mlog.Int("pr", pr.Number))
+		logger.Info("PR opened")
 	case "reopened":
-		mlog.Info("PR reopened", mlog.String("repo", repoName), mlog.Int("pr", pr.Number))
+		logger.Info("PR reopened")
 	case "labeled":
 		if event.Label == nil {
-			mlog.Error("Label event received, but label object was empty")
+			logger.Error("Label event received, but label object was empty")
 			return
 		}
 		if s.isSpinWickLabel(label) {
-			mlog.Info("PR received SpinWick label", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
+			logger.WithField("label", label).Info("PR received SpinWick label")
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWick:
 				s.handleCreateSpinWick(pr, "miniSingleton", false, false)
@@ -45,16 +47,16 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			case s.Config.SetupSpinWickWithCWS:
 				s.handleCreateSpinWick(pr, "miniSingleton", true, true)
 			default:
-				mlog.Error("Failed to determine sizing on SpinWick label", mlog.String("label", label))
+				logger.WithField("label", label).Error("Failed to determine sizing on SpinWick label")
 			}
 		}
 	case "unlabeled":
 		if event.Label == nil {
-			mlog.Error("Unlabel event received, but label object was empty")
+			logger.Error("Unlabel event received, but label object was empty")
 			return
 		}
 		if s.isSpinWickLabel(label) {
-			mlog.Info("PR SpinWick label was removed", mlog.String("repo", repoName), mlog.Int("pr", prNumber), mlog.String("label", label))
+			logger.WithField("label", label).Info("PR SpinWick label was removed")
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWickWithCWS:
 				s.handleDestroySpinWick(pr, true)
@@ -63,9 +65,9 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			}
 		}
 	case "synchronize":
-		mlog.Info("PR has a new commit", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
+		logger.Info("PR has a new commit")
 		if s.isSpinWickLabelInLabels(pr.Labels) {
-			mlog.Info("PR has a SpinWick label, starting upgrade", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
+			logger.Info("PR has a SpinWick label, starting upgrade")
 			if s.isSpinWickHALabel(pr.Labels) {
 				s.handleUpdateSpinWick(pr, true, false)
 			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
@@ -75,7 +77,7 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			}
 		}
 	case "closed":
-		mlog.Info("PR was closed", mlog.String("repo", repoName), mlog.Int("pr", prNumber))
+		logger.Info("PR was closed")
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
 				s.handleDestroySpinWick(pr, true)
@@ -87,33 +89,7 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 
 }
 
-func (s *Server) handlePRLabeled(pr *model.PullRequest, addedLabel string) {
-	mlog.Info("New PR label detected", mlog.Int("pr", pr.Number), mlog.String("label", addedLabel))
-
-	// Must be sure the comment is created before we let another request test
-	s.commentLock.Lock()
-	defer s.commentLock.Unlock()
-
-	comments, _, err := newGithubClient(s.Config.GithubAccessToken).Issues.ListComments(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
-	if err != nil {
-		mlog.Error("Unable to list comments for PR", mlog.Int("pr", pr.Number), mlog.Err(err))
-		return
-	}
-
-	// Old comment created by MatterWick user for test server deletion will be deleted here
-	for _, comment := range comments {
-		if *comment.User.Login == s.Config.Username &&
-			strings.Contains(*comment.Body, s.Config.DestroyedSpinmintMessage) {
-			mlog.Info("Removing old server deletion comment with ID", mlog.Int64("ID", *comment.ID))
-			_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
-			if err != nil {
-				mlog.Error("Unable to remove old server deletion comment", mlog.Err(err))
-			}
-		}
-	}
-}
-
-func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest) {
+func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest, logger logrus.FieldLogger) {
 	serverMessages := []string{
 		s.Config.SetupSpinmintFailedMessage,
 		"Spinmint test server created",
@@ -137,15 +113,15 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"Mattermost test server with CWS created",
 	}
 
-	mlog.Info("Removing old Matterwick comments")
+	logger.Info("Removing old Matterwick comments")
 	for _, comment := range comments {
 		if *comment.User.Login == s.Config.Username {
 			for _, message := range serverMessages {
 				if strings.Contains(*comment.Body, message) {
-					mlog.Info("Removing old comment with ID", mlog.Int64("ID", *comment.ID))
+					logger.Infof("Removing old comment with ID %d", *comment.ID)
 					_, err := newGithubClient(s.Config.GithubAccessToken).Issues.DeleteComment(context.Background(), pr.RepoOwner, pr.RepoName, *comment.ID)
 					if err != nil {
-						mlog.Error("Unable to remove old MatterWick comment", mlog.Err(err))
+						logger.WithError(err).Error("Unable to remove old MatterWick comment")
 					}
 					break
 				}

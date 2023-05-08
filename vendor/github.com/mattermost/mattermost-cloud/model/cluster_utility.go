@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 const (
@@ -62,15 +63,15 @@ var DefaultUtilityVersions map[string]*HelmUtilityVersion = map[string]*HelmUtil
 	// PrometheusOperatorCanonicalName defines the default version and values path for the Helm chart
 	PrometheusOperatorCanonicalName: {Chart: "40.5.0", ValuesPath: ""},
 	// ThanosCanonicalName defines the default version and values path for the Helm chart
-	ThanosCanonicalName: {Chart: "10.5.4", ValuesPath: ""},
+	ThanosCanonicalName: {Chart: "11.5.4", ValuesPath: ""},
 	// NginxCanonicalName defines the default version and values path for the Helm chart
-	NginxCanonicalName: {Chart: "4.2.0", ValuesPath: ""},
+	NginxCanonicalName: {Chart: "4.5.2", ValuesPath: ""},
 	// NginxInternalCanonicalName defines the default version and values path for the Helm chart
-	NginxInternalCanonicalName: {Chart: "4.2.0", ValuesPath: ""},
+	NginxInternalCanonicalName: {Chart: "4.5.2", ValuesPath: ""},
 	// FluentbitCanonicalName defines the default version and values path for the Helm chart
 	FluentbitCanonicalName: {Chart: "0.20.1", ValuesPath: ""},
 	// TeleportCanonicalName defines the default version and values path for the Helm chart
-	TeleportCanonicalName: {Chart: "6.2.8", ValuesPath: ""},
+	TeleportCanonicalName: {Chart: "7.3.26", ValuesPath: ""},
 	// PgbouncerCanonicalName defines the default version and values path for the Helm chart
 	PgbouncerCanonicalName: {Chart: "1.2.0", ValuesPath: ""},
 	// PromtailCanonicalName defines the default version and values path for the Helm chart
@@ -78,11 +79,11 @@ var DefaultUtilityVersions map[string]*HelmUtilityVersion = map[string]*HelmUtil
 	// RtcdCanonicalName defines the default version and values path for the Helm chart
 	RtcdCanonicalName: {Chart: "1.1.0", ValuesPath: ""},
 	// NodeProblemDetectorCanonicalName defines the default version and values path for the Helm chart
-	NodeProblemDetectorCanonicalName: {Chart: "2.0.5", ValuesPath: ""},
+	NodeProblemDetectorCanonicalName: {Chart: "2.3.2", ValuesPath: ""},
 	// MetricsServerCanonicalName defines the default version and values path for the Helm chart
-	MetricsServerCanonicalName: {Chart: "3.8.2", ValuesPath: ""},
+	MetricsServerCanonicalName: {Chart: "3.8.3", ValuesPath: ""},
 	// VeleroCanonicalName defines the default version for the Helm chart
-	VeleroCanonicalName: {Chart: "2.31.3", ValuesPath: ""},
+	VeleroCanonicalName: {Chart: "3.1.2", ValuesPath: ""},
 	// CloudproberCanonicalName defines the default version for the Helm chart
 	CloudproberCanonicalName: {Chart: "0.1.1", ValuesPath: ""},
 }
@@ -310,6 +311,17 @@ func setUtilityVersion(versions *UtilityGroupVersions, utility string, desiredVe
 type HelmUtilityVersion struct {
 	Chart      string
 	ValuesPath string
+}
+
+// UnmarshalJSON tries to unmarshal the HelmUtilityVersion from JSON
+// If it fails, it assumes that bytes is just the chart version in string
+func (u *HelmUtilityVersion) UnmarshalJSON(bytes []byte) error {
+	type newHelmUtilityVersion HelmUtilityVersion
+	err := json.Unmarshal(bytes, (*newHelmUtilityVersion)(u))
+	if err != nil {
+		u.Chart = strings.Trim(string(bytes), `"`)
+	}
+	return nil
 }
 
 // Version returns the Helm chart version

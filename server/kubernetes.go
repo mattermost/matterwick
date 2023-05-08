@@ -11,9 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/eks"
 	"github.com/mattermost/mattermost-cloud/k8s"
-	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/pkg/errors"
-	logrus "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,7 +67,7 @@ func deleteNamespace(kc *k8s.KubeClient, namespace string) error {
 	return nil
 }
 
-func waitForIPAssignment(kc *k8s.KubeClient, namespace string) (string, error) {
+func waitForIPAssignment(kc *k8s.KubeClient, namespace string, logger logrus.FieldLogger) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for {
@@ -82,7 +81,7 @@ func waitForIPAssignment(kc *k8s.KubeClient, namespace string) (string, error) {
 				return lb.Status.LoadBalancer.Ingress[0].Hostname, nil
 			}
 
-			mlog.Info("No IP found yet.. Waiting..")
+			logger.Debug("No IP found yet. Waiting...")
 		}
 	}
 }

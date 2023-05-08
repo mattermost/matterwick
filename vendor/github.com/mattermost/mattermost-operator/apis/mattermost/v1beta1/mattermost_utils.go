@@ -19,17 +19,19 @@ const (
 	// DefaultMattermostImage is the default Mattermost docker image
 	DefaultMattermostImage = "mattermost/mattermost-enterprise-edition"
 	// DefaultMattermostVersion is the default Mattermost docker tag
-	DefaultMattermostVersion = "6.5.0"
+	DefaultMattermostVersion = "7.5.1"
 	// DefaultMattermostSize is the default number of users
 	DefaultMattermostSize = "5000users"
 	// DefaultMattermostDatabaseType is the default Mattermost database
 	DefaultMattermostDatabaseType = "mysql"
-	// DefaultFilestoreStorageSize is the default Storage size for Minio
+	// DefaultFilestoreStorageSize is the default Storage size for Minio or Local Storage
 	DefaultFilestoreStorageSize = "50Gi"
 	// DefaultStorageSize is the default Storage size for the Database
 	DefaultStorageSize = "50Gi"
 	// DefaultPullPolicy is the default Pull Policy used by Mattermost app container
 	DefaultPullPolicy = corev1.PullIfNotPresent
+	// DefaultLocalFilePath is the default file path used with local (PVC) storage
+	DefaultLocalFilePath = "/mattermost/data"
 
 	// ClusterLabel is the label applied across all components
 	ClusterLabel = "installation.mattermost.com/installation"
@@ -43,9 +45,13 @@ const (
 	MattermostAppContainerName = "mattermost"
 )
 
-// SetDefaults set the missing values in the manifest to the default ones
+// SetDefaults sets the missing values in the manifest to the default ones
 func (mm *Mattermost) SetDefaults() error {
-	if mm.IngressEnabled() && mm.GetIngressHost() == "" {
+	if mm.AWSLoadBalancerEnabled() && len(mm.Spec.AWSLoadBalancerController.Hosts) == 0 {
+		return errors.New("awsLoadBalancerController.hosts is required, but not set")
+	}
+
+	if !mm.AWSLoadBalancerEnabled() && mm.IngressEnabled() && mm.GetIngressHost() == "" {
 		return errors.New("ingress.host required, but not set")
 	}
 	if mm.Spec.Image == "" {
@@ -70,6 +76,13 @@ func (mm *Mattermost) IngressEnabled() bool {
 		return mm.Spec.Ingress.Enabled
 	}
 	return true
+}
+
+func (mm *Mattermost) AWSLoadBalancerEnabled() bool {
+	if mm.Spec.AWSLoadBalancerController != nil {
+		return mm.Spec.AWSLoadBalancerController.Enabled
+	}
+	return false
 }
 
 // GetIngressHost returns Mattermost primary Ingress host.
@@ -111,12 +124,29 @@ func (mm *Mattermost) GetIngressHostNames() []string {
 	return hosts
 }
 
+func (mm *Mattermost) GetAWSLoadBalancerHostNames() []string {
+	hosts := []string{}
+
+	if mm.Spec.AWSLoadBalancerController != nil {
+		for _, host := range mm.Spec.AWSLoadBalancerController.Hosts {
+			hosts = append(hosts, host.HostName)
+		}
+	}
+
+	return hosts
+}
+
 // GetIngresAnnotations returns Mattermost Ingress annotations.
 func (mm *Mattermost) GetIngresAnnotations() map[string]string {
 	if mm.Spec.Ingress == nil {
 		return mm.Spec.IngressAnnotations
 	}
 	return mm.Spec.Ingress.Annotations
+}
+
+// GetIngresAnnotations returns Mattermost Ingress annotations.
+func (mm *Mattermost) GetAWSLoadBalancerIngressAnnotations() map[string]string {
+	return mm.Spec.AWSLoadBalancerController.Annotations
 }
 
 // GetIngressTLSSecret returns Mattermost Ingress TLS secret.

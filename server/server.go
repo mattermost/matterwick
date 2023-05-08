@@ -10,18 +10,15 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	cloudModel "github.com/mattermost/mattermost-cloud/model"
-	"github.com/mattermost/mattermost-server/v5/mlog"
-	"github.com/mattermost/mattermost-server/v5/utils/fileutils"
-
 	"github.com/braintree/manners"
 	"github.com/google/go-github/v32/github"
 	"github.com/gorilla/mux"
+	cloudModel "github.com/mattermost/mattermost-cloud/model"
+	"github.com/sirupsen/logrus"
 )
 
 // Server is the MatterWick server.
@@ -37,11 +34,11 @@ type Server struct {
 	commentLock sync.Mutex
 
 	StartTime time.Time
+
+	Logger logrus.FieldLogger
 }
 
 const (
-	logFilename = "matterwick.log"
-
 	// buildOverride overrides the buildsInterface of the server for development
 	// and testing.
 	buildOverride = "MATTERWICK_BUILD_OVERRIDE"
@@ -49,31 +46,41 @@ const (
 
 // New returns a new server with the desired configuration
 func New(config *MatterwickConfig) *Server {
+	if config.LogSettings.EnableDebug {
+		logger.SetLevel(logrus.DebugLevel)
+	}
+	if config.LogSettings.ConsoleJSON {
+		logger.SetFormatter(&logrus.JSONFormatter{})
+	}
+
 	s := &Server{
 		Config:          config,
 		Router:          mux.NewRouter(),
 		webhookChannels: make(map[string]chan cloudModel.WebhookPayload),
 		StartTime:       time.Now(),
+		Logger:          logger.WithField("instance", cloudModel.NewID()),
 	}
 
 	if !isAwsConfigDefined() {
-		mlog.Error("Missing environment credentials for AWS Access: AWS_SECRET_ACCESS_KEY, AWS_ACCESS_KEY_ID")
+		s.Logger.Error("Missing environment credentials for AWS Access: AWS_SECRET_ACCESS_KEY, AWS_ACCESS_KEY_ID")
 	}
 
 	s.Builds = &Builds{}
 	if os.Getenv(buildOverride) != "" {
-		mlog.Warn("Using mocked build tools")
+		s.Logger.Warn("Using mocked build tools")
 		s.Builds = &MockedBuilds{
 			Version: os.Getenv(buildOverride),
 		}
 	}
+
+	s.Logger.Info("Config loaded")
 
 	return s
 }
 
 // Start starts a server
 func (s *Server) Start() {
-	mlog.Info("Starting MatterWick Server")
+	s.Logger.Info("Starting MatterWick Server")
 
 	rand.Seed(time.Now().Unix())
 
@@ -81,19 +88,18 @@ func (s *Server) Start() {
 
 	var handler http.Handler = s.Router
 	go func() {
-		mlog.Info("Listening on", mlog.String("address", s.Config.ListenAddress))
+		s.Logger.WithField("addr", s.Config.ListenAddress).Info("API server listening")
 		err := manners.ListenAndServe(s.Config.ListenAddress, handler)
 		if err != nil {
 			s.logErrorToMattermost(err.Error())
-			mlog.Critical("server_error", mlog.Err(err))
-			panic(err.Error())
+			s.Logger.WithError(err).Panic("server_error")
 		}
 	}()
 }
 
 // Stop stops a server
 func (s *Server) Stop() {
-	mlog.Info("Stopping MatterWick")
+	s.Logger.Info("Stopping MatterWick")
 	manners.Close()
 }
 
@@ -120,14 +126,14 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)
 	if receivedHash[0] != "sha1" {
-		mlog.Error("Invalid webhook hash signature: SHA1")
+		s.Logger.Error("Invalid webhook hash signature: SHA1")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
 	err := ValidateSignature(receivedHash, buf, s.Config.GitHubWebhookSecret)
 	if err != nil {
-		mlog.Error(err.Error())
+		s.Logger.Error(err.Error())
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -135,21 +141,32 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	eventType := r.Header.Get("X-GitHub-Event")
 	switch eventType {
 	case "ping":
-		pingEvent := PingEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
-		if pingEvent == nil {
-			mlog.Info("ping event failed")
+		pingEvent, err := PingEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse ping event")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		mlog.Info("ping event", mlog.Int64("HookID", pingEvent.GetHookID()))
+		s.Logger.WithField("HookID", pingEvent.GetHookID()).Info("ping event")
 	case "pull_request":
-		event := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		event, err := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse pull request event")
+		}
+		// TODO: determine if we need to perform these event number checks or if
+		// they can be removed.
 		if event != nil && event.GetNumber() != 0 {
-			mlog.Info("pr event", mlog.Int("pr", event.GetNumber()), mlog.String("action", event.GetAction()))
+			s.Logger.WithFields(logrus.Fields{
+				"pr":     event.GetNumber(),
+				"action": event.GetAction(),
+			}).Info("pr event")
 			go s.handlePullRequestEvent(event)
 		}
 	case "issue_comment":
-		eventIssueEventComment := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		eventIssueEventComment, err := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse issue comment event")
+		}
 		if !eventIssueEventComment.GetIssue().IsPullRequest() {
 			// if not a pull request dont need to continue
 			w.WriteHeader(http.StatusAccepted)
@@ -161,7 +178,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		mlog.Info("Other Events")
+		s.Logger.Info("Other Events")
 		w.WriteHeader(http.StatusNotImplemented)
 		return
 	}
@@ -173,13 +190,16 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {
 	payload, err := cloudModel.WebhookPayloadFromReader(r.Body)
 	if err != nil {
-		mlog.Error("Received webhook event, but couldn't parse the payload")
+		s.Logger.WithError(err).Error("Received webhook event, but couldn't parse the payload")
 		return
 	}
 	defer r.Body.Close()
 
 	payloadClone := *payload
-	mlog.Debug("Received cloud webhook payload", mlog.Int("channels", len(s.webhookChannels)), mlog.String("payload", fmt.Sprintf("%+v", payloadClone)))
+	s.Logger.WithFields(logrus.Fields{
+		"channels": len(s.webhookChannels),
+		"payload":  fmt.Sprintf("%+v", payloadClone),
+	}).Debug("Received cloud webhook payload")
 
 	s.webhookChannelsLock.Lock()
 	for _, channel := range s.webhookChannels {
@@ -201,30 +221,4 @@ func messageByUserContains(comments []*github.IssueComment, username string, tex
 	}
 
 	return false
-}
-
-// GetLogFileLocation gets the log file locations
-func GetLogFileLocation(fileLocation string) string {
-	if fileLocation == "" {
-		fileLocation, _ = fileutils.FindDir("logs")
-	}
-
-	return filepath.Join(fileLocation, logFilename)
-}
-
-// SetupLogging sets the logging
-func SetupLogging(config *MatterwickConfig) {
-	loggingConfig := &mlog.LoggerConfiguration{
-		EnableConsole: config.LogSettings.EnableConsole,
-		ConsoleJson:   config.LogSettings.ConsoleJSON,
-		ConsoleLevel:  strings.ToLower(config.LogSettings.ConsoleLevel),
-		EnableFile:    config.LogSettings.EnableFile,
-		FileJson:      config.LogSettings.FileJSON,
-		FileLevel:     strings.ToLower(config.LogSettings.FileLevel),
-		FileLocation:  GetLogFileLocation(config.LogSettings.FileLocation),
-	}
-
-	logger := mlog.NewLogger(loggingConfig)
-	mlog.RedirectStdLog(logger)
-	mlog.InitGlobalLogger(logger)
 }
