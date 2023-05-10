@@ -12,15 +12,6 @@ import (
 
 //go:generate provisioner-code-gen generate --out-file=cluster_gen.go --boilerplate-file=../hack/boilerplate/boilerplate.generatego.txt --type=github.com/mattermost/mattermost-cloud/model.Cluster --generator=get_id,get_state,is_deleted,as_resources
 
-const (
-	// MattermostWebhook is the name of the Environment Variable which
-	// may contain a Mattermost webhook to send notifications to a Mattermost installation
-	MattermostWebhook = "mattermost-webhook"
-	// MattermostChannel is the name of the Environment Variable which
-	// may contain a Mattermost channel in which notifications are going to be sent
-	MattermostChannel = "mattermost-channel"
-)
-
 // Cluster represents a Kubernetes cluster.
 type Cluster struct {
 	ID                      string
@@ -94,7 +85,8 @@ type AnnotationsFilter struct {
 	MatchAllIDs []string
 }
 
-var clusterVersionMatcher = regexp.MustCompile(`^(([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3})|(latest))$`)
+// EKS only support x.xx versioning
+var clusterVersionMatcher = regexp.MustCompile(`^(([0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3})|([0-9]{1,3}.[0-9]{1,3})|(latest))$`)
 
 // ValidClusterVersion returns true if the provided version is either "latest"
 // or a valid k8s version number.

@@ -11,6 +11,10 @@ const (
 	ClusterStateCreationRequested = "creation-requested"
 	// ClusterStateCreationInProgress is a cluster that is being actively created.
 	ClusterStateCreationInProgress = "creation-in-progress"
+	// ClusterStateWaitingForNodes is a cluster that is waiting for nodes to be ready
+	ClusterStateWaitingForNodes = "waiting-for-nodes"
+	// ClusterStateProvisionInProgress is a cluster in the process of being provisioned.
+	ClusterStateProvisionInProgress = "provision-in-progress"
 	// ClusterStateCreationFailed is a cluster that failed creation.
 	ClusterStateCreationFailed = "creation-failed"
 	// ClusterStateProvisioningRequested is a cluster in the process of being
@@ -28,6 +32,10 @@ const (
 	ClusterStateResizeRequested = "resize-requested"
 	// ClusterStateResizeFailed is a cluster that failed to resize.
 	ClusterStateResizeFailed = "resize-failed"
+	// ClusterStateNodegroupsCreationRequested is a cluster in the process of creating nodegroups.
+	ClusterStateNodegroupsCreationRequested = "nodegroups-creation-requested"
+	// ClusterStateNodegroupsCreationFailed is a cluster that failed to create nodegroups.
+	ClusterStateNodegroupsCreationFailed = "nodegroups-creation-failed"
 	// ClusterStateDeletionRequested is a cluster in the process of being deleted.
 	ClusterStateDeletionRequested = "deletion-requested"
 	// ClusterStateDeletionFailed is a cluster that failed deletion.
@@ -44,9 +52,13 @@ var AllClusterStates = []string{
 	ClusterStateRefreshMetadata,
 	ClusterStateCreationRequested,
 	ClusterStateCreationInProgress,
+	ClusterStateWaitingForNodes,
+	ClusterStateProvisionInProgress,
 	ClusterStateCreationFailed,
 	ClusterStateProvisioningRequested,
 	ClusterStateProvisioningFailed,
+	ClusterStateNodegroupsCreationRequested,
+	ClusterStateNodegroupsCreationFailed,
 	ClusterStateUpgradeRequested,
 	ClusterStateUpgradeFailed,
 	ClusterStateResizeRequested,
@@ -64,18 +76,23 @@ var AllClusterStates = []string{
 var AllClusterStatesPendingWork = []string{
 	ClusterStateCreationRequested,
 	ClusterStateCreationInProgress,
+	ClusterStateWaitingForNodes,
+	ClusterStateProvisionInProgress,
 	ClusterStateProvisioningRequested,
 	ClusterStateRefreshMetadata,
 	ClusterStateUpgradeRequested,
 	ClusterStateResizeRequested,
+	ClusterStateNodegroupsCreationRequested,
 	ClusterStateDeletionRequested,
 }
 
 // ClusterStateWorkPriority is a map of states to their priority. Default priority is 0.
 // States with higher priority will be processed first.
 var ClusterStateWorkPriority = map[string]int{
-	ClusterStateCreationRequested:  2,
-	ClusterStateCreationInProgress: 1,
+	ClusterStateCreationRequested:   4,
+	ClusterStateCreationInProgress:  3,
+	ClusterStateWaitingForNodes:     2,
+	ClusterStateProvisionInProgress: 1,
 }
 
 // AllClusterRequestStates is a list of all states that a cluster can be put in
@@ -88,6 +105,7 @@ var AllClusterRequestStates = []string{
 	ClusterStateProvisioningRequested,
 	ClusterStateUpgradeRequested,
 	ClusterStateResizeRequested,
+	ClusterStateNodegroupsCreationRequested,
 	ClusterStateDeletionRequested,
 }
 
@@ -122,6 +140,11 @@ var (
 			ClusterStateStable,
 			ClusterStateResizeRequested,
 			ClusterStateResizeFailed,
+		},
+		ClusterStateNodegroupsCreationRequested: {
+			ClusterStateStable,
+			ClusterStateNodegroupsCreationRequested,
+			ClusterStateNodegroupsCreationFailed,
 		},
 		ClusterStateDeletionRequested: {
 			ClusterStateStable,

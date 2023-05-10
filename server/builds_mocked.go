@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mattermost/matterwick/model"
+	"github.com/sirupsen/logrus"
 
 	"github.com/heroku/docker-registry-client/registry"
 )
@@ -22,6 +23,6 @@ func (b *MockedBuilds) dockerRegistryClient(s *Server) (*registry.Registry, erro
 	return nil, nil
 }
 
-func (b *MockedBuilds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest, imageToCheck string) (*model.PullRequest, error) {
+func (b *MockedBuilds) waitForImage(ctx context.Context, s *Server, reg *registry.Registry, pr *model.PullRequest, imageToCheck string, logger logrus.FieldLogger) (*model.PullRequest, error) {
 	return pr, nil
 }

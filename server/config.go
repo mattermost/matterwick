@@ -75,13 +75,8 @@ type MatterwickConfig struct {
 	KubeClusterRegion string
 
 	LogSettings struct {
-		EnableConsole bool
-		ConsoleJSON   bool
-		ConsoleLevel  string
-		EnableFile    bool
-		FileJSON      bool
-		FileLevel     string
-		FileLocation  string
+		EnableDebug bool
+		ConsoleJSON bool
 	}
 
 	CWSPublicAPIAddress   string

@@ -3,18 +3,18 @@ package server
 import (
 	"fmt"
 
-	"github.com/mattermost/mattermost-server/v5/mlog"
 	"github.com/mattermost/matterwick/model"
+	"github.com/sirupsen/logrus"
 )
 
 func (s *Server) logErrorToMattermost(msg string, args ...interface{}) {
 	if s.Config.MattermostWebhookURL == "" {
-		mlog.Warn("No Mattermost webhook URL set: unable to send message")
+		s.Logger.Warn("No Mattermost webhook URL set: unable to send message")
 		return
 	}
 
 	webhookMessage := fmt.Sprintf(msg, args...)
-	mlog.Debug("Sending Mattermost message", mlog.String("message", webhookMessage))
+	s.Logger.WithField("message", webhookMessage).Debug("Sending Mattermost message")
 
 	if s.Config.MattermostWebhookFooter != "" {
 		webhookMessage += "\n---\n" + s.Config.MattermostWebhookFooter
@@ -23,17 +23,17 @@ func (s *Server) logErrorToMattermost(msg string, args ...interface{}) {
 	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: webhookMessage}
 
 	if err := s.sendToWebhook(webhookRequest); err != nil {
-		mlog.Error("Unable to post to Mattermost webhook", mlog.Err(err))
+		s.Logger.WithError(err).Error("Unable to post to Mattermost webhook")
 	}
 }
 
-func (s *Server) logPrettyErrorToMattermost(msg string, pr *model.PullRequest, err error, additionalFields map[string]string) {
+func (s *Server) logPrettyErrorToMattermost(msg string, pr *model.PullRequest, err error, additionalFields map[string]string, logger logrus.FieldLogger) {
 	if s.Config.MattermostWebhookURL == "" {
-		mlog.Warn("No Mattermost webhook URL set: unable to send message")
+		logger.Warn("No Mattermost webhook URL set: unable to send message")
 		return
 	}
 
-	mlog.Debug("Sending Mattermost message", mlog.String("message", msg))
+	logger.WithField("message", msg).Debug("Sending Mattermost message")
 
 	fullMessage := fmt.Sprintf("%s\n---\nError: %s\nRepository: %s/%s\nPull Request: %d [ status=%s ]\nURL: %s\n",
 		msg,
@@ -50,7 +50,7 @@ func (s *Server) logPrettyErrorToMattermost(msg string, pr *model.PullRequest, e
 	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: fullMessage}
 
 	if err := s.sendToWebhook(webhookRequest); err != nil {
-		mlog.Error("Unable to post to Mattermost webhook", mlog.Err(err))
+		logger.WithError(err).Error("Unable to post to Mattermost webhook")
 	}
 }
 

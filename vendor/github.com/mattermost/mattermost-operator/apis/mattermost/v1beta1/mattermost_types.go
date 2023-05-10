@@ -75,6 +75,9 @@ type MattermostSpec struct {
 	// Ingress defines configuration for Ingress resource created by the Operator.
 	// +optional
 	Ingress *Ingress `json:"ingress,omitempty"`
+
+	// +optional
+	AWSLoadBalancerController *AWSLoadBalancerController `json:"awsLoadBalancerController,omitempty"`
 	// Volumes allows for mounting volumes from various sources into the
 	// Mattermost application pods.
 	// +optional
@@ -116,6 +119,10 @@ type MattermostSpec struct {
 	// PodTemplate defines configuration for the template for Mattermost pods.
 	// +optional
 	PodTemplate *PodTemplate `json:"podTemplate,omitempty"`
+
+	// DeploymentTemplate defines configuration for the template for Mattermost deployment.
+	// +optional
+	DeploymentTemplate *DeploymentTemplate `json:"deploymentTemplate,omitempty"`
 
 	// UpdateJob defines configuration for the template for the update job.
 	// +optional
@@ -177,6 +184,32 @@ type Ingress struct {
 	IngressClass *string `json:"ingressClass,omitempty"`
 }
 
+type AWSLoadBalancerController struct {
+	// An AWS ALB Ingress will be created instead of nginx
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Certificate arn for the ALB, required if SSL enabled
+	// +optional
+	CertificateARN string `json:"certificateARN,omitempty"`
+
+	// Whether the Ingress will be internetfacing, default is false
+	// +optional
+	InternetFacing bool `json:"internetFacing,omitempty"`
+
+	// Hosts allows specifying additional domain names for Mattermost to use.
+	// +optional
+	Hosts []IngressHost `json:"hosts,omitempty"`
+
+	// IngressClassName for your ingress
+	// +optional
+	IngressClassName string `json:"ingressClassName,omitempty"`
+
+	// Annotations defines annotations passed to the Ingress associated with Mattermost.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
 // IngressHost specifies additional hosts configuration.
 type IngressHost struct {
 	HostName string `json:"hostName,omitempty"`
@@ -228,6 +261,13 @@ type PodTemplate struct {
 	// Overrides what is set in ResourceLabels, does not override default labels (app and cluster labels).
 	// +optional
 	ExtraLabels map[string]string `json:"extraLabels,omitempty"`
+}
+
+// DeploymentTemplate defines configuration for the template for Mattermost deployment.
+type DeploymentTemplate struct {
+	// Defines the revision history limit for the mattermost deployment.
+	// +optional
+	RevisionHistoryLimit *int32 `json:"revisionHistoryLimit,omitempty"`
 }
 
 // UpdateJob defines configuration for the template for the update job pod.
@@ -320,9 +360,15 @@ type FileStore struct {
 	// Defines the configuration of an external file store.
 	// +optional
 	External *ExternalFileStore `json:"external,omitempty"`
+	// Defines the configuration of externally managed PVC backed storage.
+	// +optional
+	ExternalVolume *ExternalVolumeFileStore `json:"externalVolume,omitempty"`
 	// Defines the configuration of file store managed by Kubernetes operator.
 	// +optional
 	OperatorManaged *OperatorManagedMinio `json:"operatorManaged,omitempty"`
+	// Defines the configuration of PVC backed storage (local). This is NOT recommended for production environments.
+	// +optional
+	Local *LocalFileStore `json:"local,omitempty"`
 }
 
 // ExternalFileStore defines the configuration of the external file store that should be used by Mattermost.
@@ -334,6 +380,16 @@ type ExternalFileStore struct {
 	// Optionally enter the name of already existing secret.
 	// Secret should have two values: "accesskey" and "secretkey".
 	Secret string `json:"secret,omitempty"`
+
+	// Optionally use service account with IAM role to access AWS services, like S3.
+	UseServiceAccount bool `json:"useServiceAccount,omitempty"`
+}
+
+// ExternalVolumeFileStore defines the configuration of an externally managed
+// volume file store.
+type ExternalVolumeFileStore struct {
+	// The name of the matching volume claim for the externally managed volume.
+	VolumeClaimName string `json:"volumeClaimName,omitempty"`
 }
 
 // OperatorManagedMinio defines the configuration of a Minio file store managed by Kubernetes Operator.
@@ -353,6 +409,16 @@ type OperatorManagedMinio struct {
 	// Defines the resource requests and limits for the Minio pods.
 	// +optional
 	Resources v1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// LocalFileStore defines the configuration of the local file store that should be used by Mattermost (PVC configuration).
+type LocalFileStore struct {
+	// Set to use local (PVC) storage, require explicit enabled to prevent accidental misconfiguration.
+	Enabled bool `json:"enabled"`
+	// Defines the storage size for the PVC. (default 50Gi)
+	// +optional
+	// +kubebuilder:validation:Pattern=^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$
+	StorageSize string `json:"storageSize,omitempty"`
 }
 
 // ElasticSearch defines the ElasticSearch configuration for Mattermost.
