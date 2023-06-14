@@ -40,7 +40,7 @@ const (
 	mattermostEEImage    = "mattermostdevelopment/mm-ee-test"
 	mattermostTeamImage  = "mattermostdevelopment/mm-te-test"
 	mattermostWebAppRepo = "mattermost-webapp"
-	mattermostServerRepo = "mattermost-server"
+	mattermostServerRepo = "mattermost"
 
 	defaultMultiTenantAnnotation = "multi-tenant"
 )
