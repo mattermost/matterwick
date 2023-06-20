@@ -48,14 +48,16 @@ func (b *Builds) waitForImage(ctx context.Context, s *Server, reg *registry.Regi
 		case <-ctx.Done():
 			return pr, errors.New("timed out waiting for image to publish")
 		case <-time.After(30 * time.Second):
-			_, err := reg.ManifestDigest(imageToCheck, desiredTag)
+			availableTags, err := reg.Tags(imageToCheck)
 			if err != nil && !strings.Contains(err.Error(), "status=404") {
-				return pr, errors.Wrap(err, "unable to fetch tag from docker registry")
+				return pr, errors.Wrap(err, "unable to fetch tags from docker registry")
 			}
-
-			if err == nil {
-				logger.Info("Docker tag found!")
-				return pr, nil
+			logger.Info("We found", len(availableTags), "tags available")
+			for _, tag := range availableTags {
+				if tag == desiredTag {
+					logger.Info("Docker tag found!")
+					return pr, nil
+				}
 			}
 
 			logger.Debug("Docker tag for the build not found. Waiting...")
