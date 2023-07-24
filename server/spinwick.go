@@ -830,7 +830,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 		OwnerID: namespaceName,
 	})
 	if err != nil {
-		logger.WithError(err).Error("Failed to get webhooks for spinwick")
+		logger.WithError(err).Error("Failed to get provisioner webhooks for spinwick")
 		request.Error = err
 		return request
 	}
@@ -838,7 +838,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 	for _, webhook := range webhooks {
 		err = cloudClient.DeleteWebhook(webhook.ID)
 		if err != nil {
-			logger.WithError(err).Error("Failed to delete webhook")
+			logger.WithError(err).Error("Failed to delete provisioner webhook")
 			request.Error = err
 			return request
 		}

@@ -241,7 +241,7 @@ func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
 	}
 	defer closeBody(resp)
 	switch resp.StatusCode {
-	case http.StatusOK:
+	case http.StatusCreated:
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			return "", errors.Wrap(err, "error trying to register stripe webhook")
@@ -254,7 +254,7 @@ func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
 		return response.Secret, nil
 	}
 
-	return "", errors.New("Error registering Stripe Webhook")
+	return "", readAPIError(resp)
 }
 
 // DeleteStripeWebhook Calls test portal's internal API to delete a webhook endpoint in Stripe
