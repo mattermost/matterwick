@@ -338,7 +338,8 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 	}
 
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
-	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s", spinwickURL, deployment.Environment.CWSSplitServerID)
+	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
+	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s\n\nLink to installation logs: [click here](%s)", spinwickURL, deployment.Environment.CWSSplitServerID, logLink)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	request.InstallationID = deployment.Namespace
@@ -497,7 +498,8 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
 	}
 	userTable := "| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | Sys@dmin123 |\n| User | user-1 | User-1@123 |"
-	msg := fmt.Sprintf("Mattermost test server created! :tada:\n\nAccess here: %s\n\n%s", spinwickURL, userTable)
+	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
+	msg := fmt.Sprintf("Mattermost test server created! :tada:\n\nAccess here: %s\n\n%s\n\nYour Spinwick's installation ID is: `%s`\nTo access the logs, please click [here](%s)", spinwickURL, userTable, installation.ID, logLink)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
 	return request
