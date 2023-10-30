@@ -79,10 +79,10 @@ spec:
         imagePullPolicy: IfNotPresent
         name: cws-main
         ports:
-        - containerPort: 8076
+        - containerPort: {{ .Environment.CWSPublicPort }}
           name: api
           protocol: TCP
-        - containerPort: 8077
+        - containerPort: {{ .Environment.CWSPrivatePort }}
           name: internal
           protocol: TCP
         resources: {}

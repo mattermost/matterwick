@@ -289,7 +289,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 	_, err = cloudClient.CreateWebhook(&cloudModel.CreateWebhookRequest{
 		// We use the namespace as the owner so it's easily fetched later
 		OwnerID: namespace.GetName(),
-		URL:     fmt.Sprintf("http://cws-test-service.%s:8077/api/v1/internal/webhook", namespace.GetName()),
+		URL:     fmt.Sprintf("http://cws-test-service.%s:%s/api/v1/internal/webhook", namespace.GetName(), s.Config.CWS.CWSPrivatePort),
 	})
 
 	if err != nil {
