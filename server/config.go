@@ -38,6 +38,8 @@ type CWS struct {
 	CloudDefaultProductID      string
 	CloudDefaultTrialProductID string
 	DockerHubCredentials       string
+	CWSPublicPort              string
+	CWSPrivatePort             string
 }
 
 // MatterwickConfig defines all config for to run the server
