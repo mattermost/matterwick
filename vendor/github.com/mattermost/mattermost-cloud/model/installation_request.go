@@ -7,6 +7,7 @@ package model
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -51,6 +52,7 @@ type CreateInstallationRequest struct {
 	Database                  string
 	Filestore                 string
 	APISecurityLock           bool
+	DeletionLocked            bool
 	MattermostEnv             EnvVarMap
 	PriorityEnv               EnvVarMap
 	Annotations               []string
@@ -290,6 +292,8 @@ type GetInstallationsRequest struct {
 	State                       string
 	DNS                         string
 	Name                        string
+	AllowedIPRanges             *AllowedIPRanges
+	OverrideIPRanges            bool
 	IncludeGroupConfig          bool
 	IncludeGroupConfigOverrides bool
 }
@@ -302,6 +306,10 @@ func (request *GetInstallationsRequest) ApplyToURL(u *url.URL) {
 	q.Add("state", request.State)
 	q.Add("dns_name", request.DNS)
 	q.Add("name", request.Name)
+	q.Add("allowed-ip-ranges", request.AllowedIPRanges.ToString())
+	if !request.OverrideIPRanges {
+		q.Add("override-ip-ranges", "false")
+	}
 	if !request.IncludeGroupConfig {
 		q.Add("include_group_config", "false")
 	}
@@ -315,13 +323,15 @@ func (request *GetInstallationsRequest) ApplyToURL(u *url.URL) {
 
 // PatchInstallationRequest specifies the parameters for an updated installation.
 type PatchInstallationRequest struct {
-	OwnerID       *string
-	Image         *string
-	Version       *string
-	Size          *string
-	License       *string
-	PriorityEnv   EnvVarMap
-	MattermostEnv EnvVarMap
+	OwnerID          *string
+	Image            *string
+	Version          *string
+	Size             *string
+	License          *string
+	AllowedIPRanges  *AllowedIPRanges
+	OverrideIPRanges *bool
+	PriorityEnv      EnvVarMap
+	MattermostEnv    EnvVarMap
 }
 
 // Validate validates the values of a installation patch request.
@@ -331,6 +341,9 @@ func (p *PatchInstallationRequest) Validate() error {
 	}
 	if p.Image != nil && len(*p.Image) == 0 {
 		return errors.New("provided image update value was blank")
+	}
+	if !p.AllowedIPRanges.AreValid() {
+		return errors.New("provided ip ranges update value was blank")
 	}
 	if p.Size != nil {
 		_, err := GetInstallationSize(*p.Size)
@@ -368,6 +381,25 @@ func (p *PatchInstallationRequest) Apply(installation *Installation) bool {
 		applied = true
 		installation.License = *p.License
 	}
+
+	if p.AllowedIPRanges != nil && p.AllowedIPRanges != installation.AllowedIPRanges {
+		applied = true
+		if p.OverrideIPRanges != nil && *p.OverrideIPRanges {
+			allowedIPRanges, err := p.replaceIngressSourceRanges()
+			if err != nil {
+				return false
+			}
+			installation.AllowedIPRanges = allowedIPRanges
+		} else {
+			allowedIPRanges, err := p.MergeNewIngressSourceRangesWithExisting(installation)
+			if err != nil {
+				return false
+			}
+			installation.AllowedIPRanges = allowedIPRanges
+		}
+
+	}
+
 	if p.MattermostEnv != nil {
 		if installation.MattermostEnv.ClearOrPatch(&p.MattermostEnv) {
 			applied = true
@@ -409,7 +441,7 @@ func (p *PatchInstallationDeletionRequest) Validate() error {
 	if p.DeletionPendingExpiry != nil {
 		// DeletionPendingExpiry is the new time when an installation pending
 		// deletion can be deleted. This can be any time from "now" into the
-		// future. The cuttoff for "now" will be the current time with a 5 second
+		// future. The cutoff for "now" will be the current time with a 5 seconds
 		// buffer. Any time value lower than that will be considered an error.
 		cutoffTimeMillis := GetMillisAtTime(time.Now().Add(-5 * time.Second))
 		if cutoffTimeMillis > *p.DeletionPendingExpiry {
@@ -430,6 +462,50 @@ func (p *PatchInstallationDeletionRequest) Apply(installation *Installation) boo
 	}
 
 	return applied
+}
+
+// MergeNewIngressSourceRangesWithExisting merges the AllowedIPRanges from the PatchInstallationRequest with the existing AllowedIPRanges from the Installation.
+// This is done so that individual fields of an AllowedIPRange (like the enabled field) can be adjusted without overriding the whole AllowedIPRanges slice.
+func (p *PatchInstallationRequest) MergeNewIngressSourceRangesWithExisting(installation *Installation) (*AllowedIPRanges, error) {
+	if p.AllowedIPRanges == nil {
+		return installation.AllowedIPRanges, nil
+	}
+
+	allowedRanges := *installation.AllowedIPRanges
+	patchAllowedRanges := *p.AllowedIPRanges
+
+	// Create a map to store the allowedRanges by CIDRBlock
+	allowedMap := make(map[string]AllowedIPRange)
+	for _, allowedRange := range allowedRanges {
+		allowedMap[allowedRange.CIDRBlock] = allowedRange
+	}
+
+	// Merge the patchAllowedRanges into the allowedMap
+	for _, patchRange := range patchAllowedRanges {
+		if !IsIPRangeValid(patchRange.CIDRBlock) {
+			return nil, errors.New("Invalid CIDR block provided")
+		}
+		allowedMap[patchRange.CIDRBlock] = patchRange
+	}
+
+	// Convert the map back into a slice
+	var mergedRanges AllowedIPRanges
+	for _, rangeValue := range allowedMap {
+		mergedRanges = append(mergedRanges, rangeValue)
+	}
+
+	return &mergedRanges, nil
+}
+
+// This function parses the InstallationRequests's AllowedIPRanges and returns an error if any of the ranges are invalid.
+func (p *PatchInstallationRequest) replaceIngressSourceRanges() (*AllowedIPRanges, error) {
+	for _, allowedIPRange := range *p.AllowedIPRanges {
+		if !IsIPRangeValid(allowedIPRange.CIDRBlock) {
+			return nil, errors.New("Invalid CIDR block provided")
+		}
+	}
+
+	return p.AllowedIPRanges, nil
 }
 
 // NewPatchInstallationDeletionRequestFromReader will create a PatchInstallationDeletionRequest from an io.Reader with JSON data.
@@ -462,4 +538,31 @@ func NewAssignInstallationGroupRequestFromReader(reader io.Reader) (*AssignInsta
 	}
 
 	return &assignGroupRequest, nil
+}
+
+// IsIPRangeValid validates if an IP range is considered valid.
+func IsIPRangeValid(ipRange string) bool {
+	// Split IP range into parts
+	parts := strings.Split(ipRange, "/")
+	ipString := parts[0]
+
+	// Validate IP address
+	ip := net.ParseIP(ipString)
+	if ip == nil {
+		return false
+	}
+
+	// If no subnet mask provided, treat it as /32 (single IP)
+	if len(parts) == 1 {
+		return true
+	}
+
+	// Validate subnet mask
+	_, ipNet, err := net.ParseCIDR(ipRange)
+	if err != nil {
+		return false
+	}
+
+	// Check if the IP is within the specified subnet
+	return ipNet.Contains(ip)
 }

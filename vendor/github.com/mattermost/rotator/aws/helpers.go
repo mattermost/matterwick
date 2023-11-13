@@ -1,6 +1,8 @@
 package aws
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,7 +16,10 @@ import (
 
 // GetNodeHostnames returns the hostnames of the autoscaling group nodes.
 func GetNodeHostnames(autoscalingGroupNodes []*autoscaling.Instance) ([]string, error) {
-	svc := ec2.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := ec2.New(sess)
 	var instanceHostnames []string
 	for _, node := range autoscalingGroupNodes {
 		resp, err := svc.DescribeInstances(&ec2.DescribeInstancesInput{
@@ -30,7 +35,10 @@ func GetNodeHostnames(autoscalingGroupNodes []*autoscaling.Instance) ([]string, 
 
 // GetInstanceID returns the instance ID of a node.
 func GetInstanceID(nodeName string, logger *logrus.Entry) (string, error) {
-	svc := ec2.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := ec2.New(sess)
 	resp, err := svc.DescribeInstances(&ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -53,7 +61,10 @@ func GetInstanceID(nodeName string, logger *logrus.Entry) (string, error) {
 
 // DetachNodes detaches nodes from an autoscaling group.
 func DetachNodes(decrement bool, nodesToDetach []string, autoscalingGroupName string, logger *logrus.Entry) error {
-	asgSvc := autoscaling.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	asgSvc := autoscaling.New(sess)
 
 	for _, node := range nodesToDetach {
 		instanceID, err := GetInstanceID(node, logger)
@@ -93,7 +104,18 @@ func DetachNodes(decrement bool, nodesToDetach []string, autoscalingGroupName st
 func TerminateNodes(nodesToTerminate []string, logger *logrus.Entry) error {
 	logger.Infof("Terminating %d nodes", len(nodesToTerminate))
 	for _, node := range nodesToTerminate {
-		instanceID, err := GetInstanceID(node, logger)
+		var instanceID string
+		var err error
+		logger.Infof(node)
+		if matchesPatternPrivateDNS(node) {
+			instanceID, err = GetInstanceID(node, logger)
+		} else if matchesPatternID(node) {
+			instanceID = node
+		} else {
+			instanceID = ""
+			logger.Infof("Node %s is not a valid input", node)
+		}
+
 		if err != nil {
 			return errors.Wrapf(err, "Failed to detach and delete node %s", node)
 		}
@@ -104,7 +126,10 @@ func TerminateNodes(nodesToTerminate []string, logger *logrus.Entry) error {
 		}
 
 		logger.Infof("Terminating instance %s", instanceID)
-		ec2Svc := ec2.New(session.New())
+		sess := session.Must(session.NewSessionWithOptions(session.Options{
+			SharedConfigState: session.SharedConfigEnable,
+		}))
+		ec2Svc := ec2.New(sess)
 
 		_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
 			InstanceIds: []*string{
@@ -121,7 +146,10 @@ func TerminateNodes(nodesToTerminate []string, logger *logrus.Entry) error {
 
 // GetAutoscalingGroups gets all the autoscaling groups that their names contain the cluster ID passed.
 func GetAutoscalingGroups(clusterID string) ([]*autoscaling.Group, error) {
-	svc := autoscaling.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := autoscaling.New(sess)
 	var autoscalingGroups []*autoscaling.Group
 	var nextToken *string
 	for {
@@ -147,7 +175,10 @@ func GetAutoscalingGroups(clusterID string) ([]*autoscaling.Group, error) {
 
 // AutoScalingGroupReady gets an AutoscalingGroup object and checks that autoscaling group is in ready state.
 func AutoScalingGroupReady(autoscalingGroupName string, desiredCapacity int, logger *logrus.Entry) (*autoscaling.Group, error) {
-	svc := autoscaling.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := autoscaling.New(sess)
 	timeout := 300
 	logger.Infof("Waiting up to %d seconds for autoscaling group %s to become ready...", timeout, autoscalingGroupName)
 
@@ -178,9 +209,16 @@ func AutoScalingGroupReady(autoscalingGroupName string, desiredCapacity int, log
 	}
 }
 
+func NodeInAutoscalingGroup(autoscalingGroupName, instanceID string) (bool, error) {
+	return nodeInAutoscalingGroup(autoscalingGroupName, instanceID)
+}
+
 // nodeInAutoscalingGroup checks if an instance is member of an Autoscaling Group.
 func nodeInAutoscalingGroup(autoscalingGroupName, instanceID string) (bool, error) {
-	svc := autoscaling.New(session.New())
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+	svc := autoscaling.New(sess)
 	resp, err := svc.DescribeAutoScalingGroups(&autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []*string{
 			aws.String(autoscalingGroupName),
@@ -196,4 +234,74 @@ func nodeInAutoscalingGroup(autoscalingGroupName, instanceID string) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func GetInstanceIDByPrivateIP(privateIP string) (string, error) {
+	// Create a new AWS session
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+
+	// Create an EC2 service client
+	ec2Svc := ec2.New(sess)
+
+	// Describe instances with the given private IP
+	input := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("private-ip-address"),
+				Values: []*string{aws.String(privateIP)},
+			},
+		},
+	}
+
+	result, err := ec2Svc.DescribeInstances(input)
+	if err != nil {
+		return "", fmt.Errorf("failed to describe instances: %v", err)
+	}
+
+	// Check if any instances were found
+	if len(result.Reservations) == 0 || len(result.Reservations[0].Instances) == 0 {
+		return "", fmt.Errorf("no instances found with the provided private IP: %s", privateIP)
+	}
+
+	// Retrieve the instance ID
+	instanceID := aws.StringValue(result.Reservations[0].Instances[0].InstanceId)
+
+	return instanceID, nil
+}
+
+func ExtractPrivateIP(input string) (string, error) {
+	regexPattern := `ip-(\d{1,3}-\d{1,3}-\d{1,3}-\d{1,3})\.ec2\.internal`
+	regex := regexp.MustCompile(regexPattern)
+	matches := regex.FindStringSubmatch(input)
+
+	if len(matches) != 2 {
+		return "", fmt.Errorf("failed to extract private IP from input string")
+	}
+
+	privateIP := strings.ReplaceAll(matches[1], "-", ".")
+	return privateIP, nil
+}
+
+func matchesPatternPrivateDNS(input string) bool {
+	// Define the regular expression pattern
+	pattern := `^ip-\d{2,3}-\d{1,3}-\d{1,3}-\d{1,3}\.ec2\.internal$`
+
+	// Compile the regular expression
+	re := regexp.MustCompile(pattern)
+
+	// Use the MatchString method to check if the input matches the pattern
+	return re.MatchString(input)
+}
+
+func matchesPatternID(input string) bool {
+	// Define the regular expression pattern for ID pattern
+	pattern := `^i-[0-9a-f]{8,17}$`
+
+	// Compile the regular expression
+	re := regexp.MustCompile(pattern)
+
+	// Use the MatchString method to check if the input matches the pattern
+	return re.MatchString(input)
 }

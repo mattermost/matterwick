@@ -36,11 +36,13 @@ const (
 	AlertmanagerConfigKindKey = "alertmanagerconfig"
 )
 
-// AlertmanagerConfig defines a namespaced AlertmanagerConfig to be aggregated
-// across multiple namespaces configuring one Alertmanager cluster.
 // +genclient
 // +k8s:openapi-gen=true
-// +kubebuilder:resource:categories="prometheus-operator"
+// +kubebuilder:resource:categories="prometheus-operator",shortName="amcfg"
+// +kubebuilder:storageversion
+
+// AlertmanagerConfig defines a namespaced AlertmanagerConfig to be aggregated
+// across multiple namespaces configuring one Alertmanager cluster.
 type AlertmanagerConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -63,7 +65,7 @@ type AlertmanagerConfigList struct {
 // By definition, the Alertmanager configuration only applies to alerts for which
 // the `namespace` label is equal to the namespace of the AlertmanagerConfig resource.
 type AlertmanagerConfigSpec struct {
-	// The Alertmanager route definition for alerts matching the resource’s
+	// The Alertmanager route definition for alerts matching the resource's
 	// namespace. If present, it will be added to the generated Alertmanager
 	// configuration as a first-level route.
 	// +optional
@@ -72,7 +74,7 @@ type AlertmanagerConfigSpec struct {
 	// +optional
 	Receivers []Receiver `json:"receivers"`
 	// List of inhibition rules. The rules will only apply to alerts matching
-	// the resource’s namespace.
+	// the resource's namespace.
 	// +optional
 	InhibitRules []InhibitRule `json:"inhibitRules,omitempty"`
 	// List of MuteTimeInterval specifying when the routes should be muted.
@@ -106,7 +108,7 @@ type Route struct {
 	// Example: "4h"
 	// +optional
 	RepeatInterval string `json:"repeatInterval,omitempty"`
-	// List of matchers that the alert’s labels should match. For the first
+	// List of matchers that the alert's labels should match. For the first
 	// level route, the operator removes any existing equality and regexp
 	// matcher on the `namespace` label and adds a `namespace: <object
 	// namespace>` matcher.
@@ -129,6 +131,9 @@ type Route struct {
 	// MuteTimeIntervals is a list of MuteTimeInterval names that will mute this route when matched,
 	// +optional
 	MuteTimeIntervals []string `json:"muteTimeIntervals,omitempty"`
+	// ActiveTimeIntervals is a list of MuteTimeInterval names when this route should be active.
+	// +optional
+	ActiveTimeIntervals []string `json:"activeTimeIntervals,omitempty"`
 }
 
 // ChildRoutes extracts the child routes.
@@ -167,6 +172,8 @@ type Receiver struct {
 	PushoverConfigs []PushoverConfig `json:"pushoverConfigs,omitempty"`
 	// List of SNS configurations
 	SNSConfigs []SNSConfig `json:"snsConfigs,omitempty"`
+	// List of Telegram configurations.
+	TelegramConfigs []TelegramConfig `json:"telegramConfigs,omitempty"`
 }
 
 // PagerDutyConfig configures notifications via PagerDuty.
@@ -475,6 +482,10 @@ type OpsGenieConfig struct {
 	// Priority level of alert. Possible values are P1, P2, P3, P4, and P5.
 	// +optional
 	Priority string `json:"priority,omitempty"`
+	// Whether to update message and description of the alert in OpsGenie if it already exists
+	// By default, the alert is never updated in OpsGenie, the new message only appears in activity log.
+	// +optional
+	UpdateAlerts *bool `json:"updateAlerts,omitempty"`
 	// A set of arbitrary key/value pairs that provide further detail about the incident.
 	// +optional
 	Details []KeyValue `json:"details,omitempty"`
@@ -484,6 +495,12 @@ type OpsGenieConfig struct {
 	// HTTP client configuration.
 	// +optional
 	HTTPConfig *HTTPConfig `json:"httpConfig,omitempty"`
+	// Optional field that can be used to specify which domain alert is related to.
+	// +optional
+	Entity string `json:"entity,omitempty"`
+	// Comma separated list of actions that will be available for the alert.
+	// +optional
+	Actions string `json:"actions,omitempty"`
 }
 
 // Validate ensures OpsGenieConfig is valid
@@ -510,6 +527,7 @@ type OpsGenieConfigResponder struct {
 	Username string `json:"username,omitempty"`
 	// Type of responder.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Enum=team;teams;user;escalation;schedule
 	Type string `json:"type"`
 }
 
@@ -679,12 +697,12 @@ type PushoverConfig struct {
 	// Whether or not to notify about resolved alerts.
 	// +optional
 	SendResolved *bool `json:"sendResolved,omitempty"`
-	// The secret's key that contains the recipient user’s user key.
+	// The secret's key that contains the recipient user's user key.
 	// The secret needs to be in the same namespace as the AlertmanagerConfig
 	// object and accessible by the Prometheus Operator.
 	// +kubebuilder:validation:Required
 	UserKey *v1.SecretKeySelector `json:"userKey,omitempty"`
-	// The secret's key that contains the registered application’s API token, see https://pushover.net/apps.
+	// The secret's key that contains the registered application's API token, see https://pushover.net/apps.
 	// The secret needs to be in the same namespace as the AlertmanagerConfig
 	// object and accessible by the Prometheus Operator.
 	// +kubebuilder:validation:Required
@@ -764,16 +782,47 @@ type SNSConfig struct {
 	HTTPConfig *HTTPConfig `json:"httpConfig,omitempty"`
 }
 
+// TelegramConfig configures notifications via Telegram.
+// See https://prometheus.io/docs/alerting/latest/configuration/#telegram_config
+type TelegramConfig struct {
+	// Whether to notify about resolved alerts.
+	// +optional
+	SendResolved *bool `json:"sendResolved,omitempty"`
+	// The Telegram API URL i.e. https://api.telegram.org.
+	// If not specified, default API URL will be used.
+	// +optional
+	APIURL string `json:"apiURL,omitempty"`
+	// Telegram bot token
+	// The secret needs to be in the same namespace as the AlertmanagerConfig
+	// object and accessible by the Prometheus Operator.
+	BotToken *v1.SecretKeySelector `json:"botToken,omitempty"`
+	// The Telegram chat ID.
+	ChatID int64 `json:"chatID,omitempty"`
+	// Message template
+	// +optional
+	Message string `json:"message,omitempty"`
+	// Disable telegram notifications
+	// +optional
+	DisableNotifications *bool `json:"disableNotifications,omitempty"`
+	// Parse mode for telegram message
+	//+kubebuilder:validation:Enum=MarkdownV2;Markdown;HTML
+	// +optional
+	ParseMode string `json:"parseMode,omitempty"`
+	// HTTP client configuration.
+	// +optional
+	HTTPConfig *HTTPConfig `json:"httpConfig,omitempty"`
+}
+
 // InhibitRule defines an inhibition rule that allows to mute alerts when other
 // alerts are already firing.
 // See https://prometheus.io/docs/alerting/latest/configuration/#inhibit_rule
 type InhibitRule struct {
 	// Matchers that have to be fulfilled in the alerts to be muted. The
-	// operator enforces that the alert matches the resource’s namespace.
+	// operator enforces that the alert matches the resource's namespace.
 	TargetMatch []Matcher `json:"targetMatch,omitempty"`
 	// Matchers for which one or more alerts have to exist for the inhibition
 	// to take effect. The operator enforces that the alert matches the
-	// resource’s namespace.
+	// resource's namespace.
 	SourceMatch []Matcher `json:"sourceMatch,omitempty"`
 	// Labels that must have an equal value in the source and target alert for
 	// the inhibition to take effect.

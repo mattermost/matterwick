@@ -38,6 +38,9 @@ const (
 	VeleroCanonicalName = "velero"
 	// CloudproberCanonicalName is the canonical string representation of Cloudprber
 	CloudproberCanonicalName = "cloudprober"
+	// UnmanagedUtilityVersion is the value of utility versions where the
+	// provisioner will no longer manage the helm chart.
+	UnmanagedUtilityVersion = "unmanaged"
 	// GitlabOAuthTokenKey is the name of the Environment Variable which
 	// may contain an OAuth token for accessing GitLab repositories over
 	// HTTPS, used for fetching values files
@@ -61,31 +64,31 @@ func GetGitlabToken() string {
 // DefaultUtilityVersions holds the default values for all the HelmUtilityVersions
 var DefaultUtilityVersions map[string]*HelmUtilityVersion = map[string]*HelmUtilityVersion{
 	// PrometheusOperatorCanonicalName defines the default version and values path for the Helm chart
-	PrometheusOperatorCanonicalName: {Chart: "40.5.0", ValuesPath: ""},
+	PrometheusOperatorCanonicalName: {Chart: "48.1.2", ValuesPath: ""},
 	// ThanosCanonicalName defines the default version and values path for the Helm chart
-	ThanosCanonicalName: {Chart: "11.5.4", ValuesPath: ""},
+	ThanosCanonicalName: {Chart: "12.10.1", ValuesPath: ""},
 	// NginxCanonicalName defines the default version and values path for the Helm chart
-	NginxCanonicalName: {Chart: "4.5.2", ValuesPath: ""},
+	NginxCanonicalName: {Chart: "4.7.1", ValuesPath: ""},
 	// NginxInternalCanonicalName defines the default version and values path for the Helm chart
-	NginxInternalCanonicalName: {Chart: "4.5.2", ValuesPath: ""},
+	NginxInternalCanonicalName: {Chart: "4.7.1", ValuesPath: ""},
 	// FluentbitCanonicalName defines the default version and values path for the Helm chart
-	FluentbitCanonicalName: {Chart: "0.20.1", ValuesPath: ""},
+	FluentbitCanonicalName: {Chart: "0.31.0", ValuesPath: ""},
 	// TeleportCanonicalName defines the default version and values path for the Helm chart
 	TeleportCanonicalName: {Chart: "7.3.26", ValuesPath: ""},
 	// PgbouncerCanonicalName defines the default version and values path for the Helm chart
-	PgbouncerCanonicalName: {Chart: "1.2.0", ValuesPath: ""},
+	PgbouncerCanonicalName: {Chart: "1.2.1", ValuesPath: ""},
 	// PromtailCanonicalName defines the default version and values path for the Helm chart
 	PromtailCanonicalName: {Chart: "6.2.2", ValuesPath: ""},
 	// RtcdCanonicalName defines the default version and values path for the Helm chart
-	RtcdCanonicalName: {Chart: "1.1.0", ValuesPath: ""},
+	RtcdCanonicalName: {Chart: "1.3.0", ValuesPath: ""},
 	// NodeProblemDetectorCanonicalName defines the default version and values path for the Helm chart
-	NodeProblemDetectorCanonicalName: {Chart: "2.3.2", ValuesPath: ""},
+	NodeProblemDetectorCanonicalName: {Chart: "2.3.5", ValuesPath: ""},
 	// MetricsServerCanonicalName defines the default version and values path for the Helm chart
-	MetricsServerCanonicalName: {Chart: "3.8.3", ValuesPath: ""},
+	MetricsServerCanonicalName: {Chart: "3.10.0", ValuesPath: ""},
 	// VeleroCanonicalName defines the default version for the Helm chart
 	VeleroCanonicalName: {Chart: "3.1.2", ValuesPath: ""},
 	// CloudproberCanonicalName defines the default version for the Helm chart
-	CloudproberCanonicalName: {Chart: "0.1.1", ValuesPath: ""},
+	CloudproberCanonicalName: {Chart: "0.1.3", ValuesPath: ""},
 }
 
 var defaultUtilityValuesFileNames map[string]string = map[string]string{
@@ -184,7 +187,6 @@ func NewUtilityMetadata(metadataBytes []byte) (*UtilityMetadata, error) {
 	// is done to avoid an issue encountered where the metadata value provided
 	// had a length of 0, but had non-zero capacity.
 	if len(metadataBytes) == 0 || string(metadataBytes) == "null" {
-		// TODO: remove "null" check after sqlite is gone.
 		return nil, nil
 	}
 
@@ -306,8 +308,7 @@ func setUtilityVersion(versions *UtilityGroupVersions, utility string, desiredVe
 	}
 }
 
-// HelmUtilityVersion holds the chart version and the version of the
-// values file
+// HelmUtilityVersion holds the chart version and the values path.
 type HelmUtilityVersion struct {
 	Chart      string
 	ValuesPath string
@@ -335,10 +336,42 @@ func (u *HelmUtilityVersion) Values() string {
 	return u.ValuesPath
 }
 
-// IsEmpty returns true if the HelmUtilityVersion is nil or if either
-// of the values inside are undefined
+// IsEmpty returns true if the HelmUtilityVersion is nil or if either of the
+// values inside are undefined. If HelmUtilityVersion is "unmanaged" then false
+// is returned instead.
 func (u *HelmUtilityVersion) IsEmpty() bool {
-	return u == nil ||
-		u.ValuesPath == "" ||
-		u.Chart == ""
+	if u == nil {
+		return true
+	}
+
+	if u.Chart == UnmanagedUtilityVersion {
+		return false
+	}
+
+	return u.ValuesPath == "" || u.Chart == ""
+}
+
+// UtilityIsUnmanaged returns true if the desired version of a utility is set to
+// "unmanaged" or if the actual version is "unmanaged" and there is no new
+// desired version.
+func UtilityIsUnmanaged(desired *HelmUtilityVersion, actual *HelmUtilityVersion) bool {
+	// Perform nil checks to derive version strings safely and help simplify the
+	// logic later.
+	var desiredVersion string
+	if desired != nil {
+		desiredVersion = desired.Version()
+	}
+	var actualVersion string
+	if actual != nil {
+		actualVersion = actual.Version()
+	}
+
+	if desiredVersion == UnmanagedUtilityVersion {
+		return true
+	}
+	if desiredVersion == "" && actualVersion == UnmanagedUtilityVersion {
+		return true
+	}
+
+	return false
 }

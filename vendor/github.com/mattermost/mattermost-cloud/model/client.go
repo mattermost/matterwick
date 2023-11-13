@@ -293,6 +293,22 @@ func (c *Client) CreateNodegroups(clusterID string, request *CreateNodegroupsReq
 	}
 }
 
+func (c *Client) DeleteNodegroup(clusterID string, nodegroup string) (*ClusterDTO, error) {
+	resp, err := c.doDelete(c.buildURL("/api/cluster/%s/nodegroup/%s", clusterID, nodegroup))
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return DTOFromReader[ClusterDTO](resp.Body)
+
+	default:
+		return nil, errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
 // DeleteCluster deletes the given cluster and all resources contained therein.
 func (c *Client) DeleteCluster(clusterID string) error {
 	resp, err := c.doDelete(c.buildURL("/api/cluster/%s", clusterID))
@@ -1274,8 +1290,8 @@ func (c *Client) GetMultitenantDatabase(multitenantDatabaseID string) (*Multiten
 }
 
 // UpdateMultitenantDatabase updates a multitenant database.
-func (c *Client) UpdateMultitenantDatabase(databaseID string, request *PatchMultitenantDatabaseRequest) (*MultitenantDatabase, error) {
-	resp, err := c.doPut(c.buildURL("/api/databases/multitenant_database/%s", databaseID), request)
+func (c *Client) UpdateMultitenantDatabase(multitenantDatabaseID string, request *PatchMultitenantDatabaseRequest) (*MultitenantDatabase, error) {
+	resp, err := c.doPut(c.buildURL("/api/databases/multitenant_database/%s", multitenantDatabaseID), request)
 	if err != nil {
 		return nil, err
 	}
@@ -1291,8 +1307,8 @@ func (c *Client) UpdateMultitenantDatabase(databaseID string, request *PatchMult
 }
 
 // DeleteMultitenantDatabase marks multitenant database as deleted.
-func (c *Client) DeleteMultitenantDatabase(databaseID string, force bool) error {
-	u := c.buildURL("/api/databases/multitenant_database/%s?force=%t", databaseID, force)
+func (c *Client) DeleteMultitenantDatabase(multitenantDatabaseID string, force bool) error {
+	u := c.buildURL("/api/databases/multitenant_database/%s?force=%t", multitenantDatabaseID, force)
 	resp, err := c.doDelete(u)
 	if err != nil {
 		return err
@@ -1352,6 +1368,24 @@ func (c *Client) GetLogicalDatabase(logicalDatabaseID string) (*LogicalDatabase,
 	}
 }
 
+// DeleteLogicalDatabase deletes an empty logical database.
+func (c *Client) DeleteLogicalDatabase(logicalDatabaseID string) error {
+	u := c.buildURL("/api/databases/logical_database/%s", logicalDatabaseID)
+	resp, err := c.doDelete(u)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+
+	default:
+		return errors.Errorf("failed with status code %d", resp.StatusCode)
+	}
+}
+
 // GetDatabaseSchemas fetches the list of database schemas from the configured provisioning server.
 func (c *Client) GetDatabaseSchemas(request *GetDatabaseSchemaRequest) ([]*DatabaseSchema, error) {
 	u, err := url.Parse(c.buildURL("/api/databases/database_schemas"))
@@ -1377,8 +1411,8 @@ func (c *Client) GetDatabaseSchemas(request *GetDatabaseSchemaRequest) ([]*Datab
 }
 
 // GetDatabaseSchema fetches the database schema from the configured provisioning server.
-func (c *Client) GetDatabaseSchema(multitenantDatabaseID string) (*DatabaseSchema, error) {
-	resp, err := c.doGet(c.buildURL("/api/databases/database_schema/%s", multitenantDatabaseID))
+func (c *Client) GetDatabaseSchema(databaseSchemaID string) (*DatabaseSchema, error) {
+	resp, err := c.doGet(c.buildURL("/api/databases/database_schema/%s", databaseSchemaID))
 	if err != nil {
 		return nil, err
 	}
@@ -1492,6 +1526,14 @@ func (c *Client) LockAPIForInstallation(installationID string) error {
 // UnlockAPIForInstallation unlocks API changes for a given installation.
 func (c *Client) UnlockAPIForInstallation(installationID string) error {
 	return c.makeSecurityCall("installation", installationID, "api", "unlock")
+}
+
+func (c *Client) LockDeletionLockForInstallation(installationID string) error {
+	return c.makeSecurityCall("installation", installationID, "deletion", "lock")
+}
+
+func (c *Client) UnlockDeletionLockForInstallation(installationID string) error {
+	return c.makeSecurityCall("installation", installationID, "deletion", "unlock")
 }
 
 // LockAPIForClusterInstallation locks API changes for a given cluster installation.

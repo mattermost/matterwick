@@ -289,6 +289,10 @@ type PodExtensions struct {
 	// Additional InitContainers injected to pods.
 	// The setting does not override InitContainers defined by the Operator.
 	InitContainers []v1.Container `json:"initContainers,omitempty"`
+
+	// Additional Container Ports injected to pod's main container.
+	// The setting does not override ContainerPorts defined by the Operator.
+	ContainerPorts []v1.ContainerPort `json:"containerPorts,omitempty"`
 }
 
 // Database defines the database configuration for Mattermost.
@@ -353,6 +357,9 @@ type OperatorManagedDatabase struct {
 	// Defines the secret to be used when performing a database restore.
 	// +optional
 	BackupRestoreSecretName string `json:"backupRestoreSecretName,omitempty"`
+	// Defines the cluster version for the database to use
+	// +optional
+	Version string `json:"version,omitempty"`
 }
 
 // FileStore defines the file store configuration for Mattermost.

@@ -8,17 +8,21 @@ import (
 	"strings"
 	"time"
 
+	awsTools "github.com/mattermost/rotator/aws"
+	k8sTools "github.com/mattermost/rotator/k8s"
+	"github.com/mattermost/rotator/model"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	typedappsv1 "k8s.io/client-go/kubernetes/typed/apps/v1"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -61,17 +65,6 @@ type DrainOptions struct {
 	SkipWaitForDeleteTimeoutSeconds int
 }
 
-type podDelete struct {
-	pod    corev1.Pod
-	status podDeleteStatus
-}
-
-type podDeleteStatus struct {
-	delete  bool
-	reason  string
-	message string
-}
-
 type waitForDeleteParams struct {
 	ctx                             context.Context
 	pods                            []corev1.Pod
@@ -106,10 +99,125 @@ const (
 	kUnmanagedWarning    = "Deleting pods not managed by ReplicationController, ReplicaSet, Job, DaemonSet or StatefulSet"
 )
 
-func Drain(client kubernetes.Interface, nodes []*corev1.Node, options *DrainOptions, waitBetweenPodEvictions int) error {
+// InitDrainNode is used to call the Drain function.
+func InitDrainNode(nodeDrain *model.NodeDrain, logger *logrus.Entry) error {
+	ctx := context.TODO()
+
+	drainOptions := &DrainOptions{
+		DeleteLocalData:    true,
+		IgnoreDaemonsets:   true,
+		Timeout:            600,
+		GracePeriodSeconds: nodeDrain.GracePeriod,
+	}
+
+	clientSet, err := k8sTools.GetClientset()
+	if err != nil {
+		return err
+	}
+
+	if nodeDrain.DetachNode {
+		asgs, errASG := awsTools.GetAutoscalingGroups(nodeDrain.ClusterID)
+		if errASG != nil {
+			return errors.Wrapf(err, "Failed to get autoscaling groups for cluster %s", nodeDrain.ClusterID)
+		}
+		var instanceID string
+		instanceID, err = awsTools.GetInstanceID(nodeDrain.NodeName, logger)
+		if err != nil {
+			return errors.Wrapf(err, "Failed to get instance ID for node %s", nodeDrain.NodeName)
+		}
+		var nodeFound bool
+		var nodeInGroup bool
+		for _, asg := range asgs {
+			nodeInGroup, err = awsTools.NodeInAutoscalingGroup(*asg.AutoScalingGroupName, instanceID)
+			if err != nil {
+				return errors.Wrapf(err, "Failed to check if node %s belongs in autoscaling group %s", nodeDrain.NodeName, *asg.AutoScalingGroupName)
+			}
+			if nodeInGroup {
+				nodeFound = true
+				logger.Infof("Node %s is in autoscaling group %s", nodeDrain.NodeName, *asg.AutoScalingGroupName)
+				logger.Infof("Detaching node %s from autoscaling group %s", nodeDrain.NodeName, *asg.AutoScalingGroupName)
+				err = awsTools.DetachNodes(false, []string{nodeDrain.NodeName}, *asg.AutoScalingGroupName, logger)
+				if err != nil {
+					return errors.Wrapf(err, "Failed to detach node %s from autoscaling group %s", nodeDrain.NodeName, *asg.AutoScalingGroupName)
+				}
+				logger.Infof("Detaching node %s from autoscaling group %s successful", nodeDrain.NodeName, *asg.AutoScalingGroupName)
+			}
+		}
+		if !nodeFound {
+			logger.Infof("Node %s not found in any autoscaling group, assuming it is detached...", nodeDrain.NodeName)
+		}
+
+		logger.Info("Sleeping 60 seconds for autoscaling group to balance...")
+		time.Sleep(60 * time.Second)
+	}
+
+	logger.Infof("Draining node %s", nodeDrain.NodeName)
+
+	node, err := clientSet.CoreV1().Nodes().Get(ctx, nodeDrain.NodeName, metav1.GetOptions{})
+	privateIP, _ := awsTools.ExtractPrivateIP(nodeDrain.NodeName)
+	instanceID, _ := awsTools.GetInstanceIDByPrivateIP(privateIP)
+
+	if k8sErrors.IsNotFound(err) {
+		node1, err1 := clientSet.CoreV1().Nodes().Get(ctx, instanceID, metav1.GetOptions{})
+		if err1 == nil {
+			for _, condition := range node1.Status.Conditions {
+				if condition.Reason == "KubeletReady" && condition.Status == corev1.ConditionTrue {
+					err = Drain(clientSet, []*corev1.Node{node1}, drainOptions, nodeDrain.WaitBetweenPodEvictions, logger)
+					logger.Infof("Draining node using instance ID %s", node1.Name)
+					for i := 1; i < nodeDrain.MaxDrainRetries && err != nil; i++ {
+						logger.Warnf("Failed to drain node %q on attempt %d, retrying up to %d times", nodeDrain.NodeName, i, nodeDrain.MaxDrainRetries)
+						err = Drain(clientSet, []*corev1.Node{node1}, drainOptions, nodeDrain.WaitBetweenPodEvictions, logger)
+					}
+					if err != nil {
+						return errors.Wrapf(err, "Failed to drain node %s", node1.Name)
+					}
+					logger.Infof("Node %s drained", node1.Name)
+				} else if condition.Reason == "KubeletReady" && condition.Status == corev1.ConditionFalse {
+					logger.Infof("Node %s found but not ready, waiting...", node1)
+				}
+			}
+		}
+		logger.Warnf("Node %s not found, assuming already drained", nodeDrain.NodeName)
+	} else if err != nil {
+		return errors.Wrapf(err, "Failed to get node %s", nodeDrain.NodeName)
+	} else {
+		err = Drain(clientSet, []*corev1.Node{node}, drainOptions, nodeDrain.WaitBetweenPodEvictions, logger)
+		for i := 1; i < nodeDrain.MaxDrainRetries && err != nil; i++ {
+			logger.Warnf("Failed to drain node %q on attempt %d, retrying up to %d times", nodeDrain.NodeName, i, nodeDrain.MaxDrainRetries)
+			err = Drain(clientSet, []*corev1.Node{node}, drainOptions, nodeDrain.WaitBetweenPodEvictions, logger)
+		}
+		if err != nil {
+			return errors.Wrapf(err, "Failed to drain node %s", nodeDrain.NodeName)
+		}
+		logger.Infof("Node %s drained", nodeDrain.NodeName)
+	}
+
+	if nodeDrain.TerminateNode {
+		logger.Infof("Terminating node %s ", nodeDrain.NodeName)
+		err3 := awsTools.TerminateNodes([]string{nodeDrain.NodeName}, logger)
+		if err3 != nil {
+			return errors.Wrapf(err3, "Failed to terminate node %s", nodeDrain.NodeName)
+		}
+		logger.Infof("Node %s terminated", nodeDrain.NodeName)
+
+		logger.Infof("Removing node %s from k8s", nodeDrain.NodeName)
+
+		err = k8sTools.DeleteClusterNodes([]string{nodeDrain.NodeName}, clientSet, logger)
+		if err != nil {
+			return err
+		}
+
+		logger.Infof("Node %s removed from k8s", nodeDrain.NodeName)
+		logger.Info("Drain operation completed")
+	}
+
+	return nil
+}
+
+func Drain(client kubernetes.Interface, nodes []*corev1.Node, options *DrainOptions, waitBetweenPodEvictions int, logger *logrus.Entry) error {
 	nodeInterface := client.CoreV1().Nodes()
 	for _, node := range nodes {
-		err := Cordon(nodeInterface, node)
+		err := Cordon(nodeInterface, node, logger)
 		if err != nil {
 			return err
 		}
@@ -119,7 +227,7 @@ func Drain(client kubernetes.Interface, nodes []*corev1.Node, options *DrainOpti
 	var fatal error
 
 	for _, node := range nodes {
-		err := DeleteOrEvictPods(client, node, options, waitBetweenPodEvictions)
+		err := DeleteOrEvictPods(client, node, options, waitBetweenPodEvictions, logger)
 		if err == nil {
 			drainedNodes.Insert(node.Name)
 			logger.Infof("Drained node %q", node.Name)
@@ -147,14 +255,14 @@ func Drain(client kubernetes.Interface, nodes []*corev1.Node, options *DrainOpti
 // DeleteOrEvictPods deletes or (where supported) evicts pods from the
 // target node and waits until the deletion/eviction completes,
 // Timeout elapses, or an error occurs.
-func DeleteOrEvictPods(client kubernetes.Interface, node *corev1.Node, options *DrainOptions, waitBetweenPodEvictions int) error {
-	pods, err := getPodsForDeletion(client, node, options)
+func DeleteOrEvictPods(client kubernetes.Interface, node *corev1.Node, options *DrainOptions, waitBetweenPodEvictions int, logger *logrus.Entry) error {
+	pods, err := getPodsForDeletion(client, node, options, logger)
 	if err != nil {
 		return err
 	}
-	err = deleteOrEvictPods(client, pods, options, waitBetweenPodEvictions)
+	err = deleteOrEvictPods(client, pods, options, waitBetweenPodEvictions, logger)
 	if err != nil {
-		pendingPods, newErr := getPodsForDeletion(client, node, options)
+		pendingPods, newErr := getPodsForDeletion(client, node, options, logger)
 		if newErr != nil {
 			return newErr
 		}
@@ -266,7 +374,7 @@ func (ps podStatuses) message() string {
 
 // getPodsForDeletion receives resource info for a node, and returns all the pods from the given node that we
 // are planning on deleting. If there are any pods preventing us from deleting, we return that list in an error.
-func getPodsForDeletion(client kubernetes.Interface, node *corev1.Node, options *DrainOptions) ([]corev1.Pod, error) {
+func getPodsForDeletion(client kubernetes.Interface, node *corev1.Node, options *DrainOptions, logger *logrus.Entry) ([]corev1.Pod, error) {
 	ctx := context.TODO()
 
 	listOptions := metav1.ListOptions{
@@ -347,7 +455,7 @@ func evictPod(client typedpolicyv1beta1.PolicyV1beta1Interface, pod corev1.Pod, 
 }
 
 // deleteOrEvictPods deletes or evicts the pods on the api server
-func deleteOrEvictPods(client kubernetes.Interface, pods []corev1.Pod, options *DrainOptions, waitBetweenPodEvictions int) error {
+func deleteOrEvictPods(client kubernetes.Interface, pods []corev1.Pod, options *DrainOptions, waitBetweenPodEvictions int, logger *logrus.Entry) error {
 	ctx := context.TODO()
 
 	if len(pods) == 0 {
@@ -364,13 +472,13 @@ func deleteOrEvictPods(client kubernetes.Interface, pods []corev1.Pod, options *
 	}
 
 	if len(policyGroupVersion) > 0 {
-		// Remember to change change the URL manipulation func when Evction's version change
-		return evictPods(client.PolicyV1beta1(), pods, policyGroupVersion, options, getPodFn, waitBetweenPodEvictions)
+		// Remember to change the URL manipulation func when Evction's version change
+		return evictPods(client.PolicyV1beta1(), pods, policyGroupVersion, options, getPodFn, waitBetweenPodEvictions, logger)
 	}
 	return deletePods(client.CoreV1(), pods, options, getPodFn, waitBetweenPodEvictions)
 }
 
-func evictPods(client typedpolicyv1beta1.PolicyV1beta1Interface, pods []corev1.Pod, policyGroupVersion string, options *DrainOptions, getPodFn func(namespace, name string) (*corev1.Pod, error), waitBetweenPodEvictions int) error {
+func evictPods(client typedpolicyv1beta1.PolicyV1beta1Interface, pods []corev1.Pod, policyGroupVersion string, options *DrainOptions, getPodFn func(namespace, name string) (*corev1.Pod, error), waitBetweenPodEvictions int, logger *logrus.Entry) error {
 	returnCh := make(chan error, 1)
 	// 0 timeout means infinite, we use MaxInt64 to represent it.
 	var globalTimeout time.Duration
@@ -485,36 +593,36 @@ func DeletePod(client typedcorev1.CoreV1Interface, pod corev1.Pod) error {
 
 func waitForDelete(params waitForDeleteParams) ([]corev1.Pod, error) {
 	pods := params.pods
-	err := wait.PollImmediate(params.interval, params.timeout, func() (bool, error) {
-		pendingPods := []corev1.Pod{}
-		for i, pod := range pods {
-			p, err := params.getPodFn(pod.Namespace, pod.Name)
-			if apierrors.IsNotFound(err) || (p != nil && p.ObjectMeta.UID != pod.ObjectMeta.UID) {
-				if params.onDoneFn != nil {
-					params.onDoneFn(&pod, params.usingEviction)
+	timeout := time.After(params.timeout)
+	for {
+		select {
+		case <-timeout:
+			return pods, fmt.Errorf("Timeout reached: %v", params.timeout)
+		default:
+			pendingPods := []corev1.Pod{}
+			for i, pod := range pods {
+				p, err := params.getPodFn(pod.Namespace, pod.Name)
+				if apierrors.IsNotFound(err) || (p != nil && p.ObjectMeta.UID != pod.ObjectMeta.UID) {
+					if params.onDoneFn != nil {
+						params.onDoneFn(&pod, params.usingEviction)
+					}
+					continue
+				} else if err != nil {
+					return pods, err
+				} else {
+					// if shouldSkipPod(*p, params.skipWaitForDeleteTimeoutSeconds) {
+					// 	continue
+					// }
+					pendingPods = append(pendingPods, pods[i])
 				}
-				continue
-			} else if err != nil {
-				return false, err
-			} else {
-				// if shouldSkipPod(*p, params.skipWaitForDeleteTimeoutSeconds) {
-				// 	continue
-				// }
-				pendingPods = append(pendingPods, pods[i])
 			}
-		}
-		pods = pendingPods
-		if len(pendingPods) > 0 {
-			select {
-			case <-params.ctx.Done():
-				return false, fmt.Errorf("Global timeout reached: %v", params.globalTimeout)
-			default:
-				return false, nil
+			pods = pendingPods
+			if len(pendingPods) == 0 {
+				return pods, nil
 			}
+			time.Sleep(params.interval)
 		}
-		return true, nil
-	})
-	return pods, err
+	}
 }
 
 // SupportEviction uses Discovery API to find out if the server
@@ -551,16 +659,16 @@ func SupportEviction(clientset kubernetes.Interface) (string, error) {
 }
 
 // Cordon marks a node "Unschedulable".  This method is idempotent.
-func Cordon(client typedcorev1.NodeInterface, node *corev1.Node) error {
-	return cordonOrUncordon(client, node, true)
+func Cordon(client typedcorev1.NodeInterface, node *corev1.Node, logger *logrus.Entry) error {
+	return cordonOrUncordon(client, node, true, logger)
 }
 
 // Uncordon marks a node "Schedulable".  This method is idempotent.
-func Uncordon(client typedcorev1.NodeInterface, node *corev1.Node) error {
-	return cordonOrUncordon(client, node, false)
+func Uncordon(client typedcorev1.NodeInterface, node *corev1.Node, logger *logrus.Entry) error {
+	return cordonOrUncordon(client, node, false, logger)
 }
 
-func cordonOrUncordon(client typedcorev1.NodeInterface, node *corev1.Node, desired bool) error {
+func cordonOrUncordon(client typedcorev1.NodeInterface, node *corev1.Node, desired bool, logger *logrus.Entry) error {
 	ctx := context.TODO()
 
 	unsched := node.Spec.Unschedulable

@@ -304,6 +304,15 @@ func (em *EKSMetadata) ValidateNodegroupsCreateRequest(nodegroups map[string]Nod
 	return nil
 }
 
+// ValidateNodegroupDeleteRequest ensures that the nodegroup to delete exists.
+func (em *EKSMetadata) ValidateNodegroupDeleteRequest(nodegroup string) error {
+	if _, f := em.NodeGroups[nodegroup]; !f {
+		return errors.Errorf("nodegroup %s not found to delete", nodegroup)
+	}
+
+	return nil
+}
+
 // ApplyNodegroupsCreateRequest applies the nodegroups to create to the
 // KopsMetadata.
 func (em *EKSMetadata) ApplyNodegroupsCreateRequest(request *CreateNodegroupsRequest) {
@@ -339,6 +348,23 @@ func (em *EKSMetadata) ApplyNodegroupsCreateRequest(request *CreateNodegroupsReq
 
 }
 
+// ApplyNodegroupDeleteRequest applies the nodegroup to delete to the
+// KopsMetadata.
+func (em *EKSMetadata) ApplyNodegroupDeleteRequest(nodegroup string) {
+
+	if em.NodeGroups == nil {
+		return
+	}
+
+	em.ChangeRequest = &EKSMetadataRequestedState{
+		NodeGroups: map[string]NodeGroupMetadata{
+			nodegroup: {
+				Name: em.NodeGroups[nodegroup].Name,
+			},
+		},
+	}
+}
+
 func (em *EKSMetadata) GetCommonMetadata() ProvisionerMetadata {
 	workerNodeGroup := em.NodeGroups[NodeGroupWorker]
 	return ProvisionerMetadata{
@@ -370,7 +396,6 @@ func NewEKSMetadata(metadataBytes []byte) (*EKSMetadata, error) {
 	// is done to avoid an issue encountered where the metadata value provided
 	// had a length of 0, but had non-zero capacity.
 	if len(metadataBytes) == 0 || string(metadataBytes) == "null" {
-		// TODO: remove "null" check after sqlite is gone.
 		return nil, nil
 	}
 
