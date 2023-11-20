@@ -196,7 +196,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string, 
 	}
 
 	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | %s | %s |", username, password)
-	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
+	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", request.InstallationID)
 	msg := fmt.Sprintf("Mattermost test server with CWS created! :tada:\n\nAccess here: %s\n\n%s\n\nYour spinwick's installation ID is `%s`\nLogs can be found [here](%s)", spinwickURL, userTable, installation.ID, logLink)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 	return request
