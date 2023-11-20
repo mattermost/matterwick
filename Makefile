@@ -14,7 +14,7 @@ PACKAGES=$(shell go list ./...)
 TOOLS_BIN_DIR := $(abspath bin)
 GO_INSTALL = ./scripts/go_install.sh
 
-GOFLAGS ?= $(GOFLAGS:) -mod=vendor
+GOFLAGS ?= $(GOFLAGS:)
 GOLINT_VER := master
 GOLINT_BIN := golint
 GOLINT_GEN := $(TOOLS_BIN_DIR)/$(GOLINT_BIN)
