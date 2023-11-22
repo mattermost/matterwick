@@ -1,39 +1,34 @@
 package cloudtools
 
 import (
-	"fmt"
-
-	cloudModel "github.com/mattermost/mattermost-cloud/model"
+	cloud "github.com/mattermost/mattermost-cloud/model"
+	"github.com/pkg/errors"
 )
 
-// GetInstallationIDFromOwnerID returns the ID of an installation that matches
-// a given OwnerID. Multiple matches will return an error. No match will return
+// GetInstallationIDFromOwnerID returns the installation that matches a given
+// OwnerID. Multiple matches will return an error. No match will return
 // an empty ID and no error.
-func GetInstallationIDFromOwnerID(serverURL, awsAPIKey, ownerID string) (string, string, error) {
+func GetInstallationIDFromOwnerID(serverURL, awsAPIKey, ownerID string) (*cloud.InstallationDTO, error) {
 	headers := map[string]string{
 		"x-api-key": awsAPIKey,
 	}
-	cloudClient := cloudModel.NewClientWithHeaders(serverURL, headers)
-	installations, err := cloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
-		OwnerID: ownerID,
-		Paging: cloudModel.Paging{
-			Page:           0,
-			PerPage:        100,
-			IncludeDeleted: false,
-		},
+	cloudClient := cloud.NewClientWithHeaders(serverURL, headers)
+	installations, err := cloudClient.GetInstallations(&cloud.GetInstallationsRequest{
+		OwnerID:                     ownerID,
+		Paging:                      cloud.AllPagesNotDeleted(),
 		IncludeGroupConfig:          false,
 		IncludeGroupConfigOverrides: false,
 	})
 	if err != nil {
-		return "", "", err
+		return nil, errors.Wrap(err, "failed to retrieve installations from provisioner")
 	}
 
 	if len(installations) == 0 {
-		return "", "", nil
+		return nil, nil
 	}
 	if len(installations) == 1 {
-		return installations[0].ID, installations[0].Image, nil
+		return installations[0], nil
 	}
 
-	return "", "", fmt.Errorf("found %d installations with ownerID %s", len(installations), ownerID)
+	return nil, errors.Errorf("found %d installations with ownerID %s", len(installations), ownerID)
 }

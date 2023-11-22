@@ -39,7 +39,6 @@ const (
 	cwsSecretName        = "customer-web-server-secret"
 	mattermostEEImage    = "mattermostdevelopment/mattermost-enterprise-edition"
 	mattermostTeamImage  = "mattermostdevelopment/mattermost-team-edition"
-	mattermostWebAppRepo = "mattermost-webapp"
 	mattermostServerRepo = "mattermost"
 
 	defaultMultiTenantAnnotation = "multi-tenant"
@@ -169,14 +168,14 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string, 
 	}
 
 	image := mattermostEEImage
+	version := s.Builds.getInstallationVersion(pr)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
-	if errImage != nil {
-		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	err = s.Builds.waitForImage(ctx, reg, version, image, logger)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
 
-	version := s.Builds.getInstallationVersion(prNew)
 	createInstallationRequest := &cws.CreateInstallationRequest{
 		CustomerID:             customerID,
 		RequestedWorkspaceName: uniqueID,
@@ -226,7 +225,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	version := ""
+	version := s.Builds.getInstallationVersion(pr)
 	image := cwsImage
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
@@ -234,12 +233,10 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
 
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
-	if errImage != nil {
-		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	err = s.Builds.waitForImage(ctx, reg, version, image, logger)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
-
-	version = s.Builds.getInstallationVersion(prNew)
 
 	deployment := Deployment{
 		Namespace:      namespace.GetName(),
@@ -357,15 +354,21 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		ReportError:    false,
 		Aborted:        false,
 	}
+
+	if pr.RepoName != mattermostServerRepo {
+		return request.WithError(errors.Errorf("Repository %s is not supported", pr.RepoName))
+	}
+
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
-	if id != "" {
-		return request.WithInstallationID(id).WithError(fmt.Errorf("Already found a installation belonging to %s", ownerID)).IntentionalAbort()
+	if installation != nil {
+		return request.WithInstallationID(installation.ID).
+			WithError(errors.Errorf("Already found a installation belonging to %s", ownerID)).
+			IntentionalAbort()
 	}
-	request.InstallationID = id
 
 	// Remove old message to reduce the amount of similar messages and avoid confusion
 	serverNewCommitMessages := []string{
@@ -373,91 +376,62 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 	comments, errComments := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 	if errComments != nil {
-		logger.WithError(err).Error("pr_error")
+		logger.WithError(err).Errorf("Failed to get comments on %s for PR %d", pr.RepoName, pr.Number)
 	} else {
 		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr, logger)
 	}
 
 	logger.Info("No SpinWick found for this PR. Creating a new one.")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
-	defer cancel()
-	// set the version to master
-	version := "master"
 	image := mattermostEEImage
+	version := s.Builds.getInstallationVersion(pr)
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
 	if errDocker != nil {
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
-	// if is server or webapp then set version to the PR git commit hash
-	if pr.RepoName == mattermostWebAppRepo {
-		logger.Info("Waiting for docker image to set up SpinWick")
 
-		// Waiting for Enterprise Image
-		prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
-		if errImage != nil {
-			return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	logger.Info("Waiting for docker image to set up SpinWick")
+
+	ctxEnterprise, cancelEnterprise := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancelEnterprise()
+
+	err = s.Builds.waitForImage(ctxEnterprise, reg, version, image, logger)
+	if err != nil {
+		if withLicense {
+			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe.\nPlease check if the EE Pipeline was triggered and if not please trigger and re-add the `Setup HA Cloud Test Server` again.")
+			return request.WithError(
+				errors.Wrap(err, "error waiting for the docker image. Aborting. Check if EE pipeline ran")).
+				ShouldReportError()
 		}
 
-		version = s.Builds.getInstallationVersion(prNew)
-	} else if pr.RepoName == mattermostServerRepo {
-		logger.Info("Waiting for docker image to set up SpinWick")
+		logger.WithField("sha", pr.Sha).Warn("Did not find the EE image, falling back to TE")
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
 
-		ctxEnterprise, cancelEnterprise := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancelEnterprise()
-		// Waiting for Enterprise Image
-		prNew, errImage := s.Builds.waitForImage(ctxEnterprise, s, reg, pr, image, logger)
-		if errImage != nil {
-			if withLicense {
-				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe.\nPlease check if the EE Pipeline was triggered and if not please trigger and re-add the `Setup HA Cloud Test Server` again.")
-				return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting. Check if EE pipeline ran")).IntentionalAbort()
-			}
+		image = mattermostTeamImage
+		ctxTeam, cancelTeam := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancelTeam()
 
-			logger.WithField("sha", pr.Sha).Warn("Did not find the EE image, fallback to TE")
-			s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Enterprise Edition Image not available in the 30 minutes timeframe, checking the Team Edition Image and if available will use that.")
-			//fallback to TE
-			image = mattermostTeamImage
-			ctxTeam, cancelTeam := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer cancelTeam()
-			prNew, errImage = s.Builds.waitForImage(ctxTeam, s, reg, pr, image, logger)
-			if errImage != nil {
-				logger.WithField("sha", pr.Sha).Warn("Did not find TE image")
-				return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
-			}
+		err = s.Builds.waitForImage(ctxTeam, reg, version, image, logger)
+		if err != nil {
+			logger.WithField("sha", pr.Sha).Warn("Did not find TE image")
+			return request.WithError(errors.Wrap(err, "Failed for find backup team edition image")).ShouldReportError()
 		}
-
-		version = s.Builds.getInstallationVersion(prNew)
 	}
 
-	logger.Info("Provisioning Server - Installation request")
+	logger.Info("Creating installation")
 
 	headers := map[string]string{
 		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
-
-	// TODO: (cpanato) add the group permission in the AUTH
-	// var groupID string
-	// var group *cloudModel.Group
-	// if len(s.Config.CloudGroupID) != 0 {
-	// 	group, err = cloudClient.GetGroup(s.Config.CloudGroupID)
-	// 	if err != nil {
-	// 		return request.WithError(errors.Wrapf(err, "unable to get group with ID %s", s.Config.CloudGroupID))
-	// 	}
-	// 	if group == nil {
-	// 		return request.WithError(fmt.Errorf("group with ID %s does not exist", s.Config.CloudGroupID))
-	// 	}
-	// 	groupID = s.Config.CloudGroupID
-	// }
-
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:     ownerID,
 		Version:     version,
 		Image:       image,
 		DNS:         fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
 		Size:        size,
-		Affinity:    "multitenant",
+		Affinity:    cloudModel.InstallationAffinityMultiTenant,
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
 		Filestore:   cloudModel.InstallationFilestoreBifrost,
 		Annotations: []string{defaultMultiTenantAnnotation},
@@ -468,28 +442,27 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	if envVars != nil && len(envVars) > 0 {
 		installationRequest.MattermostEnv = envVars
 	}
-
-	// TODO: (cpanato) Remove this when the above code comment is fixed
 	if len(s.Config.CloudGroupID) != 0 {
 		installationRequest.GroupID = s.Config.CloudGroupID
 	}
 
-	installation, err := cloudClient.CreateInstallation(installationRequest)
+	installation, err = cloudClient.CreateInstallation(installationRequest)
 	if err != nil {
-		return request.WithError(errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).ShouldReportError()
+		return request.WithError(
+			errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).
+			ShouldReportError()
 	}
 	request.InstallationID = installation.ID
 	logger = logger.WithField("installation_id", request.InstallationID)
-	logger.Info("Provisioner Server - installation request")
 
 	wait := 1200
 	logger.Info("Waiting %d seconds for mattermost installation to become stable")
-	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
 	s.waitForInstallationStable(ctx, pr, request, logger)
 	if request.Error != nil {
-		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
+		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable")).ShouldReportError()
 	}
 
 	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
@@ -582,7 +555,7 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest, logger logrus.FieldLo
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	version := ""
+	version := s.Builds.getInstallationVersion(pr)
 	image := cwsImage
 
 	reg, errDocker := s.Builds.dockerRegistryClient(s)
@@ -590,12 +563,10 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest, logger logrus.FieldLo
 		return request.WithError(errors.Wrap(errDocker, "unable to get docker registry client")).ShouldReportError()
 	}
 
-	prNew, errImage := s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
-	if errImage != nil {
-		return request.WithError(errors.Wrap(errImage, "error waiting for the docker image. Aborting")).IntentionalAbort()
+	err = s.Builds.waitForImage(ctx, reg, version, image, logger)
+	if err != nil {
+		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
-
-	version = s.Builds.getInstallationVersion(prNew)
 
 	deployClient := kc.Clientset.AppsV1().Deployments(namespaceName)
 	deployment, err := deployClient.Get(context.Background(), "cws-test", metav1.GetOptions{})
@@ -657,14 +628,14 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
 	}
 
-	installationID, image, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
-	if installationID == "" {
+	if installation == nil {
 		return request.WithError(fmt.Errorf("no installation found with owner %s", ownerID)).ShouldReportError()
 	}
-	request.InstallationID = installationID
+	request.InstallationID = installation.ID
 
 	logger = logger.WithField("sha", pr.Sha)
 	logger.Info("Sleeping a bit to wait for the build process to start")
@@ -692,15 +663,16 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	pr, err = s.Builds.waitForImage(ctx, s, reg, pr, image, logger)
+	image := installation.Image
+	version := s.Builds.getInstallationVersion(pr)
+
+	err = s.Builds.waitForImage(ctx, reg, version, image, logger)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "error waiting for the docker image. Aborting")).IntentionalAbort()
 	}
 
-	installationVersion := s.Builds.getInstallationVersion(pr)
-
 	upgradeRequest := &cloudModel.PatchInstallationRequest{
-		Version: &installationVersion,
+		Version: &version,
 		Image:   &image,
 	}
 	if withLicense && !withCloudInfra {
@@ -714,7 +686,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		"x-api-key": s.Config.AWSAPIKey,
 	}
 	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
-	installation, err := cloudClient.GetInstallation(request.InstallationID, &cloudModel.GetInstallationRequest{})
+	installation, err = cloudClient.GetInstallation(request.InstallationID, &cloudModel.GetInstallationRequest{})
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get installation")).ShouldReportError()
 	}
@@ -934,14 +906,14 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 	}
 
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	id, _, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
-	if id == "" {
-		return request.WithInstallationID(id).WithError(errors.New("No SpinWick found for this PR. Skipping deletion")).IntentionalAbort()
+	if installation == nil {
+		return request.WithInstallationID(installation.ID).WithError(errors.New("No SpinWick found for this PR. Skipping deletion")).IntentionalAbort()
 	}
-	request.InstallationID = id
+	request.InstallationID = installation.ID
 
 	logger.WithField("installation_id", request.InstallationID).Info("Destroying SpinWick")
 
