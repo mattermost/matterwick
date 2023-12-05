@@ -67,7 +67,6 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	case "synchronize":
 		logger.Info("PR has a new commit")
 		if s.isSpinWickLabelInLabels(pr.Labels) {
-			logger.Info("PR has a SpinWick label, starting upgrade")
 			if s.isSpinWickHALabel(pr.Labels) {
 				s.handleUpdateSpinWick(pr, true, false)
 			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
