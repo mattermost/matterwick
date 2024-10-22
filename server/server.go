@@ -18,6 +18,7 @@ import (
 	"github.com/google/go-github/v32/github"
 	"github.com/gorilla/mux"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
+	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
 )
 
@@ -36,6 +37,8 @@ type Server struct {
 	StartTime time.Time
 
 	Logger logrus.FieldLogger
+
+	CloudClient *cloudModel.Client
 }
 
 const (
@@ -53,12 +56,15 @@ func New(config *MatterwickConfig) *Server {
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	}
 
+	cloudClient := model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint)
+
 	s := &Server{
 		Config:          config,
 		Router:          mux.NewRouter(),
 		webhookChannels: make(map[string]chan cloudModel.WebhookPayload),
 		StartTime:       time.Now(),
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
+		CloudClient:     cloudClient,
 	}
 
 	if !isAwsConfigDefined() {

@@ -60,5 +60,10 @@
       "CWSPublicPort": "",
       "CWSPrivatePort": ""
       
+  },
+  "CloudAuth": {
+    "ClientID": "Matterwick",
+    "ClientSecret": "Matterwick",
+    "TokenEndpoint": "https://matterwick.auth.mattermost.com/oauth/token"
   }
 }

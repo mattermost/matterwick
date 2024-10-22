@@ -279,10 +279,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 
 	lbURL, _ := waitForIPAssignment(kc, deployment.Namespace, logger)
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient := s.CloudClient
 	_, err = cloudClient.CreateWebhook(&cloudModel.CreateWebhookRequest{
 		// We use the namespace as the owner so it's easily fetched later
 		OwnerID: namespace.GetName(),
@@ -360,7 +357,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -421,10 +418,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 	logger.Info("Creating installation")
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient := s.CloudClient
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:     ownerID,
 		Version:     version,
@@ -628,7 +622,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
 	}
 
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -682,10 +676,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	// Final upgrade check
 	// Let's get the installation state one last time. If the version matches
 	// what we want then another process already updated it.
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient := s.CloudClient
 	installation, err = cloudClient.GetInstallation(request.InstallationID, &cloudModel.GetInstallationRequest{})
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to get installation")).ShouldReportError()
@@ -796,10 +787,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 	request.InstallationID = namespaceName
 	logger.Infof("Kube namespace %s has been destroyed", namespaceName)
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient := s.CloudClient
 	webhooks, err := cloudClient.GetWebhooks(&cloudModel.GetWebhooksRequest{
 		OwnerID: namespaceName,
 	})
@@ -906,7 +894,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 	}
 
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -917,10 +905,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 
 	logger.WithField("installation_id", request.InstallationID).Info("Destroying SpinWick")
 
-	headers := map[string]string{
-		"x-api-key": s.Config.AWSAPIKey,
-	}
-	cloudClient := cloudModel.NewClientWithHeaders(s.Config.ProvisionerServer, headers)
+	cloudClient := s.CloudClient
 	err = cloudClient.DeleteInstallation(request.InstallationID)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to make installation delete request to provisioning server")).ShouldReportError()
