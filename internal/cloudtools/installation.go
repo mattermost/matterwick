@@ -8,7 +8,7 @@ import (
 // GetInstallationIDFromOwnerID returns the installation that matches a given
 // OwnerID. Multiple matches will return an error. No match will return
 // an empty ID and no error.
-func GetInstallationIDFromOwnerID(client *cloud.Client, serverURL, awsAPIKey, ownerID string) (*cloud.InstallationDTO, error) {
+func GetInstallationIDFromOwnerID(client *cloud.Client, serverURL, ownerID string) (*cloud.InstallationDTO, error) {
 	installations, err := client.GetInstallations(&cloud.GetInstallationsRequest{
 		OwnerID:                     ownerID,
 		Paging:                      cloud.AllPagesNotDeleted(),

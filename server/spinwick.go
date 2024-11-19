@@ -357,7 +357,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -622,7 +622,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
 	}
 
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -894,7 +894,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 	}
 
 	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, s.Config.AWSAPIKey, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
