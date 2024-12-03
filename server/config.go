@@ -42,6 +42,13 @@ type CWS struct {
 	CWSPrivatePort             string
 }
 
+// CloudAuth contains all configuration for the Cloud Auth
+type CloudAuth struct {
+	ClientID      string
+	ClientSecret  string
+	TokenEndpoint string
+}
+
 // MatterwickConfig defines all config for to run the server
 type MatterwickConfig struct {
 	ListenAddress       string
@@ -88,6 +95,8 @@ type MatterwickConfig struct {
 	CWSSpinwickGroupID    string
 
 	CWS CWS
+
+	CloudAuth CloudAuth
 }
 
 func findConfigFile(fileName string) string {
