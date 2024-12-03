@@ -3,7 +3,7 @@ name: build-image
 on:
   push:
     branches:
-    - "*"
+    - "master"
     tags:
     - "*"  # run for tags
 
