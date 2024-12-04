@@ -1123,7 +1123,7 @@ func checkMMPing(ctx context.Context, client *mattermostModel.Client4) error {
 
 func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
 	domainName := s.Config.DNSNameTestServer
-	spinWickID := strings.ToLower(fmt.Sprintf("%s-pr-%d", repoName, prNumber))
+	spinWickID := strings.ToLower(fmt.Sprintf("%s-pr-%d-%s", repoName, prNumber, cloudModel.NewID()[0:5]))
 	// DNS names in MM cloud have a character limit. The number of characters in the domain - 64 will be how many we need to trim
 	numCharactersToTrim := len(spinWickID+domainName) - 64
 	if numCharactersToTrim > 0 {
