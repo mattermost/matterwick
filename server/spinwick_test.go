@@ -35,7 +35,6 @@ func TestMakeSpinWickID(t *testing.T) {
 		})
 	}
 }
-
 func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
@@ -51,8 +50,8 @@ func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
 		prNumber int
 		result   string
 	}{
-		{"mattermost-server-webapp-fusion-reactor-test-really-long", 8888, "mattermost-server-webapp-fusion-re"},
-		{"mattermostserverwebappfusionreactortestreallylong", 88, "mattermostserverwebappfusionreactort"},
+		{"mattermost-server-webapp-fusion-reactor-test-really-long", 8888, "mattermost-server-webapp-fus-pr-8888-"},
+		{"mattermostserverwebappfusionreactortestreallylong", 88, "mattermostserverwebappfusionre-pr-88-"},
 	}
 
 	for _, tc := range tests {
@@ -60,7 +59,7 @@ func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
 			id := s.makeSpinWickID(tc.repoName, tc.prNumber)
 			assert.Contains(t, id, tc.result)
 			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
-			assert.Equal(t, id, fmt.Sprintf("%s-pr-%d", tc.result, tc.prNumber))
+			assert.Len(t, id, 64-len(s.Config.DNSNameTestServer))
 		})
 	}
 }
