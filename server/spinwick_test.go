@@ -8,7 +8,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMakeSpinWickID(t *testing.T) {
+func TestmakeRepeatableSpinwickID(t *testing.T) {
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer: ".test.mattermost.cloud",
+		},
+	}
+
+	tests := []struct {
+		repoName string
+		prNumber int
+	}{
+		{"mattermost-server", 12345},
+		{"mattermost-webapp", 54321},
+		{"mattermost-fusion-reactor", 777},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.repoName, func(t *testing.T) {
+			id := s.makeRepeatableSpinwickID(tc.repoName, tc.prNumber)
+			assert.Contains(t, id, tc.repoName)
+			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
+		})
+	}
+}
+
+func TestmakeUniqueSpinWickID(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
 	s := &Server{
@@ -29,7 +54,7 @@ func TestMakeSpinWickID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.repoName, func(t *testing.T) {
-			id := s.makeSpinWickID(tc.repoName, tc.prNumber)
+			id := s.makeUniqueSpinWickID(tc.repoName, tc.prNumber)
 			assert.Contains(t, id, tc.repoName)
 			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
 		})
@@ -56,7 +81,7 @@ func TestMakeSpinWickIDWithLongRepositoryName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.repoName, func(t *testing.T) {
-			id := s.makeSpinWickID(tc.repoName, tc.prNumber)
+			id := s.makeUniqueSpinWickID(tc.repoName, tc.prNumber)
 			assert.Contains(t, id, tc.result)
 			assert.Contains(t, id, fmt.Sprintf("%d", tc.prNumber))
 			assert.Len(t, id, 64-len(s.Config.DNSNameTestServer))
