@@ -121,9 +121,10 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string, 
 		Aborted:        false,
 	}
 
-	uniqueID := s.makeRepeatableSpinwickID(pr.RepoName, pr.Number)
+	uniqueID := s.makeUniqueSpinWickID(pr.RepoName, pr.Number)
+	ownerID := s.makeRepeatableSpinwickID(pr.RepoName, pr.Number)
 	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
-	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
+	username := fmt.Sprintf("user-%s@example.mattermost.com", ownerID)
 	password := s.Config.CWSUserPassword
 
 	// We try to login with an existing account and get the customer ID to create the installation
