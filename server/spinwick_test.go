@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestmakeRepeatableSpinwickID(t *testing.T) {
+func TestMakeRepeatableSpinwickID(t *testing.T) {
 	s := &Server{
 		Config: &MatterwickConfig{
 			DNSNameTestServer: ".test.mattermost.cloud",
@@ -33,7 +33,7 @@ func TestmakeRepeatableSpinwickID(t *testing.T) {
 	}
 }
 
-func TestmakeUniqueSpinWickID(t *testing.T) {
+func TestMakeUniqueSpinWickID(t *testing.T) {
 	spinwickLabel := "spinwick"
 	spinwickHALabel := "spinwick ha"
 	s := &Server{

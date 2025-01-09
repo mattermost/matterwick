@@ -712,7 +712,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr, logger)
 	}
 
-	mmURL := fmt.Sprintf("https://%s.%s", s.makeUniqueSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
+	mmURL := fmt.Sprintf("https://%s.%s", s.makeRepeatableSpinwickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
 	msg := fmt.Sprintf("Mattermost test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, mmURL)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
@@ -763,7 +763,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 		Aborted:        false,
 	}
 
-	namespaceName := s.makeUniqueSpinWickID(pr.RepoName, pr.Number)
+	namespaceName := s.makeRepeatableSpinwickID(pr.RepoName, pr.Number)
 
 	kc, err := s.newClient(logger)
 	if err != nil {
@@ -839,8 +839,8 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest, logger logru
 		Aborted:        false,
 	}
 
-	uniqueID := s.makeUniqueSpinWickID(pr.RepoName, pr.Number)
-	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
+	ownerID := s.makeRepeatableSpinwickID(pr.RepoName, pr.Number)
+	username := fmt.Sprintf("user-%s@example.mattermost.com", ownerID)
 	password := s.Config.CWSUserPassword
 
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
@@ -895,7 +895,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 		Aborted:        false,
 	}
 
-	ownerID := s.makeUniqueSpinWickID(pr.RepoName, pr.Number)
+	ownerID := s.makeRepeatableSpinwickID(pr.RepoName, pr.Number)
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -1149,9 +1149,9 @@ func (s *Server) makeRepeatableSpinwickID(repoName string, prNumber int) string 
 
 func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, error) {
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
-	uniqueID := s.makeUniqueSpinWickID(repoName, prNumber)
+	ownerID := s.makeRepeatableSpinwickID(repoName, prNumber)
 	_, err := cwsClient.Login(
-		fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
+		fmt.Sprintf("user-%s@example.mattermost.com", ownerID),
 		s.Config.CWSUserPassword,
 	)
 	if err != nil {
