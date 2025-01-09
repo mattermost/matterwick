@@ -14,6 +14,7 @@ type Spinwick struct {
 	UniqueID     string `json:"unique_id"`
 }
 
+// NewSpinwick creates a new Spinwick instance, automatically calling the repeatableID and uniqueID methods
 func NewSpinwick(repoName string, prNumber int, baseDomain string) *Spinwick {
 	spinwick := &Spinwick{
 		RepoName: repoName,
@@ -49,10 +50,12 @@ func (s *Spinwick) repeatableID() string {
 	return strings.ToLower(fmt.Sprintf("%s-pr-%d", s.RepoName, s.PRNumber))
 }
 
+// Generates a DNS name based on the unique ID and a base domain
 func (s *Spinwick) DNS(baseDomain string) string {
 	return fmt.Sprintf("%s.%s", s.UniqueID, baseDomain)
 }
 
+// Generates a URL based on the DNS name
 func (s *Spinwick) URL(baseDomain string) string {
 	return fmt.Sprintf("https://%s", s.DNS(baseDomain))
 }

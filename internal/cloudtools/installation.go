@@ -38,6 +38,7 @@ func GetInstallationIDFromOwnerID(client *cloud.Client, serverURL, ownerID strin
 	return nil, errors.Errorf("found %d installations with ownerID %s", len(installations), ownerID)
 }
 
+// GetInstallationDNSFromDNSRecords returns the active DNS record of an installation from its list of DNS records.
 func GetInstallationDNSFromDNSRecords(installation *cloud.InstallationDTO) string {
 	for _, dns := range installation.DNSRecords {
 		if dns != nil && dns.DeleteAt == 0 {
