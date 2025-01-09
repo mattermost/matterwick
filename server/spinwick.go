@@ -773,10 +773,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 		Aborted:        false,
 	}
 
-	spinwick := &model.Spinwick{
-		RepoName: pr.RepoName,
-		PRNumber: pr.Number,
-	}
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
 
 	namespaceName := spinwick.RepeatableID
 
@@ -854,10 +851,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest, logger logru
 		Aborted:        false,
 	}
 
-	spinwick := &model.Spinwick{
-		RepoName: pr.RepoName,
-		PRNumber: pr.Number,
-	}
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
 
 	ownerID := spinwick.RepeatableID
 	username := fmt.Sprintf("user-%s@example.mattermost.com", ownerID)
@@ -915,10 +909,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 		Aborted:        false,
 	}
 
-	spinwick := &model.Spinwick{
-		RepoName: pr.RepoName,
-		PRNumber: pr.Number,
-	}
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
 
 	ownerID := spinwick.RepeatableID
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
