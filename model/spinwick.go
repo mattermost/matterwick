@@ -7,6 +7,7 @@ import (
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 )
 
+// Spinwick is a struct that holds identifiable information about a Spinwick instance
 type Spinwick struct {
 	RepoName     string `json:"repo_name"`
 	PRNumber     int    `json:"pr_number"`
@@ -50,12 +51,12 @@ func (s *Spinwick) repeatableID() string {
 	return strings.ToLower(fmt.Sprintf("%s-pr-%d", s.RepoName, s.PRNumber))
 }
 
-// Generates a DNS name based on the unique ID and a base domain
+// DNS Generates a DNS name based on the unique ID and a base domain
 func (s *Spinwick) DNS(baseDomain string) string {
 	return fmt.Sprintf("%s.%s", s.UniqueID, baseDomain)
 }
 
-// Generates a URL based on the DNS name
+// URL Generates a URL based on the DNS name
 func (s *Spinwick) URL(baseDomain string) string {
 	return fmt.Sprintf("https://%s", s.DNS(baseDomain))
 }
