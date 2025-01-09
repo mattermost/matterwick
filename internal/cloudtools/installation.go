@@ -26,9 +26,6 @@ func GetInstallationIDFromOwnerID(client *cloud.Client, serverURL, ownerID strin
 	if len(installations) == 0 {
 		return nil, nil
 	}
-	if len(installations) == 1 {
-		return installations[0], nil
-	}
 
 	// If there are more than 1 installations, return the first one that isn't deleted
 	// This allows support for creating new installations while old ones are sitting in deletion pending.
