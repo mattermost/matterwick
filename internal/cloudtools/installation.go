@@ -40,3 +40,12 @@ func GetInstallationIDFromOwnerID(client *cloud.Client, serverURL, ownerID strin
 
 	return nil, errors.Errorf("found %d installations with ownerID %s", len(installations), ownerID)
 }
+
+func GetInstallationDNSFromDNSRecords(installation *cloud.InstallationDTO) string {
+	for _, dns := range installation.DNSRecords {
+		if dns != nil && dns.DeleteAt == 0 {
+			return dns.DomainName
+		}
+	}
+	return ""
+}
