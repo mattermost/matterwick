@@ -121,9 +121,12 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, size string, 
 		Aborted:        false,
 	}
 
-	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	spinwickURL := fmt.Sprintf("https://%s.%s", uniqueID, s.Config.DNSNameTestServer)
-	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	uniqueID := spinwick.UniqueID
+	ownerID := spinwick.RepeatableID
+	spinwickURL := spinwick.URL(s.Config.DNSNameTestServer)
+	username := fmt.Sprintf("user-%s@example.mattermost.com", ownerID)
 	password := s.Config.CWSUserPassword
 
 	// We try to login with an existing account and get the customer ID to create the installation
@@ -214,7 +217,9 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 		return request.WithError(errors.Wrap(err, "Error occurred while getting Kube Client"))
 	}
 
-	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	namespaceName := spinwick.RepeatableID
 	namespace, err := getOrCreateNamespace(kc, namespaceName)
 
 	if err != nil {
@@ -356,7 +361,9 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Errorf("Repository %s is not supported", pr.RepoName))
 	}
 
-	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	ownerID := spinwick.RepeatableID
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -423,7 +430,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		OwnerID:     ownerID,
 		Version:     version,
 		Image:       image,
-		DNS:         fmt.Sprintf("%s.%s", ownerID, s.Config.DNSNameTestServer),
+		DNS:         spinwick.DNS(s.Config.DNSNameTestServer),
 		Size:        size,
 		Affinity:    cloudModel.InstallationAffinityMultiTenant,
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
@@ -459,7 +466,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable")).ShouldReportError()
 	}
 
-	spinwickURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
+	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
 	err = s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
@@ -519,7 +526,10 @@ func (s *Server) updateKubeSpinWick(pr *model.PullRequest, logger logrus.FieldLo
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "Error occurred while getting Kube Client"))
 	}
-	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
+
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	namespaceName := spinwick.RepeatableID
 	namespaceExists, err := namespaceExists(kc, namespaceName)
 
 	if err != nil {
@@ -611,15 +621,17 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		Aborted:        false,
 	}
 
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
 	var ownerID string
 	var err error
 	if withCloudInfra {
-		ownerID, err = s.getCustomerIDFromCWS(pr.RepoName, pr.Number)
+		ownerID, err = s.getCustomerIDFromCWS(spinwick)
 		if err != nil {
 			return request.WithError(errors.Wrap(err, "error getting the owner id from CWS")).ShouldReportError()
 		}
 	} else {
-		ownerID = s.makeSpinWickID(pr.RepoName, pr.Number)
+		ownerID = spinwick.RepeatableID
 	}
 
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
@@ -687,7 +699,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 
 	logger.Info("Provisioning Server - Upgrade request")
 
-	_, err = cloudClient.UpdateInstallation(request.InstallationID, upgradeRequest)
+	updatedInstallation, err := cloudClient.UpdateInstallation(request.InstallationID, upgradeRequest)
 	if err != nil {
 		return request.WithError(errors.Wrap(err, "unable to make upgrade request to provisioning server")).ShouldReportError()
 	}
@@ -710,7 +722,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		s.removeCommentsWithSpecificMessages(comments, serverUpdateMessage, pr, logger)
 	}
 
-	mmURL := fmt.Sprintf("https://%s.%s", s.makeSpinWickID(pr.RepoName, pr.Number), s.Config.DNSNameTestServer)
+	mmURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(updatedInstallation))
 	msg := fmt.Sprintf("Mattermost test server updated with git commit `%s`.\n\nAccess here: %s", pr.Sha, mmURL)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
 
@@ -761,7 +773,9 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 		Aborted:        false,
 	}
 
-	namespaceName := s.makeSpinWickID(pr.RepoName, pr.Number)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	namespaceName := spinwick.RepeatableID
 
 	kc, err := s.newClient(logger)
 	if err != nil {
@@ -837,8 +851,10 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest, logger logru
 		Aborted:        false,
 	}
 
-	uniqueID := s.makeSpinWickID(pr.RepoName, pr.Number)
-	username := fmt.Sprintf("user-%s@example.mattermost.com", uniqueID)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	ownerID := spinwick.RepeatableID
+	username := fmt.Sprintf("user-%s@example.mattermost.com", ownerID)
 	password := s.Config.CWSUserPassword
 
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
@@ -893,7 +909,9 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 		Aborted:        false,
 	}
 
-	ownerID := s.makeSpinWickID(pr.RepoName, pr.Number)
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
+	ownerID := spinwick.RepeatableID
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
@@ -1121,29 +1139,11 @@ func checkMMPing(ctx context.Context, client *mattermostModel.Client4) error {
 	}
 }
 
-func (s *Server) makeSpinWickID(repoName string, prNumber int) string {
-	domainName := s.Config.DNSNameTestServer
-	randomID := cloudModel.NewID()[0:5]
-	spinWickID := strings.ToLower(fmt.Sprintf("%s-pr-%d-%s", repoName, prNumber, randomID))
-	// DNS names in MM cloud have a character limit. The number of characters in the domain - 64 will be how many we need to trim
-	numCharactersToTrim := len(spinWickID+domainName) - 64
-	if numCharactersToTrim > 0 {
-		// Calculate the maximum length for repoName
-		maxRepoNameLength := len(repoName) - numCharactersToTrim
-		if maxRepoNameLength < 0 {
-			maxRepoNameLength = 0
-		}
-		// trim the repoName and reconstruct spinWickID
-		spinWickID = strings.ToLower(fmt.Sprintf("%s-pr-%d-%s", repoName[:maxRepoNameLength], prNumber, randomID))
-	}
-	return spinWickID
-}
-
-func (s *Server) getCustomerIDFromCWS(repoName string, prNumber int) (string, error) {
+func (s *Server) getCustomerIDFromCWS(spinwick *model.Spinwick) (string, error) {
 	cwsClient := cws.NewClient(s.Config.CWSPublicAPIAddress, s.Config.CWSInternalAPIAddress, s.Config.CWSAPIKey)
-	uniqueID := s.makeSpinWickID(repoName, prNumber)
+	ownerID := spinwick.RepeatableID
 	_, err := cwsClient.Login(
-		fmt.Sprintf("user-%s@example.mattermost.com", uniqueID),
+		fmt.Sprintf("user-%s@example.mattermost.com", ownerID),
 		s.Config.CWSUserPassword,
 	)
 	if err != nil {
