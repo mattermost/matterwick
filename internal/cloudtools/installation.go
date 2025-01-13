@@ -6,7 +6,14 @@ import (
 )
 
 func isNotDeletedState(state string) bool {
-	return state != cloud.InstallationStateDeleted && state != cloud.InstallationStateDeletionPending && state != cloud.InstallationStateDeletionRequested && state != cloud.InstallationStateDeletionFailed
+	switch state {
+	case cloud.InstallationStateDeleted, cloud.InstallationStateDeletionPending,
+		cloud.InstallationStateDeletionPendingRequested, cloud.InstallationStateDeletionRequested,
+		cloud.InstallationStateDeletionPendingInProgress, cloud.InstallationStateDeletionFailed:
+		return false
+	default:
+		return true
+	}
 }
 
 // GetInstallationIDFromOwnerID returns the installation that matches a given
