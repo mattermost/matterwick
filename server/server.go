@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/braintree/manners"
-	"github.com/google/go-github/v32/github"
 	"github.com/gorilla/mux"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/matterwick/model"
@@ -217,14 +216,4 @@ func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {
 		}(channel, payloadClone)
 	}
 	s.webhookChannelsLock.Unlock()
-}
-
-func messageByUserContains(comments []*github.IssueComment, username string, text string) bool {
-	for _, comment := range comments {
-		if *comment.User.Login == username && strings.Contains(*comment.Body, text) {
-			return true
-		}
-	}
-
-	return false
 }
