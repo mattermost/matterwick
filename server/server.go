@@ -110,10 +110,10 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) initializeRouter() {
-	s.Router.HandleFunc("/", s.ping).Methods("GET")
-	s.Router.HandleFunc("/github_event", s.githubEvent).Methods("POST")
-	s.Router.HandleFunc("/cloud_webhooks", s.handleCloudWebhook).Methods("POST")
-	s.Router.HandleFunc("/shrug_wick", s.serveShrugWick).Methods("GET")
+	s.Router.HandleFunc("/", s.ping).Methods(http.MethodGet)
+	s.Router.HandleFunc("/github_event", s.githubEvent).Methods(http.MethodPost)
+	s.Router.HandleFunc("/cloud_webhooks", s.handleCloudWebhook).Methods(http.MethodPost)
+	s.Router.HandleFunc("/shrug_wick", s.serveShrugWick).Methods(http.MethodGet)
 }
 
 func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +174,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			s.Logger.WithError(err).Error("Failed to parse issue comment event")
 		}
 		if !eventIssueEventComment.GetIssue().IsPullRequest() {
-			// if not a pull request dont need to continue
+			// if not a pull request don't need to continue
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
