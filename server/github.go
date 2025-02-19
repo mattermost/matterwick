@@ -169,16 +169,22 @@ func (s *Server) checkUserPermission(user, repoOwner string) bool {
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	_, resp, err := client.Organizations.GetOrgMembership(context.Background(), user, repoOwner)
-	if resp.StatusCode == 404 {
-		s.Logger.Warnf("User %s is not part of the ORG %s", user, repoOwner)
-		return false
-	}
 	if err != nil {
 		s.Logger.WithError(err).Error("failed to get org membership")
 		return false
 	}
 
-	return true
+	if resp.StatusCode == 200 {
+		return true
+	}
+
+	s.Logger.WithFields(logrus.Fields{
+		"user":        user,
+		"org":         repoOwner,
+		"status_code": resp.StatusCode,
+	}).Warn("GetOrgMembership failed")
+
+	return false
 }
 
 func (s *Server) checkIfRefExists(pr *model.PullRequest, org string, ref string) (bool, error) {
