@@ -83,16 +83,22 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	}
 }
 
+// handleSynchronizeSpinwick processes PR synchronization for SpinWick environments.
+// It determines the appropriate SpinWick configuration based on PR labels and triggers
+// the corresponding update process.
 func (s *Server) handleSynchronizeSpinwick(pr *model.PullRequest, spinwickID string, noBuildChanges bool) {
-	if s.isSpinWickLabelInLabels(pr.Labels) {
-		if s.isSpinWickHALabel(pr.Labels) {
-			s.handleUpdateSpinWick(pr, true, false, noBuildChanges, s.getEnvMap(spinwickID))
-		} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
-			s.handleUpdateSpinWick(pr, true, true, noBuildChanges, s.getEnvMap(spinwickID))
-		} else {
-			s.handleUpdateSpinWick(pr, false, false, noBuildChanges, s.getEnvMap(spinwickID))
-		}
+	// Skip if PR doesn't have any SpinWick labels
+	if !s.isSpinWickLabelInLabels(pr.Labels) {
+		return
 	}
+
+	isHA := s.isSpinWickHALabel(pr.Labels)
+	isCloudWithCWS := s.isSpinWickCloudWithCWSLabel(pr.Labels)
+
+	withLicense := isHA || isCloudWithCWS
+	withCloudInfra := isCloudWithCWS
+
+	s.handleUpdateSpinWick(pr, withLicense, withCloudInfra, noBuildChanges, s.getEnvMap(spinwickID))
 }
 
 func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest, logger logrus.FieldLogger) {
