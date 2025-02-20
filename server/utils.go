@@ -71,15 +71,32 @@ func NewInt32(n int32) *int32 { return &n }
 // NewString return a string pointer
 func NewString(s string) *string { return &s }
 
-// splitCommaSeparated splits a comma separated string into a slice of strings
+// splitCommaSeparated splits a comma separated string into a slice of strings.
+// It handles quoted strings and trims whitespace from the results.
 func splitCommaSeparated(s string) []string {
-	// Unquoting the string
-	s, _ = strings.CutPrefix(s, `'`)
-	s, _ = strings.CutSuffix(s, `'`)
-	s, _ = strings.CutPrefix(s, `"`)
-	s, _ = strings.CutSuffix(s, `"`)
+	if s == "" {
+		return nil
+	}
 
-	return strings.Split(strings.TrimSpace(s), ",")
+	// Remove outer quotes if present
+	s = strings.TrimSpace(s)
+	if (strings.HasPrefix(s, "'") && strings.HasSuffix(s, "'")) ||
+		(strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) {
+		s = s[1 : len(s)-1]
+	}
+
+	// Split and clean the parts
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+
+	return result
 }
 
 // parseEnvArg parses a string argument in the comma separated format "VAR1=VAL1,VAR2=VAL2" into a cloudModel.EnvVarMap

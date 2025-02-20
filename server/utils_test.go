@@ -7,6 +7,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSplitCommaSeparated(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: nil,
+		},
+		{
+			name:     "single value",
+			input:    "value1",
+			expected: []string{"value1"},
+		},
+		{
+			name:     "multiple values",
+			input:    "value1,value2,value3",
+			expected: []string{"value1", "value2", "value3"},
+		},
+		{
+			name:     "with spaces",
+			input:    "value1, value2 , value3",
+			expected: []string{"value1", "value2", "value3"},
+		},
+		{
+			name:     "single quoted",
+			input:    "'value1,value2'",
+			expected: []string{"value1", "value2"},
+		},
+		{
+			name:     "double quoted",
+			input:    `"value1,value2"`,
+			expected: []string{"value1", "value2"},
+		},
+		{
+			name:     "empty values filtered",
+			input:    "value1,,value2, ,value3",
+			expected: []string{"value1", "value2", "value3"},
+		},
+		{
+			name:     "whitespace only values filtered",
+			input:    "value1, ,  ,value2",
+			expected: []string{"value1", "value2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := splitCommaSeparated(tc.input)
+			require.Equal(t, tc.expected, result)
+		})
+	}
+}
+
 func TestParseEnvVars(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
