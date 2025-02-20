@@ -43,21 +43,23 @@ func (b *Builds) waitForImage(ctx context.Context, reg *registry.Registry, desir
 	logger = logger.WithFields(logrus.Fields{"image": imageToCheck, "tag": desiredTag})
 
 	for {
+		_, err := reg.ManifestDigest(imageToCheck, desiredTag)
+		if err != nil && !strings.Contains(err.Error(), "status=404") {
+			return errors.Wrap(err, "unable to fetch tag from docker registry")
+		}
+
+		if err == nil {
+			logger.Info("Docker tag found!")
+			return nil
+		}
+
+		logger.Debug("Docker tag for the build not found. Waiting...")
+
 		select {
 		case <-ctx.Done():
 			return errors.New("timed out waiting for image to publish")
 		case <-time.After(30 * time.Second):
-			_, err := reg.ManifestDigest(imageToCheck, desiredTag)
-			if err != nil && !strings.Contains(err.Error(), "status=404") {
-				return errors.Wrap(err, "unable to fetch tag from docker registry")
-			}
-
-			if err == nil {
-				logger.Info("Docker tag found!")
-				return nil
-			}
-
-			logger.Debug("Docker tag for the build not found. Waiting...")
+			continue
 		}
 	}
 }
