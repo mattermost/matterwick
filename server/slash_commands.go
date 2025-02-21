@@ -125,7 +125,7 @@ func (s *Server) parseSpinwickSlashCommandArgs(args []string, isUpdate bool) (sp
 	if isUpdate {
 		flagset.StringVar(&clearEnv, "clear-env", "", "An optional comma-separated list of environment variables to clear. Example: VAR1,VAR2")
 	} else {
-		flagset.StringVar(&size, "size", "miniHA", "Size of the Mattermost installation e.g. 'miniSingleton' or 'miniHA'")
+		flagset.StringVar(&size, "size", "miniSingleton", "Size of the Mattermost installation e.g. 'miniSingleton' or 'miniHA'")
 	}
 
 	err := flagset.Parse(args)
