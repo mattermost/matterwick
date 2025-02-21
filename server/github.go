@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/mattermost/matterwick/model"
@@ -86,6 +87,23 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 	return pr, nil
 }
 
+func (s *Server) getPullRequestFromIssue(issue *github.Issue, repo *github.Repository) (*github.PullRequest, error) {
+	if !issue.IsPullRequest() {
+		return nil, fmt.Errorf("issue is not a pull request")
+	}
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+
+	// Fetch the pull request
+	pr, _, err := client.PullRequests.Get(context.Background(),
+		repo.GetOwner().GetLogin(), repo.GetName(), issue.GetNumber())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pull request: %w", err)
+	}
+
+	return pr, nil
+}
+
 func labelsToStringArray(labels []*github.Label) []string {
 	out := make([]string, len(labels))
 
@@ -116,6 +134,16 @@ func (s *Server) removeLabel(repoOwner, repoName string, number int, label strin
 	}
 }
 
+func (s *Server) addLabel(repoOwner, repoName string, number int, label string) {
+	logger := s.Logger.WithFields(logrus.Fields{"issue": number, "label": label})
+	logger.Info("Adding label on issue")
+	client := newGithubClient(s.Config.GithubAccessToken)
+	_, _, err := client.Issues.AddLabelsToIssue(context.Background(), repoOwner, repoName, number, []string{label})
+	if err != nil {
+		logger.WithError(err).Error("Error adding the label")
+	}
+}
+
 func (s *Server) getComments(repoOwner, repoName string, number int) ([]*github.IssueComment, error) {
 	client := newGithubClient(s.Config.GithubAccessToken)
 	comments, _, err := client.Issues.ListComments(context.Background(), repoOwner, repoName, number, nil)
@@ -141,15 +169,22 @@ func (s *Server) checkUserPermission(user, repoOwner string) bool {
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	_, resp, err := client.Organizations.GetOrgMembership(context.Background(), user, repoOwner)
-	if resp.StatusCode == 404 {
-		s.Logger.Warnf("User %s is not part of the ORG", user)
-		return false
-	}
 	if err != nil {
+		s.Logger.WithError(err).Error("failed to get org membership")
 		return false
 	}
 
-	return true
+	if resp.StatusCode == 200 {
+		return true
+	}
+
+	s.Logger.WithFields(logrus.Fields{
+		"user":        user,
+		"org":         repoOwner,
+		"status_code": resp.StatusCode,
+	}).Warn("GetOrgMembership failed")
+
+	return false
 }
 
 func (s *Server) checkIfRefExists(pr *model.PullRequest, org string, ref string) (bool, error) {
@@ -185,7 +220,6 @@ func (s *Server) createRef(pr *model.PullRequest, ref string) {
 				SHA: github.String(pr.Sha),
 			},
 		})
-
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to create reference")
 	}

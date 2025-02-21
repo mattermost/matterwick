@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 )
 
@@ -36,7 +36,7 @@ func (s *Server) sendToWebhook(webhookRequest *WebhookRequest) error {
 	}
 
 	if response.StatusCode != http.StatusOK {
-		contents, _ := ioutil.ReadAll(response.Body)
+		contents, _ := io.ReadAll(response.Body)
 		return fmt.Errorf("Received non-200 status code when posting to Mattermost: %v", string(contents))
 	}
 
