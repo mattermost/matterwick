@@ -6,8 +6,7 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
-	"math/rand"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -38,6 +37,10 @@ type Server struct {
 	Logger logrus.FieldLogger
 
 	CloudClient *cloudModel.Client
+
+	// envMaps is a map of environment variables for each active installation.
+	envMaps     map[string]cloudModel.EnvVarMap
+	envMapsLock sync.Mutex
 }
 
 const (
@@ -55,7 +58,12 @@ func New(config *MatterwickConfig) *Server {
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	}
 
-	cloudClient := model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint)
+	var cloudClient *cloudModel.Client
+	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
+		cloudClient = cloudModel.NewClient(config.ProvisionerServer)
+	} else {
+		cloudClient = model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint)
+	}
 
 	s := &Server{
 		Config:          config,
@@ -64,6 +72,7 @@ func New(config *MatterwickConfig) *Server {
 		StartTime:       time.Now(),
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
+		envMaps:         make(map[string]cloudModel.EnvVarMap),
 	}
 
 	if !isAwsConfigDefined() {
@@ -86,8 +95,6 @@ func New(config *MatterwickConfig) *Server {
 // Start starts a server
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
-
-	rand.Seed(time.Now().Unix())
 
 	s.initializeRouter()
 
@@ -127,7 +134,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buf, _ := ioutil.ReadAll(r.Body)
+	buf, _ := io.ReadAll(r.Body)
 
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)
 	if receivedHash[0] != "sha1" {
@@ -146,7 +153,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	eventType := r.Header.Get("X-GitHub-Event")
 	switch eventType {
 	case "ping":
-		pingEvent, err := PingEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		pingEvent, err := PingEventFromJSON(io.NopCloser(bytes.NewBuffer(buf)))
 		if err != nil {
 			s.Logger.WithError(err).Error("Failed to parse ping event")
 			w.WriteHeader(http.StatusBadRequest)
@@ -154,7 +161,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Logger.WithField("HookID", pingEvent.GetHookID()).Info("ping event")
 	case "pull_request":
-		event, err := PullRequestEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		event, err := PullRequestEventFromJSON(io.NopCloser(bytes.NewBuffer(buf)))
 		if err != nil {
 			s.Logger.WithError(err).Error("Failed to parse pull request event")
 		}
@@ -168,7 +175,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			go s.handlePullRequestEvent(event)
 		}
 	case "issue_comment":
-		eventIssueEventComment, err := IssueCommentEventFromJSON(ioutil.NopCloser(bytes.NewBuffer(buf)))
+		eventIssueEventComment, err := IssueCommentEventFromJSON(io.NopCloser(bytes.NewBuffer(buf)))
 		if err != nil {
 			s.Logger.WithError(err).Error("Failed to parse issue comment event")
 		}
@@ -178,8 +185,9 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if eventIssueEventComment != nil && eventIssueEventComment.GetAction() == "created" {
-			if strings.Contains(strings.TrimSpace(eventIssueEventComment.GetComment().GetBody()), "/shrugwick") {
-				go s.handleShrugWick(eventIssueEventComment)
+			msg := strings.TrimSpace(eventIssueEventComment.GetComment().GetBody())
+			if strings.HasPrefix(msg, "/") {
+				go s.handleSlashCommand(msg, eventIssueEventComment)
 			}
 		}
 	default:
@@ -216,4 +224,10 @@ func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {
 		}(channel, payloadClone)
 	}
 	s.webhookChannelsLock.Unlock()
+}
+
+func (s *Server) getEnvMap(spinwickID string) cloudModel.EnvVarMap {
+	s.envMapsLock.Lock()
+	defer s.envMapsLock.Unlock()
+	return s.envMaps[spinwickID]
 }

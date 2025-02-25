@@ -2,7 +2,9 @@ package server
 
 import (
 	"fmt"
+	"strings"
 
+	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
 )
@@ -68,3 +70,68 @@ func NewInt32(n int32) *int32 { return &n }
 
 // NewString return a string pointer
 func NewString(s string) *string { return &s }
+
+// splitCommaSeparated splits a comma separated string into a slice of strings.
+// It handles quoted strings and trims whitespace from the results.
+func splitCommaSeparated(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	// Remove outer quotes if present
+	s = strings.TrimSpace(s)
+	if (strings.HasPrefix(s, "'") && strings.HasSuffix(s, "'")) ||
+		(strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) {
+		s = s[1 : len(s)-1]
+	}
+
+	// Split and clean the parts
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+
+	return result
+}
+
+// parseEnvArg parses a string argument in the comma separated format "VAR1=VAL1,VAR2=VAL2" into a cloudModel.EnvVarMap
+func parseEnvArg(arg string) (cloudModel.EnvVarMap, error) {
+	if arg == "" {
+		return nil, fmt.Errorf("invalid empty argument")
+	}
+
+	kvs := splitCommaSeparated(arg)
+	if len(kvs) == 0 {
+		return nil, fmt.Errorf("no key/val pairs found")
+	}
+
+	m := cloudModel.EnvVarMap{}
+	for _, kv := range kvs {
+		fields := strings.SplitN(kv, "=", 2)
+
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid key/val pair: %q", kv)
+		}
+
+		k := strings.TrimSpace(fields[0])
+
+		if k == "" {
+			return nil, fmt.Errorf("invalid key/val pair: %q", kv)
+		}
+
+		v := fields[1]
+
+		if _, ok := m[k]; ok {
+			return nil, fmt.Errorf("duplicate key: %q", k)
+		}
+
+		m[k] = cloudModel.EnvVar{Value: v}
+	}
+
+	return m, nil
+}

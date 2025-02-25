@@ -27,6 +27,8 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		return
 	}
 
+	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+
 	switch event.GetAction() {
 	case "opened":
 		logger.Info("PR opened")
@@ -37,15 +39,16 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			logger.Error("Label event received, but label object was empty")
 			return
 		}
+
 		if s.isSpinWickLabel(label) {
 			logger.WithField("label", label).Info("PR received SpinWick label")
 			switch *event.Label.Name {
 			case s.Config.SetupSpinWick:
-				s.handleCreateSpinWick(pr, "miniSingleton", false, false)
+				s.handleCreateSpinWick(pr, "miniSingleton", false, false, s.getEnvMap(spinwick.RepeatableID))
 			case s.Config.SetupSpinWickHA:
-				s.handleCreateSpinWick(pr, "miniHA", true, false)
+				s.handleCreateSpinWick(pr, "miniHA", true, false, s.getEnvMap(spinwick.RepeatableID))
 			case s.Config.SetupSpinWickWithCWS:
-				s.handleCreateSpinWick(pr, "miniSingleton", true, true)
+				s.handleCreateSpinWick(pr, "miniSingleton", true, true, s.getEnvMap(spinwick.RepeatableID))
 			default:
 				logger.WithField("label", label).Error("Failed to determine sizing on SpinWick label")
 			}
@@ -66,15 +69,8 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		}
 	case "synchronize":
 		logger.Info("PR has a new commit")
-		if s.isSpinWickLabelInLabels(pr.Labels) {
-			if s.isSpinWickHALabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true, false)
-			} else if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
-				s.handleUpdateSpinWick(pr, true, true)
-			} else {
-				s.handleUpdateSpinWick(pr, false, false)
-			}
-		}
+
+		s.handleSynchronizeSpinwick(pr, spinwick.RepeatableID, false)
 	case "closed":
 		logger.Info("PR was closed")
 		if s.isSpinWickLabelInLabels(pr.Labels) {
@@ -85,7 +81,24 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			}
 		}
 	}
+}
 
+// handleSynchronizeSpinwick processes PR synchronization for SpinWick environments.
+// It determines the appropriate SpinWick configuration based on PR labels and triggers
+// the corresponding update process.
+func (s *Server) handleSynchronizeSpinwick(pr *model.PullRequest, spinwickID string, noBuildChanges bool) {
+	// Skip if PR doesn't have any SpinWick labels
+	if !s.isSpinWickLabelInLabels(pr.Labels) {
+		return
+	}
+
+	isHA := s.isSpinWickHALabel(pr.Labels)
+	isCloudWithCWS := s.isSpinWickCloudWithCWSLabel(pr.Labels)
+
+	withLicense := isHA || isCloudWithCWS
+	withCloudInfra := isCloudWithCWS
+
+	s.handleUpdateSpinWick(pr, withLicense, withCloudInfra, noBuildChanges, s.getEnvMap(spinwickID))
 }
 
 func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.PullRequest, logger logrus.FieldLogger) {

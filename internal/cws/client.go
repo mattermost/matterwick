@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"time"
 
@@ -109,7 +108,7 @@ func (c *Client) Login(email, password string) (*User, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, errors.Wrap(err, "error trying to log into CWS API")
 		}
@@ -135,7 +134,7 @@ func (c *Client) SignUp(email, password string) (*SignupResponse, error) {
 
 	switch resp.StatusCode {
 	case http.StatusCreated:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, errors.Wrap(err, "error trying to sign up into CWS API")
 		}
@@ -161,7 +160,7 @@ func (c *Client) GetMyCustomers() ([]*Customer, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, errors.Wrap(err, "error trying to request my customers from CWS API")
 		}
@@ -203,7 +202,7 @@ func (c *Client) CreateInstallation(installationRequest *CreateInstallationReque
 	defer closeBody(resp)
 	switch resp.StatusCode {
 	case http.StatusOK:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, errors.Wrap(err, "error trying to create CWS installation")
 		}
@@ -242,7 +241,7 @@ func (c *Client) RegisterStripeWebhook(url, owner string) (string, error) {
 	defer closeBody(resp)
 	switch resp.StatusCode {
 	case http.StatusCreated:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return "", errors.Wrap(err, "error trying to register stripe webhook")
 		}
@@ -282,7 +281,7 @@ func (c *Client) GetInstallations() ([]*Installation, error) {
 	defer closeBody(resp)
 	switch resp.StatusCode {
 	case http.StatusOK:
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, errors.Wrap(err, "error trying to get CWS installation")
 		}
@@ -321,7 +320,7 @@ func (c *Client) makeRequest(host, method, path string, body []byte, isInternal 
 
 func closeBody(r *http.Response) {
 	if r.Body != nil {
-		_, _ = ioutil.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		_ = r.Body.Close()
 	}
 }
