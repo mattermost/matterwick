@@ -6,7 +6,7 @@ import (
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 )
 
-// NewCloudClientWithOAuth creates a new cloud client with OAuth.
+// NewCloudClient creates a new cloud client with OAuth.
 func NewCloudClient(address, clientID, clientSecret, tokenEndpoint, apiKey string) *cloudModel.Client {
 	var headers map[string]string
 
