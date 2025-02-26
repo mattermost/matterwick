@@ -14,7 +14,7 @@ func NewCloudClient(address, clientID, clientSecret, tokenEndpoint, apiKey strin
 		return cloudModel.NewClient(address)
 	}
 
-	if clientID != "" && clientSecret != "" && tokenEndpoint != "" {
+	if clientID == "" && clientSecret == "" && tokenEndpoint == "" {
 		headers = map[string]string{
 			"x-api-key": apiKey,
 		}
