@@ -58,9 +58,7 @@ func New(config *MatterwickConfig) *Server {
 		logger.SetFormatter(&logrus.JSONFormatter{})
 	}
 
-	var cloudClient *cloudModel.Client
-
-	cloudClient = model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint, config.AWSAPIKey)
+	cloudClient := model.NewCloudClient(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint, config.AWSAPIKey)
 
 	s := &Server{
 		Config:          config,
