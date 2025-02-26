@@ -59,11 +59,8 @@ func New(config *MatterwickConfig) *Server {
 	}
 
 	var cloudClient *cloudModel.Client
-	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
-		cloudClient = cloudModel.NewClient(config.ProvisionerServer)
-	} else {
-		cloudClient = model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint)
-	}
+
+	cloudClient = model.NewCloudClientWithOAuth(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint, config.AWSAPIKey)
 
 	s := &Server{
 		Config:          config,
