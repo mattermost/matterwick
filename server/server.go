@@ -98,7 +98,7 @@ func (s *Server) Start() {
 		s.Logger.WithField("addr", s.Config.ListenAddress).Info("API server listening")
 		err := manners.ListenAndServe(s.Config.ListenAddress, handler)
 		if err != nil {
-			s.logErrorToMattermost(err.Error())
+			s.logErrorToMattermost("%s", err.Error())
 			s.Logger.WithError(err).Panic("server_error")
 		}
 	}()
