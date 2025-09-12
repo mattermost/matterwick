@@ -69,6 +69,9 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 	if pr.RepoName == cwsRepoName {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a CWS SpinWick test server")
 		request = s.createCWSSpinWick(pr, logger)
+	} else if s.isPluginRepository(pr.RepoName) {
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a Plugin SpinWick test server")
+		request = s.createPluginSpinWick(pr, logger)
 	} else if withCloudInfra {
 		s.sendGitHubComment(
 			pr.RepoOwner,
@@ -504,6 +507,8 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCl
 
 	if pr.RepoName == cwsRepoName {
 		request = s.updateKubeSpinWick(pr, logger)
+	} else if s.isPluginRepository(pr.RepoName) {
+		request = s.updatePluginSpinWick(pr, logger)
 	} else {
 		request = s.updateSpinWick(pr, withLicense, withCloudInfra, noBuildChanges, envVars, logger)
 	}
@@ -768,6 +773,8 @@ func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
 
 	if pr.RepoName == cwsRepoName {
 		request = s.destroyKubeSpinWick(pr, logger)
+	} else if s.isPluginRepository(pr.RepoName) {
+		request = s.destroyPluginSpinWick(pr, logger)
 	} else if withCloud {
 		request = s.destroyCloudSpinWickWithCWS(pr, logger)
 	} else {
