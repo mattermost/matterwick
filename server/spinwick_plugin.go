@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultPluginImage   = "mattermost/mattermost-enterprise-edition"
+	defaultPluginImage   = "mattermostdevelopment/mattermost-enterprise-edition"
 	defaultPluginVersion = "latest"
 	pluginRepoPrefix     = "mattermost-plugin-"
 	pluginS3Bucket       = "mattermost-plugin-pr-builds"
