@@ -299,7 +299,7 @@ func TestIntegrationScenarios(t *testing.T) {
 
 // TestConstants verifies that our constants are set correctly
 func TestConstants(t *testing.T) {
-	assert.Equal(t, "mattermost/mattermost-enterprise-edition", defaultPluginImage)
+	assert.Equal(t, "mattermostdevelopment/mattermost-enterprise-edition", defaultPluginImage)
 	assert.Equal(t, "latest", defaultPluginVersion)
 	assert.Equal(t, "mattermost-plugin-", pluginRepoPrefix)
 	assert.Equal(t, "mattermost-plugin-pr-builds", pluginS3Bucket)
