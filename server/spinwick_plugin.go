@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultPluginImage   = "mattermostdevelopment/mattermost-enterprise-edition"
-	defaultPluginVersion = "latest"
+	defaultPluginVersion = "master"
 	pluginRepoPrefix     = "mattermost-plugin-"
 	pluginS3Bucket       = "mattermost-plugin-pr-builds"
 	pluginS3Region       = "us-east-1" // Adjust if needed
@@ -40,7 +40,12 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 		Aborted:        false,
 	}
 
-	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
+	// Use shortened name for DNS (e.g., "playbooks" instead of "mattermost-plugin-playbooks")
+	pluginID := strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
+	spinwick := model.NewSpinwick(pluginID, pr.Number, s.Config.DNSNameTestServer)
+	// But use full repo name for the ownerID to maintain consistency with existing installations
+	spinwick.RepoName = pr.RepoName
+	spinwick.RepeatableID = fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 	ownerID := spinwick.RepeatableID
 
 	// Check if installation already exists
@@ -124,8 +129,6 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 		return request.WithError(errors.Wrap(err, "failed to install plugin")).ShouldReportError()
 	}
 
-	// Extract plugin info from repo name and commit
-	pluginID := strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
 	shortSHA := pr.Sha[0:7]
 
 	// Post success comment
@@ -163,7 +166,7 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 	pluginID := strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
 
 	// Install the plugin using the S3 URL
-	subcommand := []string{"plugin", "install-url", s3URL}
+	subcommand := []string{"plugin", "install-url", "-f", s3URL}
 	output, err := cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
 	if err != nil {
 		logger.WithError(err).WithField("output", string(output)).Error("Failed to install plugin")
@@ -220,8 +223,8 @@ func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.Field
 		Aborted:        false,
 	}
 
-	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
-	ownerID := spinwick.RepeatableID
+	// Use full repo name for ownerID to find existing installation
+	ownerID := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
 	// Get existing installation
 	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
