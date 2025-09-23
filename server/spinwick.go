@@ -52,6 +52,85 @@ func init() {
 	}
 }
 
+// Helper function to check for existing installation
+func (s *Server) checkExistingInstallation(ownerID string, logger logrus.FieldLogger) (*cloudModel.InstallationDTO, error) {
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	return installation, nil
+}
+
+// Helper function to create installation request with common settings
+func (s *Server) createInstallationRequest(ownerID, version, image, dns, size string, withLicense bool, envVars cloudModel.EnvVarMap) *cloudModel.CreateInstallationRequest {
+	installationRequest := &cloudModel.CreateInstallationRequest{
+		OwnerID:     ownerID,
+		Version:     version,
+		Image:       image,
+		DNS:         dns,
+		Size:        size,
+		Affinity:    cloudModel.InstallationAffinityMultiTenant,
+		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
+		Filestore:   cloudModel.InstallationFilestoreBifrost,
+		Annotations: []string{defaultMultiTenantAnnotation},
+	}
+
+	if withLicense {
+		installationRequest.License = s.Config.SpinWickHALicense
+	}
+	if len(envVars) > 0 {
+		installationRequest.PriorityEnv = envVars
+	}
+	if len(s.Config.CloudGroupID) != 0 {
+		installationRequest.GroupID = s.Config.CloudGroupID
+	}
+
+	return installationRequest
+}
+
+// Helper function to wait for installation and initialize it
+func (s *Server) waitAndInitializeInstallation(ctx context.Context, pr *model.PullRequest, request *spinwick.Request, installation *cloudModel.InstallationDTO, logger logrus.FieldLogger) error {
+	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
+		s.waitForInstallationStablePoll(ctx, pr, request, logger)
+	} else {
+		s.waitForInstallationStable(ctx, pr, request, logger)
+	}
+
+	if request.Error != nil {
+		return errors.Wrap(request.Error, "error waiting for installation to become stable")
+	}
+
+	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
+	err := s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize the Installation")
+	}
+
+	return nil
+}
+
+// Helper function to format and send success comment
+func (s *Server) sendSpinwickSuccessComment(pr *model.PullRequest, installation *cloudModel.InstallationDTO, extraInfo string) {
+	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
+	userTable := "| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | Sys@dmin123 |\n| User | user-1 | User-1@123 |"
+	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
+
+	baseMsg := fmt.Sprintf("test server created! :tada:\n\nAccess here: %s\n\n%s", spinwickURL, userTable)
+	if extraInfo != "" {
+		baseMsg += "\n\n" + extraInfo
+	}
+	baseMsg += fmt.Sprintf("\n\nYour Spinwick's installation ID is: `%s`\nTo access the logs, please click [here](%s)", installation.ID, logLink)
+
+	var prefix string
+	if s.isPluginRepository(pr.RepoName) {
+		prefix = "Plugin "
+	} else {
+		prefix = "Mattermost "
+	}
+
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, prefix+baseMsg)
+}
+
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense, withCloudInfra bool, envVars cloudModel.EnvVarMap) {
 	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
 	if pr.State == "closed" {
@@ -370,9 +449,10 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
-
 	ownerID := spinwick.RepeatableID
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
+
+	// Check for existing installation
+	installation, err := s.checkExistingInstallation(ownerID, logger)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -434,26 +514,15 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	logger.Info("Creating installation")
 
 	cloudClient := s.CloudClient
-	installationRequest := &cloudModel.CreateInstallationRequest{
-		OwnerID:     ownerID,
-		Version:     version,
-		Image:       image,
-		DNS:         spinwick.DNS(s.Config.DNSNameTestServer),
-		Size:        size,
-		Affinity:    cloudModel.InstallationAffinityMultiTenant,
-		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
-		Filestore:   cloudModel.InstallationFilestoreBifrost,
-		Annotations: []string{defaultMultiTenantAnnotation},
-	}
-	if withLicense {
-		installationRequest.License = s.Config.SpinWickHALicense
-	}
-	if len(envVars) > 0 {
-		installationRequest.PriorityEnv = envVars
-	}
-	if len(s.Config.CloudGroupID) != 0 {
-		installationRequest.GroupID = s.Config.CloudGroupID
-	}
+	installationRequest := s.createInstallationRequest(
+		ownerID,
+		version,
+		image,
+		spinwick.DNS(s.Config.DNSNameTestServer),
+		size,
+		withLicense,
+		envVars,
+	)
 
 	installation, err = cloudClient.CreateInstallation(installationRequest)
 	if err != nil {
@@ -469,27 +538,13 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
-	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
-		s.waitForInstallationStablePoll(ctx, pr, request, logger)
-		if request.Error != nil {
-			return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable")).ShouldReportError()
-		}
-	} else {
-		s.waitForInstallationStable(ctx, pr, request, logger)
-		if request.Error != nil {
-			return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable")).ShouldReportError()
-		}
+	err = s.waitAndInitializeInstallation(ctx, pr, request, installation, logger)
+	if err != nil {
+		return request.WithError(err).ShouldReportError()
 	}
 
-	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	err = s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
-	if err != nil {
-		return request.WithError(errors.Wrap(err, "failed to initialize the Installation")).ShouldReportError()
-	}
-	userTable := "| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | Sys@dmin123 |\n| User | user-1 | User-1@123 |"
-	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
-	msg := fmt.Sprintf("Mattermost test server created! :tada:\n\nAccess here: %s\n\n%s\n\nYour Spinwick's installation ID is: `%s`\nTo access the logs, please click [here](%s)", spinwickURL, userTable, installation.ID, logLink)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
+	// Send success comment
+	s.sendSpinwickSuccessComment(pr, installation, "")
 
 	return request
 }
