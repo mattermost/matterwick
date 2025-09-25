@@ -123,6 +123,7 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 		"CWS test server updated",
 		"Creating a new SpinWick test cloud server with CWS",
 		"Mattermost test server with CWS created",
+		"Creating a Plugin SpinWick test server",
 	}
 
 	logger.Info("Removing old Matterwick comments")
