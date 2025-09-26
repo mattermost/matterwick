@@ -77,8 +77,10 @@ type MatterwickConfig struct {
 	DockerUsername    string
 	DockerPassword    string
 
-	MattermostWebhookURL    string
-	MattermostWebhookFooter string
+	MattermostWebhookURL            string
+	MattermostWebhookFooter         string
+	MattermostCredentialsWebhookURL string
+	MattermostCredentialsChannelURL string
 
 	KubeClusterName   string
 	KubeClusterRegion string

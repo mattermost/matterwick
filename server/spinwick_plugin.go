@@ -87,7 +87,7 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
-	err = s.waitAndInitializeInstallation(ctx, pr, request, installation, logger)
+	sysadminPassword, userPassword, err := s.waitAndInitializeInstallation(ctx, pr, request, installation, logger)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -117,10 +117,10 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 
 	shortSHA := pr.Sha[0:7]
 
-	// Post success comment with plugin info
+	// Post success message with plugin info to Mattermost webhook
 	pluginTable := fmt.Sprintf("| Plugin | Version | Artifact |\n|---|---|---|\n| %s | %s | [Download](%s) |",
 		pluginID, shortSHA, pluginURL)
-	s.sendSpinwickSuccessComment(pr, installation, pluginTable)
+	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, pluginTable, logger)
 
 	return request
 }

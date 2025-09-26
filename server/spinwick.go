@@ -4,8 +4,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -89,7 +93,7 @@ func (s *Server) createInstallationRequest(ownerID, version, image, dns, size st
 }
 
 // Helper function to wait for installation and initialize it
-func (s *Server) waitAndInitializeInstallation(ctx context.Context, pr *model.PullRequest, request *spinwick.Request, installation *cloudModel.InstallationDTO, logger logrus.FieldLogger) error {
+func (s *Server) waitAndInitializeInstallation(ctx context.Context, pr *model.PullRequest, request *spinwick.Request, installation *cloudModel.InstallationDTO, logger logrus.FieldLogger) (string, string, error) {
 	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
 		s.waitForInstallationStablePoll(ctx, pr, request, logger)
 	} else {
@@ -97,29 +101,32 @@ func (s *Server) waitAndInitializeInstallation(ctx context.Context, pr *model.Pu
 	}
 
 	if request.Error != nil {
-		return errors.Wrap(request.Error, "error waiting for installation to become stable")
+		return "", "", errors.Wrap(request.Error, "error waiting for installation to become stable")
 	}
 
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	err := s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
+	sysadminPassword, userPassword, err := s.initializeMattermostTestServer(spinwickURL, pr.Number, logger)
 	if err != nil {
-		return errors.Wrap(err, "failed to initialize the Installation")
+		return "", "", errors.Wrap(err, "failed to initialize the Installation")
 	}
 
-	return nil
+	return sysadminPassword, userPassword, nil
 }
 
-// Helper function to format and send success comment
-func (s *Server) sendSpinwickSuccessComment(pr *model.PullRequest, installation *cloudModel.InstallationDTO, extraInfo string) {
-	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	userTable := "| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | Sys@dmin123 |\n| User | user-1 | User-1@123 |"
-	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
-
-	baseMsg := fmt.Sprintf("test server created! :tada:\n\nAccess here: %s\n\n%s", spinwickURL, userTable)
-	if extraInfo != "" {
-		baseMsg += "\n\n" + extraInfo
+// Helper function to generate a secure random password
+func generateSecurePassword() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
 	}
-	baseMsg += fmt.Sprintf("\n\nYour Spinwick's installation ID is: `%s`\nTo access the logs, please click [here](%s)", installation.ID, logLink)
+	return hex.EncodeToString(bytes), nil
+}
+
+// Helper function to format and send success comment to Mattermost webhook
+func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installation *cloudModel.InstallationDTO, sysadminPassword, userPassword, extraInfo string, logger logrus.FieldLogger) {
+	// Send public message to GitHub (without credentials)
+	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
+	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
 
 	var prefix string
 	if s.isPluginRepository(pr.RepoName) {
@@ -128,7 +135,68 @@ func (s *Server) sendSpinwickSuccessComment(pr *model.PullRequest, installation 
 		prefix = "Mattermost "
 	}
 
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, prefix+baseMsg)
+	// Public GitHub message (no credentials)
+	githubMsg := fmt.Sprintf("%sSpinwick PR #%d :tada:\n\n**Test server created!**\n\nAccess here: %s", prefix, pr.Number, spinwickURL)
+	if extraInfo != "" {
+		githubMsg += "\n\n" + extraInfo
+	}
+	githubMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`\n**Logs:** [Click here](%s)", installation.ID, logLink)
+
+	// Add link to credentials channel if configured
+	if s.Config.MattermostCredentialsChannelURL != "" {
+		githubMsg += fmt.Sprintf("\n\n**Credentials:** Posted securely in [this Mattermost channel](%s) - Look for PR #%d", s.Config.MattermostCredentialsChannelURL, pr.Number)
+	} else {
+		githubMsg += "\n\n**Credentials:** Have been sent securely to the internal Mattermost channel."
+	}
+
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, githubMsg)
+
+	// Send credentials to Mattermost webhook
+	if s.Config.MattermostCredentialsWebhookURL == "" {
+		logger.Warn("No Mattermost credentials webhook URL set: unable to send credentials")
+		return
+	}
+
+	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | %s |\n| User | user-1 | %s |", sysadminPassword, userPassword)
+	mmMsg := fmt.Sprintf("## %sSpinwick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s",
+		prefix, pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, userTable)
+	if extraInfo != "" {
+		mmMsg += "\n\n### Additional Info\n" + extraInfo
+	}
+	mmMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`\n**Logs:** [View in Grafana](%s)", installation.ID, logLink)
+	if s.Config.MattermostWebhookFooter != "" {
+		mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
+	}
+
+	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: mmMsg}
+
+	// Send to credentials webhook URL
+	b, err := json.Marshal(webhookRequest)
+	if err != nil {
+		logger.WithError(err).Error("Unable to marshal webhook request")
+		return
+	}
+
+	client := http.Client{}
+	request, err := http.NewRequest("POST", s.Config.MattermostCredentialsWebhookURL, bytes.NewReader(b))
+	if err != nil {
+		logger.WithError(err).Error("Unable to create webhook request")
+		return
+	}
+	request.Header.Add("Content-Type", "application/json")
+
+	if _, err = client.Do(request); err != nil {
+		logger.WithError(err).Error("Unable to post credentials to Mattermost webhook")
+	}
+}
+
+// Helper function to format and send success comment (deprecated - kept for compatibility)
+func (s *Server) sendSpinwickSuccessComment(pr *model.PullRequest, installation *cloudModel.InstallationDTO, extraInfo string) {
+	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
+	// Generate secure passwords for backwards compatibility
+	sysadminPassword, _ := generateSecurePassword()
+	userPassword, _ := generateSecurePassword()
+	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, extraInfo, logger)
 }
 
 func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLicense, withCloudInfra bool, envVars cloudModel.EnvVarMap) {
@@ -286,10 +354,50 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, _ string, log
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
 
-	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | %s | %s |", username, password)
 	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", request.InstallationID)
-	msg := fmt.Sprintf("Mattermost test server with CWS created! :tada:\n\nAccess here: %s\n\n%s\n\nYour spinwick's installation ID is `%s`\nLogs can be found [here](%s)", spinwickURL, userTable, request.InstallationID, logLink)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
+
+	// Send public message to GitHub (without credentials)
+	githubMsg := fmt.Sprintf("**Mattermost SpinWick with CWS PR #%d** :tada:\n\n**Test server created!**\n\nAccess here: %s\n\n**Installation ID:** `%s`\n**Logs:** [Click here](%s)", pr.Number, spinwickURL, request.InstallationID, logLink)
+
+	// Add link to credentials channel if configured
+	if s.Config.MattermostCredentialsChannelURL != "" {
+		githubMsg += fmt.Sprintf("\n\n**Credentials:** Posted securely in [this Mattermost channel](%s) - Look for PR #%d", s.Config.MattermostCredentialsChannelURL, pr.Number)
+	} else {
+		githubMsg += "\n\n**Credentials:** Have been sent securely to the internal Mattermost channel."
+	}
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, githubMsg)
+
+	// Send credentials to Mattermost webhook
+	if s.Config.MattermostCredentialsWebhookURL != "" {
+		userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| CWS Admin | %s | %s |", username, password)
+		mmMsg := fmt.Sprintf("## Mattermost SpinWick with CWS for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s\n\n**Installation ID:** `%s`\n**Logs:** [View in Grafana](%s)",
+			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, userTable, request.InstallationID, logLink)
+		if s.Config.MattermostWebhookFooter != "" {
+			mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
+		}
+
+		webhookRequest := &WebhookRequest{Username: "MatterWick", Text: mmMsg}
+
+		// Send to credentials webhook URL
+		b, err := json.Marshal(webhookRequest)
+		if err != nil {
+			logger.WithError(err).Error("Unable to marshal webhook request")
+		} else {
+			client := http.Client{}
+			request, err := http.NewRequest("POST", s.Config.MattermostCredentialsWebhookURL, bytes.NewReader(b))
+			if err != nil {
+				logger.WithError(err).Error("Unable to create webhook request")
+			} else {
+				request.Header.Add("Content-Type", "application/json")
+				if _, err = client.Do(request); err != nil {
+					logger.WithError(err).Error("Unable to post credentials to Mattermost webhook")
+				}
+			}
+		}
+	} else {
+		logger.Warn("No Mattermost credentials webhook URL set: unable to send credentials")
+	}
+
 	return request
 }
 
@@ -425,8 +533,37 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 	}
 
 	spinwickURL := fmt.Sprintf("http://%s", lbURL)
-	msg := fmt.Sprintf("CWS test server created! :tada:\n\nAccess here: %s\n\nSplit individual target: %s", spinwickURL, deployment.Environment.CWSSplitServerID)
+	// Send public message to GitHub (no credentials for CWS-only deployments)
+	msg := fmt.Sprintf("**CWS SpinWick PR #%d** :tada:\n\n**Test server created!**\n\nAccess here: %s\n\n**Split individual target:** %s", pr.Number, spinwickURL, deployment.Environment.CWSSplitServerID)
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, msg)
+
+	// Send to Mattermost webhook for consistency
+	if s.Config.MattermostCredentialsWebhookURL != "" {
+		mmMsg := fmt.Sprintf("## CWS SpinWick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n**Split individual target:** %s",
+			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, deployment.Environment.CWSSplitServerID)
+		if s.Config.MattermostWebhookFooter != "" {
+			mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
+		}
+
+		webhookRequest := &WebhookRequest{Username: "MatterWick", Text: mmMsg}
+
+		// Send to credentials webhook URL
+		b, err := json.Marshal(webhookRequest)
+		if err != nil {
+			logger.WithError(err).Error("Unable to marshal webhook request")
+		} else {
+			client := http.Client{}
+			request, err := http.NewRequest("POST", s.Config.MattermostCredentialsWebhookURL, bytes.NewReader(b))
+			if err != nil {
+				logger.WithError(err).Error("Unable to create webhook request")
+			} else {
+				request.Header.Add("Content-Type", "application/json")
+				if _, err = client.Do(request); err != nil {
+					logger.WithError(err).Error("Unable to post to Mattermost webhook")
+				}
+			}
+		}
+	}
 
 	request.InstallationID = deployment.Namespace
 	return request
@@ -538,13 +675,13 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 
-	err = s.waitAndInitializeInstallation(ctx, pr, request, installation, logger)
+	sysadminPassword, userPassword, err := s.waitAndInitializeInstallation(ctx, pr, request, installation, logger)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
 
-	// Send success comment
-	s.sendSpinwickSuccessComment(pr, installation, "")
+	// Send success message to Mattermost webhook
+	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, "", logger)
 
 	return request
 }
@@ -1163,8 +1300,18 @@ func (s *Server) waitForInstallationIsDeleted(ctx context.Context, pr *model.Pul
 	}
 }
 
-func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logger logrus.FieldLogger) error {
+func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logger logrus.FieldLogger) (string, string, error) {
 	logger.Info("Initializing Mattermost installation")
+
+	// Generate unique passwords for this installation
+	sysadminPassword, err := generateSecurePassword()
+	if err != nil {
+		return "", "", errors.Wrap(err, "failed to generate sysadmin password")
+	}
+	userPassword, err := generateSecurePassword()
+	if err != nil {
+		return "", "", errors.Wrap(err, "failed to generate user password")
+	}
 
 	wait := 600
 	logger.Infof("Waiting up to %d seconds for DNS to propagate", wait)
@@ -1172,9 +1319,9 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logg
 	defer cancel()
 
 	mmHost, _ := url.Parse(mmURL)
-	err := checkDNS(ctx, fmt.Sprintf("%s:443", mmHost.Host))
+	err = checkDNS(ctx, fmt.Sprintf("%s:443", mmHost.Host))
 	if err != nil {
-		return errors.Wrap(err, "timed out waiting for DNS to propagate for installation")
+		return "", "", errors.Wrap(err, "timed out waiting for DNS to propagate for installation")
 	}
 
 	client := mattermostModel.NewAPIv4Client(mmURL)
@@ -1184,23 +1331,23 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logg
 	defer cancel()
 	err = checkMMPing(ctx, client, logger)
 	if err != nil {
-		return errors.Wrap(err, "failed to get mattermost ping response")
+		return "", "", errors.Wrap(err, "failed to get mattermost ping response")
 	}
 
 	user := &mattermostModel.User{
 		Username: "sysadmin",
 		Email:    "sysadmin@example.mattermost.com",
-		Password: "Sys@dmin123",
+		Password: sysadminPassword,
 	}
 	_, _, err = client.CreateUser(user)
 	if err != nil {
-		return errors.Wrap(err, "failed to create initial mattermost user")
+		return "", "", errors.Wrap(err, "failed to create initial mattermost user")
 	}
 	client.Logout()
 
-	userLogged, _, err := client.Login("sysadmin", "Sys@dmin123")
+	userLogged, _, err := client.Login("sysadmin", sysadminPassword)
 	if err != nil {
-		return errors.Wrap(err, "failed to log in with initial mattermost user")
+		return "", "", errors.Wrap(err, "failed to log in with initial mattermost user")
 	}
 
 	teamName := fmt.Sprintf("pr%d", prNumber)
@@ -1211,31 +1358,31 @@ func (s *Server) initializeMattermostTestServer(mmURL string, prNumber int, logg
 	}
 	firstTeam, _, err := client.CreateTeam(team)
 	if err != nil {
-		return errors.Wrap(err, "failed to log in with initial team")
+		return "", "", errors.Wrap(err, "failed to log in with initial team")
 	}
 
 	_, _, err = client.AddTeamMember(firstTeam.Id, userLogged.Id)
 	if err != nil {
-		return errors.Wrap(err, "failed adding admin user to initial team")
+		return "", "", errors.Wrap(err, "failed adding admin user to initial team")
 	}
 
 	testUser := &mattermostModel.User{
 		Username: "user-1",
 		Email:    "user-1@example.mattermost.com",
-		Password: "User-1@123",
+		Password: userPassword,
 	}
 	testUser, _, err = client.CreateUser(testUser)
 	if err != nil {
-		return errors.Wrap(err, "failed to create standard test user")
+		return "", "", errors.Wrap(err, "failed to create standard test user")
 	}
 	_, _, err = client.AddTeamMember(firstTeam.Id, testUser.Id)
 	if err != nil {
-		return errors.Wrap(err, "failed adding standard test user to initial team")
+		return "", "", errors.Wrap(err, "failed adding standard test user to initial team")
 	}
 
 	logger.Info("Mattermost configuration complete")
 
-	return nil
+	return sysadminPassword, userPassword, nil
 }
 
 func checkDNS(ctx context.Context, url string) error {
