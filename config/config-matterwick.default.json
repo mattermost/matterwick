@@ -20,6 +20,8 @@
   "DestroyedSpinmintMessage": "",
   "MattermostWebhookURL": "",
   "MattermostWebhookFooter": "",
+  "MattermostCredentialsWebhookURL": "",
+  "MattermostCredentialsChannelURL": "",
   "KubeClusterName": "",
   "KubeClusterRegion": "",
   "LogSettings": {
