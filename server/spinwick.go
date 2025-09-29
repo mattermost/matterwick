@@ -177,7 +177,7 @@ func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installa
 		return
 	}
 
-	client := http.Client{}
+	client := http.Client{Timeout: 10 * time.Second}
 	request, err := http.NewRequest("POST", s.Config.MattermostCredentialsWebhookURL, bytes.NewReader(b))
 	if err != nil {
 		logger.WithError(err).Error("Unable to create webhook request")
