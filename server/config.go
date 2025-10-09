@@ -99,6 +99,11 @@ type MatterwickConfig struct {
 	CWS CWS
 
 	CloudAuth CloudAuth
+
+	// PluginRepoToIDMapping maps repository names to plugin IDs for mmctl commands
+	// Key: repository name (e.g., "mattermost-plugin-boards")
+	// Value: plugin ID to use for mmctl enable command
+	PluginRepoToIDMapping map[string]string
 }
 
 func findConfigFile(fileName string) string {
