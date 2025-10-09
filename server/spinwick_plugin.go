@@ -145,10 +145,18 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 
 	// Install the plugin using mmctl
 	cloudClient := s.CloudClient
-	pluginID := strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
+
+	// Determine the plugin ID - check config mapping first, then fall back to trimming prefix
+	pluginID, exists := s.Config.PluginRepoToIDMapping[pr.RepoName]
+	if !exists {
+		pluginID = strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
+		logger.WithField("pluginID", pluginID).Debug("Using calculated plugin ID (no mapping found)")
+	} else {
+		logger.WithField("pluginID", pluginID).Debug("Using mapped plugin ID from config")
+	}
 
 	// Install the plugin using the S3 URL
-	subcommand := []string{"plugin", "install-url", "-f", s3URL}
+	subcommand := []string{"--local", "plugin", "install-url", "-f", s3URL}
 	output, err := cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
 	if err != nil {
 		logger.WithError(err).WithField("output", string(output)).Error("Failed to install plugin")
@@ -157,7 +165,7 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 	logger.WithField("output", string(output)).Info("Plugin installed successfully")
 
 	// Enable the plugin
-	subcommand = []string{"plugin", "enable", pluginID}
+	subcommand = []string{"--local", "plugin", "enable", pluginID}
 	output, err = cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
 	if err != nil {
 		logger.WithError(err).WithField("output", string(output)).Error("Failed to enable plugin")
