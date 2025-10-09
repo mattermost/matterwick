@@ -164,6 +164,9 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 	}
 	logger.WithField("output", string(output)).Info("Plugin installed successfully")
 
+	// Wait for 20 seconds to allow the system to stabilize after plugin installation
+	time.Sleep(20 * time.Second)
+
 	// Enable the plugin
 	subcommand = []string{"--local", "plugin", "enable", pluginID}
 	output, err = cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
