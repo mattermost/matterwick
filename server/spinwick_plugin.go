@@ -110,23 +110,46 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 	// Create a new context for plugin artifact wait (45 minutes)
 	pluginCtx, pluginCancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer pluginCancel()
-	pluginURL, err := s.waitForAndInstallPlugin(pluginCtx, pr, clusterInstallationID, logger)
-	if err != nil {
-		return request.WithError(errors.Wrap(err, "failed to install plugin")).ShouldReportError()
-	}
+	pluginResult := s.waitForAndInstallPlugin(pluginCtx, pr, clusterInstallationID, logger)
 
 	shortSHA := pr.Sha[0:7]
 
-	// Post success message with plugin info to Mattermost webhook
+	// Build plugin table and warning message
 	pluginTable := fmt.Sprintf("| Plugin | Version | Artifact |\n|---|---|---|\n| %s | %s | [Download](%s) |",
-		pluginID, shortSHA, pluginURL)
-	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, pluginTable, logger)
+		pluginID, shortSHA, pluginResult.PluginURL)
+
+	var extraInfo string
+	if !pluginResult.Success {
+		// Installation created but plugin installation/enablement failed
+		warningMsg := "\n\n:warning: **Plugin Installation Issue**\n\n"
+		warningMsg += "The test server was created successfully, but there was an issue installing or enabling the plugin automatically:\n\n"
+
+		if pluginResult.InstallError != nil {
+			warningMsg += fmt.Sprintf("- **Install Error:** %s\n", pluginResult.InstallError.Error())
+		}
+		if pluginResult.EnableError != nil {
+			warningMsg += fmt.Sprintf("- **Enable Error:** %s\n", pluginResult.EnableError.Error())
+		}
+
+		warningMsg += fmt.Sprintf("\n**You can manually install the plugin:**\n1. Download the plugin artifact from the link above\n2. Upload it to your test server at %s\n3. Enable it in System Console > Plugins\n\n", installation.ID)
+		warningMsg += "Future commits will still attempt to automatically update the plugin."
+
+		extraInfo = pluginTable + warningMsg
+		logger.WithFields(logrus.Fields{
+			"install_error": pluginResult.InstallError,
+			"enable_error":  pluginResult.EnableError,
+		}).Warn("Plugin installation/enablement failed, but server is available for manual installation")
+	} else {
+		extraInfo = pluginTable
+	}
+
+	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, extraInfo, logger)
 
 	return request
 }
 
 // waitForAndInstallPlugin waits for the plugin artifact to be available on S3 and installs it
-func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequest, clusterInstallationID string, logger logrus.FieldLogger) (string, error) {
+func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequest, clusterInstallationID string, logger logrus.FieldLogger) *model.PluginInstallResult {
 	// Build the S3 URL for the plugin artifact
 	shortSHA := pr.Sha[0:7]
 	filename := fmt.Sprintf("%s-%s.tar.gz", pr.RepoName, shortSHA)
@@ -137,11 +160,19 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 		"sha": shortSHA,
 	}).Info("Waiting for plugin artifact on S3")
 
+	result := &model.PluginInstallResult{
+		PluginURL:     s3URL,
+		Success:       false,
+		ArtifactFound: false,
+	}
+
 	// Wait for the artifact to be available on S3
 	err := s.waitForS3Artifact(ctx, s3URL, logger)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to wait for S3 artifact")
+		result.InstallError = errors.Wrap(err, "failed to wait for S3 artifact")
+		return result
 	}
+	result.ArtifactFound = true
 
 	// Install the plugin using mmctl
 	cloudClient := s.CloudClient
@@ -160,7 +191,8 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 	output, err := cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
 	if err != nil {
 		logger.WithError(err).WithField("output", string(output)).Error("Failed to install plugin")
-		return "", errors.Wrap(err, "failed to install plugin via mmctl")
+		result.InstallError = errors.Wrap(err, "failed to install plugin via mmctl")
+		return result
 	}
 	logger.WithField("output", string(output)).Info("Plugin installed successfully")
 
@@ -172,11 +204,13 @@ func (s *Server) waitForAndInstallPlugin(ctx context.Context, pr *model.PullRequ
 	output, err = cloudClient.ExecClusterInstallationCLI(clusterInstallationID, "mmctl", subcommand)
 	if err != nil {
 		logger.WithError(err).WithField("output", string(output)).Error("Failed to enable plugin")
-		return "", errors.Wrap(err, "failed to enable plugin via mmctl")
+		result.EnableError = errors.Wrap(err, "failed to enable plugin via mmctl")
+		return result
 	}
 	logger.WithField("output", string(output)).Info("Plugin enabled successfully")
 
-	return s3URL, nil
+	result.Success = true
+	return result
 }
 
 // waitForS3Artifact waits for the artifact to be available on S3
@@ -262,10 +296,7 @@ func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.Field
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
 
-	pluginURL, err := s.waitForAndInstallPlugin(ctx, pr, clusterInstallationID, logger)
-	if err != nil {
-		return request.WithError(errors.Wrap(err, "failed to update plugin")).ShouldReportError()
-	}
+	pluginResult := s.waitForAndInstallPlugin(ctx, pr, clusterInstallationID, logger)
 
 	// Remove old update messages
 	if errComments == nil {
@@ -279,10 +310,34 @@ func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.Field
 	pluginID := strings.TrimPrefix(pr.RepoName, pluginRepoPrefix)
 	shortSHA := pr.Sha[0:7]
 
-	// Post update comment with updated plugin info
+	// Build update message with plugin info
 	pluginTable := fmt.Sprintf("Updated with git commit `%s`\n\n| Plugin | Version | Artifact |\n|---|---|---|\n| %s | %s | [Download](%s) |",
-		pr.Sha, pluginID, shortSHA, pluginURL)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, fmt.Sprintf("Plugin test server updated!\n\n%s", pluginTable))
+		pr.Sha, pluginID, shortSHA, pluginResult.PluginURL)
+
+	var updateMessage string
+	if !pluginResult.Success {
+		// Plugin update failed, but installation is still available
+		updateMessage = "Plugin test server update attempted, but encountered an issue:\n\n"
+
+		if pluginResult.InstallError != nil {
+			updateMessage += fmt.Sprintf(":warning: **Install Error:** %s\n\n", pluginResult.InstallError.Error())
+		}
+		if pluginResult.EnableError != nil {
+			updateMessage += fmt.Sprintf(":warning: **Enable Error:** %s\n\n", pluginResult.EnableError.Error())
+		}
+
+		updateMessage += "The test server is still available. You can manually download and install the updated plugin using the artifact link below.\n\n"
+		updateMessage += pluginTable
+
+		logger.WithFields(logrus.Fields{
+			"install_error": pluginResult.InstallError,
+			"enable_error":  pluginResult.EnableError,
+		}).Warn("Plugin update failed, but server remains available")
+	} else {
+		updateMessage = fmt.Sprintf("Plugin test server updated!\n\n%s", pluginTable)
+	}
+
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, updateMessage)
 
 	return request
 }
