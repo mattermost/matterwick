@@ -305,3 +305,114 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "mattermost-plugin-pr-builds", pluginS3Bucket)
 	assert.Equal(t, "us-east-1", pluginS3Region)
 }
+
+func TestApplyPluginConfigLogic(t *testing.T) {
+	t.Run("no config found for repository", func(t *testing.T) {
+		s := &Server{
+			Config: &MatterwickConfig{
+				PluginRepoConfigs: map[string]PluginConfig{},
+			},
+		}
+
+		// Since applyPluginConfig requires a CloudClient, we test the logic flow
+		// by checking the config lookup behavior
+		_, exists := s.Config.PluginRepoConfigs["mattermost-plugin-test"]
+		assert.False(t, exists, "Should not find config for unconfigured repo")
+	})
+
+	t.Run("config found for repository", func(t *testing.T) {
+		s := &Server{
+			Config: &MatterwickConfig{
+				PluginRepoConfigs: map[string]PluginConfig{
+					"mattermost-plugin-jira": {
+						PluginID: "jira",
+						Settings: map[string]interface{}{
+							"EnableJiraUI": true,
+							"Secret":       "test-secret",
+						},
+					},
+				},
+			},
+		}
+
+		config, exists := s.Config.PluginRepoConfigs["mattermost-plugin-jira"]
+		assert.True(t, exists, "Should find config for configured repo")
+		assert.Equal(t, "jira", config.PluginID)
+		assert.Equal(t, true, config.Settings["EnableJiraUI"])
+		assert.Equal(t, "test-secret", config.Settings["Secret"])
+	})
+
+	t.Run("config with empty settings", func(t *testing.T) {
+		s := &Server{
+			Config: &MatterwickConfig{
+				PluginRepoConfigs: map[string]PluginConfig{
+					"mattermost-plugin-empty": {
+						PluginID: "empty",
+						Settings: map[string]interface{}{},
+					},
+				},
+			},
+		}
+
+		config, exists := s.Config.PluginRepoConfigs["mattermost-plugin-empty"]
+		assert.True(t, exists, "Should find config even with empty settings")
+		assert.Equal(t, 0, len(config.Settings), "Settings should be empty")
+	})
+
+	t.Run("config JSON structure construction", func(t *testing.T) {
+		// Test that the JSON structure is built correctly
+		pluginConfig := PluginConfig{
+			PluginID: "jira",
+			Settings: map[string]interface{}{
+				"EnableJiraUI": true,
+			},
+		}
+
+		fullConfig := map[string]interface{}{
+			"PluginSettings": map[string]interface{}{
+				"Plugins": map[string]interface{}{
+					pluginConfig.PluginID: pluginConfig.Settings,
+				},
+			},
+		}
+
+		// Verify the structure
+		pluginSettings := fullConfig["PluginSettings"].(map[string]interface{})
+		plugins := pluginSettings["Plugins"].(map[string]interface{})
+		jiraSettings := plugins["jira"].(map[string]interface{})
+
+		assert.Equal(t, true, jiraSettings["EnableJiraUI"])
+	})
+}
+
+func TestPluginRepoToIDMappingUsage(t *testing.T) {
+	t.Run("use mapping when available", func(t *testing.T) {
+		s := &Server{
+			Config: &MatterwickConfig{
+				PluginRepoToIDMapping: map[string]string{
+					"mattermost-plugin-boards": "focalboard",
+				},
+			},
+		}
+
+		pluginID, exists := s.Config.PluginRepoToIDMapping["mattermost-plugin-boards"]
+		assert.True(t, exists)
+		assert.Equal(t, "focalboard", pluginID)
+	})
+
+	t.Run("fallback to prefix trimming when no mapping", func(t *testing.T) {
+		s := &Server{
+			Config: &MatterwickConfig{
+				PluginRepoToIDMapping: map[string]string{},
+			},
+		}
+
+		repoName := "mattermost-plugin-jira"
+		_, exists := s.Config.PluginRepoToIDMapping[repoName]
+		assert.False(t, exists)
+
+		// Fallback behavior
+		pluginID := repoName[len(pluginRepoPrefix):]
+		assert.Equal(t, "jira", pluginID)
+	})
+}

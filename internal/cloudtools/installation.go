@@ -54,3 +54,28 @@ func GetInstallationDNSFromDNSRecords(installation *cloud.InstallationDTO) strin
 	}
 	return ""
 }
+
+// GetInstallationByDNS returns the installation matching the given DNS hostname.
+// Returns nil and no error if no installation is found.
+func GetInstallationByDNS(client *cloud.Client, dns string) (*cloud.InstallationDTO, error) {
+	installations, err := client.GetInstallations(&cloud.GetInstallationsRequest{
+		DNS:    dns,
+		Paging: cloud.AllPagesNotDeleted(),
+	})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to retrieve installations by DNS from provisioner")
+	}
+
+	if len(installations) == 0 {
+		return nil, nil
+	}
+
+	// Return the first non-deleted installation
+	for _, installation := range installations {
+		if isNotDeletedState(installation.State) {
+			return installation, nil
+		}
+	}
+
+	return nil, nil
+}

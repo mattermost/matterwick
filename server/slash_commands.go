@@ -23,10 +23,12 @@ type (
 	spinWickCreateHandlerFn       func(envMap cloudModel.EnvVarMap, size string)
 	spinWickUpdateHandlerFn       func(envMap cloudModel.EnvVarMap)
 	spinWickDeleteHandlerFn       func()
+	spinWickUploadHandlerFn       func(dnsHostname string)
 	spinWickSlashCommandsHandlers struct {
 		createHandler spinWickCreateHandlerFn
 		updateHandler spinWickUpdateHandlerFn
 		deleteHandler spinWickDeleteHandlerFn
+		uploadHandler spinWickUploadHandlerFn
 	}
 	spinWickSlashCommandArgs struct {
 		envMap cloudModel.EnvVarMap
@@ -90,6 +92,15 @@ func (s *Server) handleSlashCommand(cmd string, ev *github.IssueCommentEvent) {
 					s.removeLabel(pr.RepoOwner, pr.RepoName, pr.Number, label)
 				}
 			}
+		},
+		uploadHandler: func(dnsHostname string) {
+			// Verify this is a plugin repository
+			if !s.isPluginRepository(pr.RepoName) {
+				s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number,
+					"Error: `/spinwick upload` is only available for plugin repositories.")
+				return
+			}
+			go s.handleUploadPluginToExternal(pr, dnsHostname)
 		},
 	}
 
@@ -158,12 +169,38 @@ func (s *Server) parseSpinwickSlashCommandArgs(args []string, isUpdate bool) (sp
 	return parsedArgs, "", nil
 }
 
+func (s *Server) parseSpinwickUploadArgs(args []string) (string, string, error) {
+	var outBuf bytes.Buffer
+	flagset := flag.NewFlagSet("spinwick upload", flag.ContinueOnError)
+	flagset.SetOutput(&outBuf)
+
+	var dns string
+	flagset.StringVar(&dns, "dns", "", "DNS hostname of the target installation (required)")
+
+	err := flagset.Parse(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return "", outBuf.String(), err
+	} else if err != nil {
+		return "", outBuf.String(), fmt.Errorf("failed to parse args: %w", err)
+	}
+
+	if dns == "" {
+		return "", "", fmt.Errorf("--dns flag is required")
+	}
+
+	return dns, "", nil
+}
+
 var spinwickSlashCommandUsageString = `Usage: /spinwick <command> [args]
 
 Available commands:
   create  Create a new Mattermost spinwick installation
   update  Update the existing Mattermost spinwick installation
   delete  Delete the existing Mattermost spinwick installation
+  upload  Upload plugin to an external installation (plugin repos only)
+
+Upload options:
+  --dns <hostname>  DNS hostname of target installation (required)
 `
 
 func (s *Server) handleSpinWickSlashCommand(args []string, handlers spinWickSlashCommandsHandlers) (string, error) {
@@ -218,6 +255,21 @@ func (s *Server) handleSpinWickSlashCommand(args []string, handlers spinWickSlas
 		s.Logger.Info("going to delete spinwick")
 
 		handlers.deleteHandler()
+	case "upload":
+		s.Logger.WithField("args", args).Info("handling spinwick upload command")
+
+		dns, output, err := s.parseSpinwickUploadArgs(args[1:])
+		if err != nil {
+			return output, fmt.Errorf("failed to parse spinwick upload args: %w", err)
+		}
+
+		if handlers.uploadHandler == nil {
+			return "", fmt.Errorf("nil handler")
+		}
+
+		s.Logger.WithField("dns", dns).Info("going to upload plugin to external installation")
+
+		handlers.uploadHandler(dns)
 	default:
 		return spinwickSlashCommandUsageString, fmt.Errorf("invalid command %q", args[0])
 	}

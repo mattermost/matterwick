@@ -5,9 +5,10 @@ package model
 
 // PluginInstallResult contains the result of attempting to install a plugin
 type PluginInstallResult struct {
-	PluginURL       string
-	Success         bool
-	InstallError    error
-	EnableError     error
-	ArtifactFound   bool
+	PluginURL     string
+	Success       bool
+	InstallError  error
+	EnableError   error
+	ConfigError   error // Error from applying plugin configuration
+	ArtifactFound bool
 }

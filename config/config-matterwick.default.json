@@ -70,5 +70,13 @@
   },
   "PluginRepoToIDMapping": {
     "mattermost-plugin-boards": "focalboard"
+  },
+  "PluginRepoConfigs": {
+    "mattermost-plugin-jira": {
+      "pluginID": "jira",
+      "settings": {
+        "EnableJiraUI": true
+      }
+    }
   }
 }

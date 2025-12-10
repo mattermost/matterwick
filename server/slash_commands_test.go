@@ -9,6 +9,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseSpinwickUploadArgs(t *testing.T) {
+	logger := logrus.New()
+	s := &Server{
+		Logger: logger,
+	}
+
+	tests := []struct {
+		name        string
+		args        []string
+		expectedDNS string
+		expectedErr string
+	}{
+		{
+			name:        "valid dns flag",
+			args:        []string{"--dns", "myserver.cloud.mattermost.com"},
+			expectedDNS: "myserver.cloud.mattermost.com",
+		},
+		{
+			name:        "dns flag with equals",
+			args:        []string{"--dns=myserver.cloud.mattermost.com"},
+			expectedDNS: "myserver.cloud.mattermost.com",
+		},
+		{
+			name:        "missing dns flag",
+			args:        []string{},
+			expectedErr: "--dns flag is required",
+		},
+		{
+			name:        "empty dns value",
+			args:        []string{"--dns", ""},
+			expectedErr: "--dns flag is required",
+		},
+		{
+			name:        "invalid flag",
+			args:        []string{"--invalid-flag"},
+			expectedErr: "failed to parse args",
+		},
+		{
+			name:        "help flag",
+			args:        []string{"--help"},
+			expectedErr: "flag: help requested",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dns, _, err := s.parseSpinwickUploadArgs(tt.args)
+			if tt.expectedErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedDNS, dns)
+		})
+	}
+}
+
 func TestHandleSpinWickSlashCommand(t *testing.T) {
 	logger := logrus.New()
 	s := &Server{
@@ -22,7 +80,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 		expectedOut   string
 		validateCalls func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
 			updateCalled bool, updateEnv cloudModel.EnvVarMap,
-			deleteCalled bool)
+			deleteCalled bool, uploadCalled bool, uploadDNS string)
 	}{
 		{
 			name:        "help command",
@@ -34,7 +92,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			args: []string{"create", "--env", "VAR1=val1,VAR2=val2", "--size", "miniSingleton"},
 			validateCalls: func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
 				updateCalled bool, updateEnv cloudModel.EnvVarMap,
-				deleteCalled bool,
+				deleteCalled bool, uploadCalled bool, uploadDNS string,
 			) {
 				assert.True(t, createCalled)
 				assert.Equal(t, "miniSingleton", createSize)
@@ -44,6 +102,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 				}, createEnv)
 				assert.False(t, updateCalled)
 				assert.False(t, deleteCalled)
+				assert.False(t, uploadCalled)
 			},
 		},
 		{
@@ -51,7 +110,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			args: []string{"update", "--env", "VAR3=val3"},
 			validateCalls: func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
 				updateCalled bool, updateEnv cloudModel.EnvVarMap,
-				deleteCalled bool,
+				deleteCalled bool, uploadCalled bool, uploadDNS string,
 			) {
 				assert.False(t, createCalled)
 				assert.True(t, updateCalled)
@@ -59,6 +118,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 					"VAR3": cloudModel.EnvVar{Value: "val3"},
 				}, updateEnv)
 				assert.False(t, deleteCalled)
+				assert.False(t, uploadCalled)
 			},
 		},
 		{
@@ -66,7 +126,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			args: []string{"update", "--clear-env", "VAR3"},
 			validateCalls: func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
 				updateCalled bool, updateEnv cloudModel.EnvVarMap,
-				deleteCalled bool,
+				deleteCalled bool, uploadCalled bool, uploadDNS string,
 			) {
 				assert.False(t, createCalled)
 				assert.True(t, updateCalled)
@@ -74,6 +134,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 					"VAR3": cloudModel.EnvVar{},
 				}, updateEnv)
 				assert.False(t, deleteCalled)
+				assert.False(t, uploadCalled)
 			},
 		},
 		{
@@ -81,12 +142,32 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			args: []string{"delete"},
 			validateCalls: func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
 				updateCalled bool, updateEnv cloudModel.EnvVarMap,
-				deleteCalled bool,
+				deleteCalled bool, uploadCalled bool, uploadDNS string,
 			) {
 				assert.False(t, createCalled)
 				assert.False(t, updateCalled)
 				assert.True(t, deleteCalled)
+				assert.False(t, uploadCalled)
 			},
+		},
+		{
+			name: "upload command with dns",
+			args: []string{"upload", "--dns", "myserver.cloud.mattermost.com"},
+			validateCalls: func(t *testing.T, createCalled bool, createEnv cloudModel.EnvVarMap, createSize string,
+				updateCalled bool, updateEnv cloudModel.EnvVarMap,
+				deleteCalled bool, uploadCalled bool, uploadDNS string,
+			) {
+				assert.False(t, createCalled)
+				assert.False(t, updateCalled)
+				assert.False(t, deleteCalled)
+				assert.True(t, uploadCalled)
+				assert.Equal(t, "myserver.cloud.mattermost.com", uploadDNS)
+			},
+		},
+		{
+			name:        "upload command missing dns",
+			args:        []string{"upload"},
+			expectedErr: "--dns flag is required",
 		},
 		{
 			name:        "invalid command",
@@ -108,6 +189,8 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			var updateCalled bool
 			var updateEnv cloudModel.EnvVarMap
 			var deleteCalled bool
+			var uploadCalled bool
+			var uploadDNS string
 
 			handlers := spinWickSlashCommandsHandlers{
 				createHandler: func(envMap cloudModel.EnvVarMap, size string) {
@@ -122,6 +205,10 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 				deleteHandler: func() {
 					deleteCalled = true
 				},
+				uploadHandler: func(dns string) {
+					uploadCalled = true
+					uploadDNS = dns
+				},
 			}
 
 			output, err := s.handleSpinWickSlashCommand(tt.args, handlers)
@@ -134,7 +221,7 @@ func TestHandleSpinWickSlashCommand(t *testing.T) {
 			assert.Equal(t, tt.expectedOut, output)
 
 			if tt.validateCalls != nil {
-				tt.validateCalls(t, createCalled, createEnv, createSize, updateCalled, updateEnv, deleteCalled)
+				tt.validateCalls(t, createCalled, createEnv, createSize, updateCalled, updateEnv, deleteCalled, uploadCalled, uploadDNS)
 			}
 		})
 	}

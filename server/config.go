@@ -49,6 +49,15 @@ type CloudAuth struct {
 	TokenEndpoint string
 }
 
+// PluginConfig defines per-repository plugin configuration
+type PluginConfig struct {
+	// PluginID is the plugin identifier used in PluginSettings.Plugins.<pluginID>
+	// This may differ from the repo name (e.g., "focalboard" for mattermost-plugin-boards)
+	PluginID string `json:"pluginID"`
+	// Settings contains the plugin-specific settings to apply after plugin installation
+	Settings map[string]interface{} `json:"settings"`
+}
+
 // MatterwickConfig defines all config for to run the server
 type MatterwickConfig struct {
 	ListenAddress       string
@@ -104,6 +113,11 @@ type MatterwickConfig struct {
 	// Key: repository name (e.g., "mattermost-plugin-boards")
 	// Value: plugin ID to use for mmctl enable command
 	PluginRepoToIDMapping map[string]string
+
+	// PluginRepoConfigs maps repository names to plugin configuration
+	// Key: repository name (e.g., "mattermost-plugin-jira")
+	// Value: PluginConfig with pluginID and settings to apply after installation
+	PluginRepoConfigs map[string]PluginConfig
 }
 
 func findConfigFile(fileName string) string {
