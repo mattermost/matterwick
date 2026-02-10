@@ -201,6 +201,21 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			s.Logger.WithField("ref", event.GetRef()).Info("push event")
 			go s.handlePushEvent(event)
 		}
+	case "workflow_run":
+		// For workflow_run, we need to parse both the standard event and extract inputs from raw payload
+		workflowRunPayload, err := ParseWorkflowRunEventWithInputs(io.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse workflow_run event")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if workflowRunPayload != nil {
+			s.Logger.WithFields(logrus.Fields{
+				"workflow": workflowRunPayload.WorkflowRun.Name,
+				"action":   workflowRunPayload.Action,
+			}).Info("workflow_run event")
+			go s.handleWorkflowRunEventWithInputs(workflowRunPayload)
+		}
 	default:
 		s.Logger.Info("Other Events")
 		w.WriteHeader(http.StatusNotImplemented)
