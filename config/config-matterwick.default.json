@@ -79,8 +79,8 @@
   "E2EDesktopUsername": "admin",
   "E2EMobileUsername": "admin",
   "E2EServerVersion": "master",
-  "E2EAutoTriggerOnRelease": false,
-  "E2EAutoTriggerOnMaster": false,
+  "E2EAutoTriggerOnRelease": true,
+  "E2EAutoTriggerOnMaster": true,
   "E2EReleasePatternPrefix": "release-",
   "CMTMatrixLabel": "CMT/Run"
 }
