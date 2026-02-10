@@ -262,8 +262,8 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"site_3_url": instances[2].URL,
 	}).Debug("Triggering mobile E2E workflow")
 
-	return s.dispatchMobileE2EWorkflow(
-		repoOwner, repoName, branch, sha,
-		instances[0].URL, instances[1].URL, instances[2].URL,
+	// Pass full instances with installation IDs for cleanup tracking
+	return s.dispatchMobileE2EWorkflowWithInstances(
+		repoOwner, repoName, branch, sha, instances,
 	)
 }

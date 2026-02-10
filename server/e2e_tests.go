@@ -609,6 +609,70 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 	return nil
 }
 
+// dispatchMobileE2EWorkflowWithInstances triggers the mobile E2E workflow with full instance details
+// This version includes installation IDs for cleanup tracking
+func (s *Server) dispatchMobileE2EWorkflowWithInstances(repoOwner, repoName, ref, sha string, instances []*E2EInstance) error {
+	ctx := context.Background()
+	client := newGithubClient(s.Config.GithubAccessToken)
+
+	logger := s.Logger.WithFields(logrus.Fields{
+		"repo": repoName,
+		"ref":  ref,
+	})
+
+	// Build instance details JSON with URLs and installation IDs for cleanup
+	type instanceDetail struct {
+		URL            string `json:"url"`
+		InstallationID string `json:"installation_id"`
+	}
+	details := make([]instanceDetail, len(instances))
+	for i, inst := range instances {
+		details[i] = instanceDetail{
+			URL:            inst.URL,
+			InstallationID: inst.InstallationID,
+		}
+	}
+
+	instanceDetailsJSON, err := marshalToJSON(details)
+	if err != nil {
+		logger.WithError(err).Error("Failed to marshal instance details")
+		return err
+	}
+
+	// Build the workflow dispatch request with instance details
+	workflowInputs := map[string]interface{}{
+		"instance_details": instanceDetailsJSON,
+		"MOBILE_VERSION":   sha,
+		"PLATFORM":         "both",
+	}
+
+	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
+	req, err := client.NewRequest("POST",
+		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
+		map[string]interface{}{
+			"ref":    ref,
+			"inputs": workflowInputs,
+		})
+	if err != nil {
+		logger.WithError(err).Error("Failed to create workflow dispatch request")
+		return err
+	}
+
+	resp, err := client.Do(ctx, req, nil)
+	if err != nil {
+		logger.WithError(err).Error("Failed to trigger mobile E2E workflow")
+		return err
+	}
+
+	if resp.StatusCode != 204 {
+		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	logger.Info("Mobile E2E workflow dispatched successfully with instance details")
+	return nil
+}
+
 // dispatchDesktopCMTWorkflow triggers the desktop CMT workflow
 func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber int, instanceDetailsJSON string) error {
 	ctx := context.Background()
