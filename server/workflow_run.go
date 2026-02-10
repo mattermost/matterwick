@@ -293,26 +293,30 @@ func (s *Server) triggerCMTMobileWorkflowWithVersions(repoOwner, repoName, branc
 	logger.Info("Triggering mobile CMT workflows for each server version")
 
 	instancesPerVersion := 3
-	for i, version := range serverVersions {
+	createdVersionIdx := 0
+
+	for _, version := range serverVersions {
 		version = strings.TrimSpace(version)
 		if version == "" {
 			continue
 		}
 
 		// Get the 3 instances for this version
-		startIdx := i * instancesPerVersion
+		startIdx := createdVersionIdx * instancesPerVersion
 		endIdx := startIdx + instancesPerVersion
 
 		if endIdx > len(instances) {
 			logger.WithField("version", version).Warn("Not enough instances for this version")
-			continue
+			// No more complete instance sets are available for subsequent versions.
+			break
 		}
 
 		versionInstances := instances[startIdx:endIdx]
+		createdVersionIdx++
 
 		versionLogger := logger.WithFields(logrus.Fields{
-			"version":        version,
-			"instanceCount":  len(versionInstances),
+			"version":       version,
+			"instanceCount": len(versionInstances),
 		})
 
 		versionLogger.Debug("Dispatching mobile CMT workflow for version")
