@@ -247,7 +247,7 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON)
 }
 
-// triggerMobileE2EWorkflowForPushEvent triggers the mobile E2E workflow
+// triggerMobileE2EWorkflowForPushEvent triggers the mobile E2E workflow (e2e-detox-pr.yml)
 func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
@@ -263,10 +263,40 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"site_1_url": instances[0].URL,
 		"site_2_url": instances[1].URL,
 		"site_3_url": instances[2].URL,
-	}).Debug("Triggering mobile E2E workflow")
+	}).Debug("Triggering mobile E2E workflow (e2e-detox-pr.yml) for push event")
 
-	// Pass full instances with installation IDs for cleanup tracking
-	return s.dispatchMobileE2EWorkflowWithInstances(
-		repoOwner, repoName, branch, sha, instances,
+	// Use e2e-detox-pr.yml for ALL scenarios (PR, release, master)
+	// Provide SITE_1/2/3_URL as individual inputs (not instance_details JSON)
+	// For push events, always test both iOS and Android
+	return s.dispatchMobileE2EWorkflow(
+		repoOwner, repoName, branch, sha,
+		instances[0].URL, instances[1].URL, instances[2].URL,
+		"both", // Push events (release/master) test both platforms
 	)
+}
+
+// handlePushEventE2ECleanup destroys E2E instances created for push events
+// This should be called by a scheduled job or webhook when workflow completes
+func (s *Server) handlePushEventE2ECleanup(repoName, branch string) {
+	logger := s.Logger.WithFields(logrus.Fields{
+		"repo":   repoName,
+		"branch": branch,
+		"type":   "e2e_cleanup_push",
+	})
+	logger.Info("Handling push event E2E cleanup")
+
+	// Retrieve and remove instances from tracking
+	key := fmt.Sprintf("%s-push-%s", repoName, branch)
+	s.e2eInstancesLock.Lock()
+	instances := s.e2eInstances[key]
+	delete(s.e2eInstances, key)
+	s.e2eInstancesLock.Unlock()
+
+	if len(instances) == 0 {
+		logger.Warn("No E2E instances found for push event cleanup")
+		return
+	}
+
+	logger.WithField("instances", len(instances)).Info("Destroying push event E2E instances")
+	s.destroyE2EInstances(instances, logger)
 }

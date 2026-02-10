@@ -165,11 +165,25 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 	}
 }
 
-// isE2ELabel checks if a label is an E2E test label (desktop, mobile, or platform-specific)
+// isE2ELabel checks if a label is an E2E test label (desktop or mobile)
 func (s *Server) isE2ELabel(label string) bool {
 	return label == s.Config.SetupE2ETests ||
 		label == s.Config.E2EDesktopLabel ||
 		label == s.Config.E2EMobileLabel ||
 		label == s.Config.E2EMobileIOSLabel ||
 		label == s.Config.E2EMobileAndroidLabel
+}
+
+// extractPlatformFromLabel determines the platform (ios/android/both) from the label
+func (s *Server) extractPlatformFromLabel(label string) string {
+	switch label {
+	case s.Config.E2EMobileIOSLabel:
+		return "ios"
+	case s.Config.E2EMobileAndroidLabel:
+		return "android"
+	case s.Config.E2EMobileLabel, s.Config.SetupE2ETests:
+		return "both"
+	default:
+		return "both"
+	}
 }

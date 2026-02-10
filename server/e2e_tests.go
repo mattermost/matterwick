@@ -43,6 +43,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	// Determine instance type based on repository
 	var instanceType string
 	var platforms []string
+	var platform string // NEW: for mobile platform input
 
 	if strings.Contains(pr.RepoName, "desktop") {
 		instanceType = "desktop"
@@ -52,6 +53,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		// Always create all 3 mobile instances (workflow expects SITE_1/2/3_URL).
 		// The workflow will determine which platform(s) to test based on the label.
 		platforms = []string{"site-1", "site-2", "site-3"}
+		platform = s.extractPlatformFromLabel(label) // NEW
+		logger.WithField("platform", platform).Info("Detected mobile platform from label")
 	} else {
 		logger.Error("Unable to determine E2E instance type from repository name")
 		s.postE2EErrorComment(pr, "Unable to determine E2E instance type. Only desktop and mobile repos are supported.")
@@ -81,7 +84,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
 	// Trigger the appropriate workflow
-	err = s.triggerE2EWorkflow(pr, instances, instanceType)
+	err = s.triggerE2EWorkflow(pr, instances, instanceType, platform) // NEW: pass platform
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -305,14 +308,14 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 }
 
 // triggerE2EWorkflow triggers the appropriate E2E workflow with instance details
-func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string) error {
+func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, platform string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	if instanceType == "desktop" {
 		return s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
 	} else if instanceType == "mobile" {
-		return s.triggerMobileE2EWorkflow(ctx, client, pr, instances)
+		return s.triggerMobileE2EWorkflow(ctx, client, pr, instances, platform) // NEW: pass platform
 	}
 
 	return fmt.Errorf("unknown instance type: %s", instanceType)
@@ -360,11 +363,12 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 }
 
 // triggerMobileE2EWorkflow triggers the mobile E2E workflow
-func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance) error {
+func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance, platform string) error {
 	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
-		"type": "mobile",
+		"repo":     pr.RepoName,
+		"pr":       pr.Number,
+		"type":     "mobile",
+		"platform": platform, // NEW
 	})
 
 	if len(instances) == 0 || len(instances) > 3 {
@@ -374,7 +378,7 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 	// Build workflow inputs dynamically based on the provided instances
 	inputs := map[string]interface{}{
 		"MOBILE_VERSION": pr.Sha,
-		"PLATFORM":       "both",
+		"PLATFORM":       platform, // CHANGED: use extracted platform, not "both"
 	}
 	for i, inst := range instances {
 		// SITE_1_URL, SITE_2_URL, SITE_3_URL
@@ -576,7 +580,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 }
 
 // dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL string) error {
+func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -591,7 +595,7 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 		"SITE_2_URL":     site2URL,
 		"SITE_3_URL":     site3URL,
 		"MOBILE_VERSION": sha,
-		"PLATFORM":       "both",
+		"PLATFORM":       platform, // CHANGED: parameterized
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
