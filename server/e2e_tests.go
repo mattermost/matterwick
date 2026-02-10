@@ -513,12 +513,27 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"ref":  ref,
 	})
 
+	// Determine the server version to use for the workflow.
+	// Default to the configured E2E server version, but prefer the actual
+	// provisioned version from the instance details when available.
+	serverVersion := s.Config.E2EServerVersion
+	if instanceDetailsJSON != "" {
+		var instances []struct {
+			ServerVersion string `json:"server_version"`
+		}
+		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
+			if len(instances) > 0 && instances[0].ServerVersion != "" {
+				serverVersion = instances[0].ServerVersion
+			}
+		}
+	}
+
 	// Build the workflow dispatch request
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
 		"version_name":      ref,
 		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
-		"MM_SERVER_VERSION": s.Config.E2EServerVersion,
+		"MM_SERVER_VERSION": serverVersion,
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
@@ -604,11 +619,26 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 		"pr":   prNumber,
 	})
 
+	// Determine the server version to use for the workflow.
+	// For CMT, instances may have different server versions, so we use the first
+	// instance's version as the base version for the workflow.
+	serverVersion := s.Config.E2EServerVersion
+	if instanceDetailsJSON != "" {
+		var instances []struct {
+			ServerVersion string `json:"server-version"`
+		}
+		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
+			if len(instances) > 0 && instances[0].ServerVersion != "" {
+				serverVersion = instances[0].ServerVersion
+			}
+		}
+	}
+
 	// Build the workflow dispatch request for CMT
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
 		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
-		"MM_SERVER_VERSION": s.Config.E2EServerVersion,
+		"MM_SERVER_VERSION": serverVersion,
 		"cmt_mode":          "true",
 	}
 
