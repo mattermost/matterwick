@@ -309,9 +309,12 @@ func (s *Server) triggerMobileCMTWorkflow(repoOwner, repoName string, prNumber i
 
 	logger.WithField("instanceCount", len(instances)).Debug("Triggering mobile CMT workflow")
 
+	// Convert CMT instances to E2E instances for workflow dispatch
+	e2eInstances := convertCMTToE2EInstances(instances)
+
 	// For mobile CMT, we dispatch the workflow with a reference to all instances
 	// The workflow will iterate through and test each combination
-	return s.dispatchMobileCMTWorkflow(repoOwner, repoName, prNumber)
+	return s.dispatchMobileCMTWorkflow(repoOwner, repoName, prNumber, e2eInstances)
 }
 
 // destroyCMTInstances destroys all CMT instances

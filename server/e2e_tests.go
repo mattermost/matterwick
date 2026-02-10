@@ -144,14 +144,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		instance.Platform = platform
 		if instanceType == "desktop" {
 			// Assign appropriate runner for each platform
-			switch platform {
-			case "linux":
-				instance.Runner = "ubuntu-latest"
-			case "macos":
-				instance.Runner = "macos-latest"
-			case "windows":
-				instance.Runner = "windows-2022"
-			}
+			instance.Runner = getRunnerForPlatform(platform)
 		}
 
 		instances = append(instances, instance)
@@ -371,8 +364,8 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		"platform": platform, // NEW
 	})
 
-	if len(instances) == 0 || len(instances) > 3 {
-		return fmt.Errorf("mobile E2E requires between 1 and 3 instances, got %d", len(instances))
+	if len(instances) != 3 {
+		return fmt.Errorf("mobile E2E requires exactly 3 instances, got %d", len(instances))
 	}
 
 	// Build workflow inputs dynamically based on the provided instances
@@ -499,6 +492,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 		Runner         string `json:"runner"`
 		URL            string `json:"url"`
 		InstallationID string `json:"installation-id"`
+		ServerVersion  string `json:"server_version"`
 	}
 
 	details := make([]instanceDetail, len(instances))
@@ -508,6 +502,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 			Runner:         inst.Runner,
 			URL:            inst.URL,
 			InstallationID: inst.InstallationID,
+			ServerVersion:  inst.ServerVersion,
 		}
 	}
 
@@ -722,9 +717,10 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 		"cmt_mode":          "true",
 	}
 
-	// Use REST API to trigger workflow dispatch on master/main branch
-	// CMT always runs on the default branch where the workflow is defined
-	ref := "master"
+	// Use REST API to trigger workflow dispatch
+	// Try the default branch (main or master) for mattermost repos
+	ref := "main"
+
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
@@ -752,7 +748,7 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 }
 
 // dispatchMobileCMTWorkflow triggers the mobile CMT workflow
-func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber int) error {
+func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber int, instances []*E2EInstance) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -766,9 +762,24 @@ func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber 
 		"cmt_mode": "true",
 	}
 
-	// Use REST API to trigger workflow dispatch on master/main branch
-	// CMT always runs on the default branch where the workflow is defined
-	ref := "master"
+	// Add SITE URLs if instances are provided
+	if len(instances) >= 3 {
+		workflowInputs["SITE_1_URL"] = instances[0].URL
+		workflowInputs["SITE_2_URL"] = instances[1].URL
+		workflowInputs["SITE_3_URL"] = instances[2].URL
+		logger.WithFields(logrus.Fields{
+			"site_1_url": instances[0].URL,
+			"site_2_url": instances[1].URL,
+			"site_3_url": instances[2].URL,
+		}).Debug("Added SITE URLs to mobile CMT workflow")
+	} else {
+		logger.Warn("Mobile CMT: Less than 3 instances provided, workflow may not execute properly")
+	}
+
+	// Use REST API to trigger workflow dispatch
+	// Try the default branch (main or master) for mattermost repos
+	ref := "main"
+
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
