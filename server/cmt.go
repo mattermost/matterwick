@@ -191,13 +191,13 @@ func (s *Server) createCMTInstances(repoName, instanceType string, matrix *CMTMa
 			if instanceType == "desktop" {
 				// Use different platforms across instances for better parallelization
 				platforms := []string{"linux", "macos", "windows"}
-				platform := platforms[instanceIndex%len(platforms)]
+				platform := platforms[(instanceIndex-1)%len(platforms)]
 				cmtInstance.Platform = platform
 				cmtInstance.Runner = getRunnerForPlatform(platform)
 			} else {
 				// For mobile, use site naming
 				siteNames := []string{"site-1", "site-2", "site-3"}
-				cmtInstance.Platform = siteNames[instanceIndex%len(siteNames)]
+				cmtInstance.Platform = siteNames[(instanceIndex-1)%len(siteNames)]
 			}
 
 			instances = append(instances, cmtInstance)

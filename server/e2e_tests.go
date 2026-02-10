@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -48,15 +49,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		platforms = []string{"linux", "macos", "windows"}
 	} else if strings.Contains(pr.RepoName, "mobile") {
 		instanceType = "mobile"
-		// Detect platform(s) from label
-		if label == s.Config.E2EMobileIOSLabel {
-			platforms = []string{"site-1"} // iOS only
-		} else if label == s.Config.E2EMobileAndroidLabel {
-			platforms = []string{"site-2", "site-3"} // Android (needs 2 sites)
-		} else {
-			// E2E/Run or default - create all 3 instances
-			platforms = []string{"site-1", "site-2", "site-3"}
-		}
+		// Always create all 3 mobile instances (workflow expects SITE_1/2/3_URL).
+		// The workflow will determine which platform(s) to test based on the label.
+		platforms = []string{"site-1", "site-2", "site-3"}
 	} else {
 		logger.Error("Unable to determine E2E instance type from repository name")
 		s.postE2EErrorComment(pr, "Unable to determine E2E instance type. Only desktop and mobile repos are supported.")
@@ -229,17 +224,17 @@ func (s *Server) createCloudInstallation(name, version, username, password strin
 	}, nil
 }
 
-// getE2EPassword returns the password for E2E testing from environment or generates one
+// getE2EPassword returns the password for E2E testing from config or environment
 func (s *Server) getE2EPassword(instanceType string) string {
-	// In a production scenario, these would come from org secrets
-	// For now, we'll use a placeholder that can be overridden
-	// The actual secrets are referenced in workflow inputs
-	if instanceType == "desktop" {
-		return "TestPassword@1"
-	} else if instanceType == "mobile" {
-		return "TestPassword@1"
+	// Check environment variable first (for secrets management)
+	if password := os.Getenv("E2E_TEST_PASSWORD"); password != "" {
+		return password
 	}
-	return "TestPassword@1"
+	// Fallback to a config-based approach (could be injected at startup)
+	// In production, this should come from AWS Secrets Manager or similar
+	// For now, return empty to force explicit configuration
+	s.Logger.Warn("E2E_TEST_PASSWORD not set; using generated temporary password will be needed")
+	return ""
 }
 
 // initializeMattermostE2EServer initializes a Mattermost server with E2E credentials
@@ -360,20 +355,25 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		"type": "mobile",
 	})
 
-	if len(instances) != 3 {
-		return fmt.Errorf("mobile E2E requires exactly 3 instances, got %d", len(instances))
+	if len(instances) == 0 || len(instances) > 3 {
+		return fmt.Errorf("mobile E2E requires between 1 and 3 instances, got %d", len(instances))
+	}
+
+	// Build workflow inputs dynamically based on the provided instances
+	inputs := map[string]interface{}{
+		"MOBILE_VERSION": pr.Sha,
+		"PLATFORM":       "both",
+	}
+	for i, inst := range instances {
+		// SITE_1_URL, SITE_2_URL, SITE_3_URL
+		siteKey := fmt.Sprintf("SITE_%d_URL", i+1)
+		inputs[siteKey] = inst.URL
 	}
 
 	// Use the github REST API to trigger the workflow_dispatch event
 	body := map[string]interface{}{
-		"ref": pr.Ref,
-		"inputs": map[string]interface{}{
-			"SITE_1_URL":     instances[0].URL,
-			"SITE_2_URL":     instances[1].URL,
-			"SITE_3_URL":     instances[2].URL,
-			"MOBILE_VERSION": pr.Sha,
-			"PLATFORM":       "both",
-		},
+		"ref":    pr.Ref,
+		"inputs": inputs,
 	}
 
 	logger.WithField("workflow", "e2e-detox-pr.yml").Debug("Triggering mobile E2E workflow")
@@ -642,11 +642,13 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 		"cmt_mode":          "true",
 	}
 
-	// Use REST API to trigger workflow dispatch
+	// Use REST API to trigger workflow dispatch on master/main branch
+	// CMT always runs on the default branch where the workflow is defined
+	ref := "master"
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
-			"ref":    "HEAD",
+			"ref":    ref,
 			"inputs": workflowInputs,
 		})
 	if err != nil {
@@ -684,11 +686,13 @@ func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber 
 		"cmt_mode": "true",
 	}
 
-	// Use REST API to trigger workflow dispatch
+	// Use REST API to trigger workflow dispatch on master/main branch
+	// CMT always runs on the default branch where the workflow is defined
+	ref := "master"
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
-			"ref":    "HEAD",
+			"ref":    ref,
 			"inputs": workflowInputs,
 		})
 	if err != nil {

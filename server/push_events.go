@@ -122,7 +122,13 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 		return
 	}
 
-	logger.Info("E2E workflow triggered successfully")
+	// Track instances for cleanup (keyed by repo-branch to enable deterministic cleanup)
+	key := fmt.Sprintf("%s-push-%s", repoName, branch)
+	s.e2eInstancesLock.Lock()
+	s.e2eInstances[key] = instances
+	s.e2eInstancesLock.Unlock()
+
+	logger.Info("E2E workflow triggered successfully and instances tracked for cleanup")
 }
 
 // createMultipleE2EInstancesForPushEvent creates instances for push event E2E testing
@@ -143,8 +149,13 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
+	// Normalize repo name to ensure it is safe for DNS/installation naming.
+	sanitizedRepoName := strings.ToLower(repoName)
+	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
+	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
+
 	for i, platform := range platforms {
-		name := fmt.Sprintf("%s-e2e-%s-%d", repoName, platform, i+1)
+		name := fmt.Sprintf("%s-e2e-%s-%d", sanitizedRepoName, platform, i+1)
 
 		// Use version if provided, otherwise use server version from config
 		serverVersion := s.Config.E2EServerVersion
@@ -152,7 +163,13 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 			serverVersion = version
 		}
 
-		instance, err := s.createCloudInstallation(name, serverVersion, s.Config.E2EDesktopUsername, "tempPassword", logger)
+		// Use appropriate username based on instance type
+		username := s.Config.E2EDesktopUsername
+		if instanceType == "mobile" {
+			username = s.Config.E2EMobileUsername
+		}
+
+		instance, err := s.createCloudInstallation(name, serverVersion, username, "tempPassword", logger)
 		if err != nil {
 			logger.WithError(err).Errorf("Failed to create instance for platform %s", platform)
 			// Cleanup already created instances on failure
