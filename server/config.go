@@ -117,6 +117,8 @@ type MatterwickConfig struct {
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string
 	CMTMatrixLabel          string
+	E2EDesktopPassword      string
+	E2EMobilePassword       string
 }
 
 func findConfigFile(fileName string) string {

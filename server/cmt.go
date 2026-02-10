@@ -97,7 +97,10 @@ func (s *Server) handleCMTTestRequest(pr *model.PullRequest) {
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger CMT workflows")
 		s.postCMTErrorComment(pr, fmt.Sprintf("Failed to trigger CMT workflows: %v", err))
-		// Attempt cleanup on failure
+		// Clean up map entry and destroy instances on failure
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
 		s.destroyE2EInstances(convertCMTToE2EInstances(instances), logger)
 		return
 	}
@@ -148,10 +151,15 @@ func (s *Server) getDefaultCMTMatrix() *CMTMatrix {
 	}
 }
 
-// createCMTInstances creates all instances for the CMT matrix
+// createCMTInstances creates all instances for the CMT matrix with DNS-safe names
 func (s *Server) createCMTInstances(repoName, instanceType string, matrix *CMTMatrix) ([]*CMTInstance, error) {
 	var instances []*CMTInstance
 	instanceIndex := 0
+
+	// Sanitize repo name for DNS compatibility
+	sanitizedRepoName := strings.ToLower(repoName)
+	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
+	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
 
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":         repoName,
@@ -162,7 +170,10 @@ func (s *Server) createCMTInstances(repoName, instanceType string, matrix *CMTMa
 	for sIdx, serverVersion := range matrix.ServerVersions {
 		for cIdx, clientVersion := range matrix.ClientVersions {
 			instanceIndex++
-			name := fmt.Sprintf("%s-cmt-%s-%s-%d", repoName, serverVersion, clientVersion, instanceIndex)
+			// Sanitize version strings for DNS-safe naming
+			sanitizedServerVer := strings.ReplaceAll(serverVersion, ".", "-")
+			sanitizedClientVer := strings.ReplaceAll(clientVersion, ".", "-")
+			name := fmt.Sprintf("%s-cmt-%s-%s-%d", sanitizedRepoName, sanitizedServerVer, sanitizedClientVer, instanceIndex)
 
 			logger.WithFields(logrus.Fields{
 				"serverVersion": serverVersion,
@@ -170,8 +181,15 @@ func (s *Server) createCMTInstances(repoName, instanceType string, matrix *CMTMa
 				"index":         instanceIndex,
 			}).Debug("Creating CMT instance")
 
+			// Use appropriate username and password based on instance type
+			username := s.Config.E2EDesktopUsername
+			if instanceType == "mobile" {
+				username = s.Config.E2EMobileUsername
+			}
+			password := s.getE2EPassword(instanceType)
+
 			// Create the base E2E instance
-			e2eInstance, err := s.createCloudInstallation(name, serverVersion, s.Config.E2EDesktopUsername, "tempPassword", logger)
+			e2eInstance, err := s.createCloudInstallation(name, serverVersion, username, password, logger)
 			if err != nil {
 				logger.WithError(err).Errorf("Failed to create CMT instance at position (%d,%d)", sIdx, cIdx)
 				// Cleanup already created instances on failure
@@ -293,7 +311,7 @@ func (s *Server) triggerMobileCMTWorkflow(repoOwner, repoName string, prNumber i
 
 	// For mobile CMT, we dispatch the workflow with a reference to all instances
 	// The workflow will iterate through and test each combination
-	return s.dispatchMobileCMTWorkflow(repoOwner, repoName, prNumber, instances)
+	return s.dispatchMobileCMTWorkflow(repoOwner, repoName, prNumber)
 }
 
 // destroyCMTInstances destroys all CMT instances
@@ -304,9 +322,13 @@ func (s *Server) destroyCMTInstances(instances []*CMTInstance, logger logrus.Fie
 
 // convertCMTToE2EInstances converts CMT instances to E2E instances for cleanup
 func convertCMTToE2EInstances(cmtInstances []*CMTInstance) []*E2EInstance {
-	instances := make([]*E2EInstance, len(cmtInstances))
-	for i, cmt := range cmtInstances {
-		instances[i] = cmt.E2EInstance
+	// Use slice append with nil checks to avoid dereference panics
+	var instances []*E2EInstance
+	for _, cmt := range cmtInstances {
+		// Skip nil CMTInstance entries and entries with nil E2EInstance
+		if cmt != nil && cmt.E2EInstance != nil {
+			instances = append(instances, cmt.E2EInstance)
+		}
 	}
 	return instances
 }

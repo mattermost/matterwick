@@ -224,17 +224,29 @@ func (s *Server) createCloudInstallation(name, version, username, password strin
 	}, nil
 }
 
-// getE2EPassword returns the password for E2E testing from config or environment
+// getE2EPassword returns the password for E2E testing from config or org-level secrets
 func (s *Server) getE2EPassword(instanceType string) string {
-	// Check environment variable first (for secrets management)
-	if password := os.Getenv("E2E_TEST_PASSWORD"); password != "" {
-		return password
+	// Determine which password to use based on instance type
+	var password string
+
+	if instanceType == "mobile" {
+		// Try config first, then environment variable mapped from org secret MM_MOBILE_E2E_ADMIN_PASSWORD
+		password = s.Config.E2EMobilePassword
+		if password == "" {
+			password = os.Getenv("MM_MOBILE_E2E_ADMIN_PASSWORD")
+		}
+	} else {
+		// Desktop or default - try config first, then environment variable mapped from org secret MM_DESKTOP_E2E_USER_CREDENTIALS
+		password = s.Config.E2EDesktopPassword
+		if password == "" {
+			password = os.Getenv("MM_DESKTOP_E2E_USER_CREDENTIALS")
+		}
 	}
-	// Fallback to a config-based approach (could be injected at startup)
-	// In production, this should come from AWS Secrets Manager or similar
-	// For now, return empty to force explicit configuration
-	s.Logger.Warn("E2E_TEST_PASSWORD not set; using generated temporary password will be needed")
-	return ""
+
+	if password == "" {
+		s.Logger.Warnf("E2E password not configured for %s; instance creation may fail", instanceType)
+	}
+	return password
 }
 
 // initializeMattermostE2EServer initializes a Mattermost server with E2E credentials
@@ -736,7 +748,7 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 }
 
 // dispatchMobileCMTWorkflow triggers the mobile CMT workflow
-func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber int, instances interface{}) error {
+func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber int) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
