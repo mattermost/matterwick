@@ -100,7 +100,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	logger.WithField("instanceType", instanceType).Info("Creating E2E instances for push event")
 
 	// Create instances based on repo type
-	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, version, sha)
+	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, sha)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		return
@@ -122,8 +122,8 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 		return
 	}
 
-	// Track instances for cleanup (keyed by repo-branch to enable deterministic cleanup)
-	key := fmt.Sprintf("%s-push-%s", repoName, branch)
+	// Track instances for cleanup (keyed by repo-branch-sha to ensure uniqueness across multiple pushes)
+	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, sha)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
@@ -132,7 +132,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 }
 
 // createMultipleE2EInstancesForPushEvent creates instances for push event E2E testing
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, version, sha string) ([]*E2EInstance, error) {
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, sha string) ([]*E2EInstance, error) {
 	var instances []*E2EInstance
 	var platforms []string
 
@@ -154,8 +154,20 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
 	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
 
+	// Sanitize branch name for DNS-safe naming
+	sanitizedBranch := strings.ToLower(branch)
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "/", "-")
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "_", "-")
+	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, ".", "-")
+
+	// Use short SHA (first 8 chars) for uniqueness
+	shortSHA := sha
+	if len(sha) > 8 {
+		shortSHA = sha[:8]
+	}
+
 	for i, platform := range platforms {
-		name := fmt.Sprintf("%s-e2e-%s-%d", sanitizedRepoName, platform, i+1)
+		name := fmt.Sprintf("%s-e2e-%s-%s-%s-%d", sanitizedRepoName, sanitizedBranch, shortSHA, platform, i+1)
 
 		// Use version if provided, otherwise use server version from config
 		serverVersion := s.Config.E2EServerVersion
@@ -193,7 +205,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 
 // getRunnerForPlatform returns the GitHub Actions runner for a given platform
 func getRunnerForPlatform(platform string) string {
-	switch platform {
+	switch strings.ToLower(platform) {
 	case "linux":
 		return "ubuntu-latest"
 	case "macos":

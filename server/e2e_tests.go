@@ -322,8 +322,8 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 		"type": "desktop",
 	})
 
-	// Convert instances to JSON for workflow input
-	instanceDetailsJSON, err := json.Marshal(instances)
+	// Convert instances to JSON for workflow input using consistent schema
+	instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
 	if err != nil {
 		return fmt.Errorf("failed to marshal instance details: %w", err)
 	}
@@ -332,7 +332,7 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 	body := map[string]interface{}{
 		"ref": pr.Ref,
 		"inputs": map[string]interface{}{
-			"instance_details":  string(instanceDetailsJSON),
+			"instance_details":  instanceDetailsJSON,
 			"version_name":      pr.Ref,
 			"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
 			"MM_SERVER_VERSION": s.Config.E2EServerVersion,
