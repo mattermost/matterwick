@@ -40,6 +40,18 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 
+		if label == s.Config.CMTMatrixLabel {
+			logger.WithField("label", label).Info("PR received CMT matrix label")
+			go s.handleCMTTestRequest(pr)
+			return
+		}
+
+		if s.isE2ELabel(label) {
+			logger.WithField("label", label).Info("PR received E2E test label")
+			go s.handleE2ETestRequest(pr, label)
+			return
+		}
+
 		if s.isSpinWickLabel(label) {
 			logger.WithField("label", label).Info("PR received SpinWick label")
 			switch *event.Label.Name {
@@ -56,6 +68,16 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	case "unlabeled":
 		if event.Label == nil {
 			logger.Error("Unlabel event received, but label object was empty")
+			return
+		}
+		if label == s.Config.CMTMatrixLabel {
+			logger.WithField("label", label).Info("PR CMT matrix label was removed")
+			go s.handleCMTCleanup(pr)
+			return
+		}
+		if s.isE2ELabel(label) {
+			logger.WithField("label", label).Info("PR E2E test label was removed")
+			go s.handleE2ECleanup(pr)
 			return
 		}
 		if s.isSpinWickLabel(label) {
@@ -141,4 +163,13 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 			}
 		}
 	}
+}
+
+// isE2ELabel checks if a label is an E2E test label (desktop, mobile, or platform-specific)
+func (s *Server) isE2ELabel(label string) bool {
+	return label == s.Config.SetupE2ETests ||
+		label == s.Config.E2EDesktopLabel ||
+		label == s.Config.E2EMobileLabel ||
+		label == s.Config.E2EMobileIOSLabel ||
+		label == s.Config.E2EMobileAndroidLabel
 }

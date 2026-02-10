@@ -70,5 +70,17 @@
   },
   "PluginRepoToIDMapping": {
     "mattermost-plugin-boards": "focalboard"
-  }
+  },
+  "SetupE2ETests": "E2E/Run",
+  "E2EDesktopLabel": "E2E/Run",
+  "E2EMobileLabel": "E2E/Run",
+  "E2EMobileIOSLabel": "E2E/Run-iOS",
+  "E2EMobileAndroidLabel": "E2E/Run-Android",
+  "E2EDesktopUsername": "admin",
+  "E2EMobileUsername": "admin",
+  "E2EServerVersion": "master",
+  "E2EAutoTriggerOnRelease": false,
+  "E2EAutoTriggerOnMaster": false,
+  "E2EReleasePatternPrefix": "release-",
+  "CMTMatrixLabel": "CMT/Run"
 }

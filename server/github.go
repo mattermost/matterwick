@@ -50,6 +50,17 @@ func PingEventFromJSON(data io.Reader) (*github.PingEvent, error) {
 	return &event, nil
 }
 
+// PushEventFromJSON parses json to a github.PushEvent
+func PushEventFromJSON(data io.Reader) (*github.PushEvent, error) {
+	decoder := json.NewDecoder(data)
+	var event github.PushEvent
+	if err := decoder.Decode(&event); err != nil {
+		return nil, errors.Wrap(err, "failed to parse push event from JSON")
+	}
+
+	return &event, nil
+}
+
 func newGithubClient(token string) *github.Client {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(context.Background(), ts)

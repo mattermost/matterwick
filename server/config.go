@@ -104,6 +104,19 @@ type MatterwickConfig struct {
 	// Key: repository name (e.g., "mattermost-plugin-boards")
 	// Value: plugin ID to use for mmctl enable command
 	PluginRepoToIDMapping map[string]string
+
+	SetupE2ETests           string
+	E2EDesktopLabel         string
+	E2EMobileLabel          string
+	E2EMobileIOSLabel       string
+	E2EMobileAndroidLabel   string
+	E2EDesktopUsername      string
+	E2EMobileUsername       string
+	E2EServerVersion        string
+	E2EAutoTriggerOnRelease bool
+	E2EAutoTriggerOnMaster  bool
+	E2EReleasePatternPrefix string
+	CMTMatrixLabel          string
 }
 
 func findConfigFile(fileName string) string {

@@ -41,6 +41,10 @@ type Server struct {
 	// envMaps is a map of environment variables for each active installation.
 	envMaps     map[string]cloudModel.EnvVarMap
 	envMapsLock sync.Mutex
+
+	// e2eInstances tracks E2E test instances for cleanup. Key is "repo-pr-number"
+	e2eInstances     map[string][]*E2EInstance
+	e2eInstancesLock sync.Mutex
 }
 
 const (
@@ -68,6 +72,7 @@ func New(config *MatterwickConfig) *Server {
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
 		envMaps:         make(map[string]cloudModel.EnvVarMap),
+		e2eInstances:    make(map[string][]*E2EInstance),
 	}
 
 	if !isAwsConfigDefined() {
@@ -184,6 +189,17 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(msg, "/") {
 				go s.handleSlashCommand(msg, eventIssueEventComment)
 			}
+		}
+	case "push":
+		event, err := PushEventFromJSON(io.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse push event")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if event != nil {
+			s.Logger.WithField("ref", event.GetRef()).Info("push event")
+			go s.handlePushEvent(event)
 		}
 	default:
 		s.Logger.Info("Other Events")
