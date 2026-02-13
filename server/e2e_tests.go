@@ -88,6 +88,10 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+		// Remove instances from tracking map before cleanup to avoid double-destroy on later cleanup.
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
 		// Attempt cleanup on workflow trigger failure
 		s.destroyE2EInstances(instances, logger)
 		return
