@@ -264,8 +264,8 @@ func (s *Server) triggerDesktopCMTWorkflow(repoOwner, repoName string, prNumber 
 		Runner         string `json:"runner"`
 		URL            string `json:"url"`
 		InstallationID string `json:"installation-id"`
-		ServerVersion  string `json:"server-version"`
-		ClientVersion  string `json:"client-version"`
+		ServerVersion  string `json:"server_version"`
+		ClientVersion  string `json:"client_version"`
 		MatrixIndex    int    `json:"matrix-index"`
 	}
 
