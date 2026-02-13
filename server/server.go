@@ -42,7 +42,9 @@ type Server struct {
 	envMaps     map[string]cloudModel.EnvVarMap
 	envMapsLock sync.Mutex
 
-	// e2eInstances tracks E2E test instances for cleanup. Key is "repo-pr-number"
+	// e2eInstances tracks E2E test instances for cleanup.
+	// Keys are instance identifiers, currently including formats such as
+	// "%s-pr-%d", "%s-cmt-pr-%d", and "%s-push-%s-%s".
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
 }
