@@ -266,7 +266,7 @@ func (s *Server) triggerCMTDesktopWorkflowWithInstances(repoOwner, repoName, bra
 		Runner         string `json:"runner"`
 		URL            string `json:"url"`
 		InstallationID string `json:"installation-id"`
-		ServerVersion  string `json:"server-version"`
+		ServerVersion  string `json:"server_version"`
 	}
 
 	details := make([]instanceDetail, len(instances))
