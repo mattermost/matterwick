@@ -337,15 +337,54 @@ func (s *Server) triggerCMTMobileWorkflowWithVersions(repoOwner, repoName, branc
 	return nil
 }
 
+// extractServerVersionFromInstanceDetails attempts to derive a server version from the instance details JSON.
+// It returns an empty string if no version can be determined.
+func extractServerVersionFromInstanceDetails(instanceDetailsJSON string, logger logrus.FieldLogger) string {
+	if strings.TrimSpace(instanceDetailsJSON) == "" {
+		return ""
+	}
+
+	type instance struct {
+		MMServerVersion string `json:"MM_SERVER_VERSION"`
+		ServerVersion   string `json:"server_version"`
+		Version         string `json:"version"`
+	}
+
+	var instances []instance
+	if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err != nil {
+		logger.WithError(err).Debug("Failed to parse instance details JSON for server version")
+		return ""
+	}
+
+	if len(instances) == 0 {
+		return ""
+	}
+
+	inst := instances[0]
+	switch {
+	case strings.TrimSpace(inst.MMServerVersion) != "":
+		return strings.TrimSpace(inst.MMServerVersion)
+	case strings.TrimSpace(inst.ServerVersion) != "":
+		return strings.TrimSpace(inst.ServerVersion)
+	case strings.TrimSpace(inst.Version) != "":
+		return strings.TrimSpace(inst.Version)
+	default:
+		return ""
+	}
+}
+
 // dispatchDesktopCMTWorkflowForServerVersions dispatches desktop CMT workflow via workflow_dispatch
 func (s *Server) dispatchDesktopCMTWorkflowForServerVersions(repoOwner, repoName, branch, instanceDetailsJSON string, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
+	serverVersion := extractServerVersionFromInstanceDetails(instanceDetailsJSON, logger)
+
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
 		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
 		"cmt_mode":          "true",
+		"MM_SERVER_VERSION": serverVersion,
 	}
 
 	logger.WithField("branch", branch).Debug("Dispatching desktop CMT workflow")
