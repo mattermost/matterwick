@@ -700,7 +700,7 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 	serverVersion := s.Config.E2EServerVersion
 	if instanceDetailsJSON != "" {
 		var instances []struct {
-			ServerVersion string `json:"server-version"`
+			ServerVersion string `json:"server_version"`
 		}
 		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
 			if len(instances) > 0 && instances[0].ServerVersion != "" {
