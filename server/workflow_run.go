@@ -121,20 +121,10 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 // Example input: "v11.1.0, v11.2.0, v12.0.0"
 // Returns: ["v11.1.0", "v11.2.0", "v12.0.0"]
 func parseServerVersionsFromString(input string) []string {
-	if input == "" {
+	versions := splitCommaSeparated(input)
+	if versions == nil {
 		return []string{}
 	}
-
-	parts := strings.Split(input, ",")
-	var versions []string
-
-	for _, part := range parts {
-		version := strings.TrimSpace(part)
-		if version != "" {
-			versions = append(versions, version)
-		}
-	}
-
 	return versions
 }
 
