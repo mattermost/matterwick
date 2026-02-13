@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -227,8 +228,11 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version st
 	}
 	password := s.getE2EPassword(instanceType)
 
+	// Add timestamp to ensure unique instance names across multiple CMT runs
+	timestamp := time.Now().Unix()
+
 	for i, platform := range platforms {
-		name := fmt.Sprintf("%s-cmt-%s-%s-%d", sanitizedRepoName, sanitizedVersion, platform, i+1)
+		name := fmt.Sprintf("%s-cmt-%s-%s-%d-%d", sanitizedRepoName, sanitizedVersion, platform, i+1, timestamp)
 
 		instance, err := s.createCloudInstallation(name, version, username, password, logger)
 		if err != nil {
