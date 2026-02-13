@@ -35,7 +35,7 @@ func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload
 	decoder := json.NewDecoder(data)
 	var payload WorkflowRunWebhookPayload
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode workflow_run webhook payload: %w", err)
 	}
 
 	return &payload, nil
