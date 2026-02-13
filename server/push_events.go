@@ -297,11 +297,27 @@ func (s *Server) handlePushEventE2ECleanup(repoName, branch string) {
 	})
 	logger.Info("Handling push event E2E cleanup")
 
-	// Retrieve and remove instances from tracking
-	key := fmt.Sprintf("%s-push-%s", repoName, branch)
+	// Retrieve and remove instances from tracking.
+	// Instances may be stored under a key including the SHA (e.g. "%s-push-%s-%s"),
+	// so we collect and delete all matching keys for this repo/branch.
 	s.e2eInstancesLock.Lock()
-	instances := s.e2eInstances[key]
-	delete(s.e2eInstances, key)
+	var instances []*E2EInstance
+
+	// Backwards-compatible: check the simple key without SHA.
+	baseKey := fmt.Sprintf("%s-push-%s", repoName, branch)
+	if v, ok := s.e2eInstances[baseKey]; ok {
+		instances = append(instances, v...)
+		delete(s.e2eInstances, baseKey)
+	}
+
+	// Also remove any SHA-suffixed keys for this repo/branch.
+	prefixWithSHA := baseKey + "-"
+	for k, v := range s.e2eInstances {
+		if strings.HasPrefix(k, prefixWithSHA) {
+			instances = append(instances, v...)
+			delete(s.e2eInstances, k)
+		}
+	}
 	s.e2eInstancesLock.Unlock()
 
 	if len(instances) == 0 {
