@@ -43,11 +43,8 @@ func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload
 }
 
 // handleWorkflowRunEventWithInputs handles GitHub workflow_run events for CMT
+// Handles both "requested" (create instances) and "completed" (cleanup instances)
 func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPayload) {
-	if payload.Action != "requested" {
-		return
-	}
-
 	// Extract repository info
 	repoData := payload.Repository
 	repoName, ok := repoData["name"].(string)
@@ -69,17 +66,33 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	workflowName := payload.WorkflowRun.Name
 	headBranch := payload.WorkflowRun.HeadBranch
+	runID := payload.WorkflowRun.ID
 
 	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":     repoName,
-		"owner":    owner,
-		"workflow": workflowName,
-		"action":   payload.Action,
+		"repo":       repoName,
+		"owner":      owner,
+		"workflow":   workflowName,
+		"action":     payload.Action,
+		"run_id":     runID,
+		"head_sha":   payload.WorkflowRun.HeadSHA,
 	})
 
 	// Check if this is a CMT-enabled workflow
 	if !strings.Contains(workflowName, "cmt") && !strings.Contains(workflowName, "CMT") {
 		logger.Debug("Workflow is not CMT-related, skipping")
+		return
+	}
+
+	// Handle cleanup on workflow completion
+	if payload.Action == "completed" {
+		logger.Info("Workflow completed, cleaning up CMT instances")
+		s.handleCMTCleanup(repoName, runID, logger)
+		return
+	}
+
+	// Handle instance creation on workflow request
+	if payload.Action != "requested" {
+		logger.Debug("Ignoring workflow action (not requested or completed)")
 		return
 	}
 
@@ -113,8 +126,8 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	logger.WithField("instanceType", instanceType).Info("Triggering CMT with server versions")
 
-	// Handle CMT with server versions
-	go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, serverVersions, logger)
+	// Handle CMT with server versions (now with tracking)
+	go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, serverVersions, runID, logger)
 }
 
 // parseServerVersionsFromString parses comma-separated server versions string
@@ -129,10 +142,12 @@ func parseServerVersionsFromString(input string) []string {
 }
 
 // handleCMTWithServerVersions orchestrates CMT testing for multiple server versions
-func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch string, serverVersions []string, logger logrus.FieldLogger) {
+// Now tracks instances by workflow run ID for later cleanup
+func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"serverVersionCount": len(serverVersions),
 		"branch":             branch,
+		"run_id":             runID,
 	})
 
 	logger.Info("Starting CMT with server versions")
@@ -172,17 +187,33 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	logger.WithField("totalInstances", len(allInstances)).Info("All instances created")
 
+	// Store instances for cleanup when workflow completes
+	key := fmt.Sprintf("%s-cmt-run-%d", repoName, runID)
+	s.e2eInstancesLock.Lock()
+	s.e2eInstances[key] = allInstances
+	s.e2eInstancesLock.Unlock()
+
+	logger.WithField("tracking_key", key).Info("Stored CMT instances for cleanup tracking")
+
 	// Trigger appropriate workflow based on instance type
 	if instanceType == "desktop" {
 		err := s.triggerCMTDesktopWorkflowWithInstances(repoOwner, repoName, branch, allInstances, logger)
 		if err != nil {
 			logger.WithError(err).Error("Failed to trigger desktop CMT workflow")
+			// Remove from tracking and cleanup immediately on failure
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
 			s.destroyE2EInstances(allInstances, logger)
 		}
 	} else if instanceType == "mobile" {
 		err := s.triggerCMTMobileWorkflowWithVersions(repoOwner, repoName, branch, serverVersions, allInstances, logger)
 		if err != nil {
 			logger.WithError(err).Error("Failed to trigger mobile CMT workflows")
+			// Remove from tracking and cleanup immediately on failure
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
 			s.destroyE2EInstances(allInstances, logger)
 		}
 	}
@@ -453,4 +484,30 @@ func (s *Server) dispatchMobileCMTWorkflowForVersion(repoOwner, repoName, branch
 
 	logger.Info("Mobile CMT workflow dispatched successfully for version")
 	return nil
+}
+
+// handleCMTCleanup destroys all CMT instances for a completed workflow run
+// This is called when a workflow_run webhook arrives with action="completed"
+func (s *Server) handleCMTCleanup(repoName string, runID int64, logger logrus.FieldLogger) {
+	logger = logger.WithFields(logrus.Fields{
+		"repo":   repoName,
+		"run_id": runID,
+		"type":   "cmt_cleanup",
+	})
+	logger.Info("Handling CMT cleanup for completed workflow run")
+
+	// Retrieve and remove instances from tracking
+	key := fmt.Sprintf("%s-cmt-run-%d", repoName, runID)
+	s.e2eInstancesLock.Lock()
+	instances := s.e2eInstances[key]
+	delete(s.e2eInstances, key)
+	s.e2eInstancesLock.Unlock()
+
+	if len(instances) == 0 {
+		logger.Warn("No CMT instances found for cleanup (may have been cleaned up already)")
+		return
+	}
+
+	logger.WithField("instances", len(instances)).Info("Destroying CMT instances")
+	s.destroyE2EInstances(instances, logger)
 }
