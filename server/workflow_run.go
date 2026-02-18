@@ -86,7 +86,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	// Handle cleanup on workflow completion
 	if payload.Action == "completed" {
 		logger.Info("Workflow completed, cleaning up CMT instances")
-		s.handleCMTCleanup(repoName, runID, logger)
+		s.handleCMTRunCleanup(repoName, runID, logger)
 		return
 	}
 
@@ -486,9 +486,9 @@ func (s *Server) dispatchMobileCMTWorkflowForVersion(repoOwner, repoName, branch
 	return nil
 }
 
-// handleCMTCleanup destroys all CMT instances for a completed workflow run
+// handleCMTRunCleanup destroys all CMT instances for a completed workflow run
 // This is called when a workflow_run webhook arrives with action="completed"
-func (s *Server) handleCMTCleanup(repoName string, runID int64, logger logrus.FieldLogger) {
+func (s *Server) handleCMTRunCleanup(repoName string, runID int64, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"run_id": runID,
