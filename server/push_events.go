@@ -132,7 +132,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 }
 
 // createMultipleE2EInstancesForPushEvent creates instances for push event E2E testing
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, sha string) ([]*E2EInstance, error) {
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, _ string) ([]*E2EInstance, error) {
 	var instances []*E2EInstance
 	var platforms []string
 
@@ -149,25 +149,25 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
-	// Normalize repo name to ensure it is safe for DNS/installation naming.
 	sanitizedRepoName := strings.ToLower(repoName)
 	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
 	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
 
-	// Sanitize branch name for DNS-safe naming
 	sanitizedBranch := strings.ToLower(branch)
 	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "/", "-")
 	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "_", "-")
 	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, ".", "-")
 
-	// Use short SHA (first 8 chars) for uniqueness
-	shortSHA := sha
-	if len(sha) > 8 {
-		shortSHA = sha[:8]
-	}
-
-	for i, platform := range platforms {
-		name := fmt.Sprintf("%s-e2e-%s-%s-%s-%d", sanitizedRepoName, sanitizedBranch, shortSHA, platform, i+1)
+	for _, platform := range platforms {
+		suffix := fmt.Sprintf("-e2e-%s-%s", sanitizedBranch, platform)
+		repoPrefix := sanitizedRepoName
+		if maxLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix); len(repoPrefix) > maxLen {
+			if maxLen < 1 {
+				maxLen = 1
+			}
+			repoPrefix = strings.TrimRight(repoPrefix[:maxLen], "-")
+		}
+		name := repoPrefix + suffix
 
 		// Use version if provided, otherwise use server version from config
 		serverVersion := s.Config.E2EServerVersion
@@ -175,11 +175,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 			serverVersion = version
 		}
 
-		// Use appropriate username based on instance type
-		username := s.Config.E2EDesktopUsername
-		if instanceType == "mobile" {
-			username = s.Config.E2EMobileUsername
-		}
+		username := s.Config.E2EUsername
 
 		// Get password from config or org-level secrets
 		password := s.getE2EPassword(instanceType)

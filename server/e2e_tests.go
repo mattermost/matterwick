@@ -144,24 +144,26 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 
 	// Create username and password for this E2E test set
 	var username, password string
-	if instanceType == "desktop" {
-		username = s.Config.E2EDesktopUsername
-	} else {
-		username = s.Config.E2EMobileUsername
-	}
+	username = s.Config.E2EUsername
 
 	// Get password from environment or generate one
 	password = s.getE2EPassword(instanceType)
 
-	// Add timestamp to ensure unique instance names across multiple runs
-	timestamp := time.Now().Unix()
+	sanitizedRepo := strings.ToLower(pr.RepoName)
+	sanitizedRepo = strings.ReplaceAll(sanitizedRepo, "_", "-")
+	sanitizedRepo = strings.ReplaceAll(sanitizedRepo, ".", "-")
 
 	for _, platform := range platforms {
-		// Create unique name per instance with timestamp to prevent collisions
-		instanceName := fmt.Sprintf("e2e-%s-%s-%d-%s-%d", instanceType, pr.RepoName, pr.Number, platform, timestamp)
-		instanceName = strings.ToLower(instanceName)
-		instanceName = strings.ReplaceAll(instanceName, "_", "-")
-		instanceName = strings.ReplaceAll(instanceName, ".", "-")
+		suffix := fmt.Sprintf("-e2e-%d-%s", pr.Number, platform)
+		maxRepoLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix)
+		if maxRepoLen < 1 {
+			maxRepoLen = 1
+		}
+		repo := sanitizedRepo
+		if len(repo) > maxRepoLen {
+			repo = strings.TrimRight(repo[:maxRepoLen], "-")
+		}
+		instanceName := repo + suffix
 
 		logger.WithField("instance", instanceName).Info("Creating E2E instance")
 
@@ -255,19 +257,14 @@ func (s *Server) createCloudInstallation(name, version, username, password strin
 
 // getE2EPassword returns the password for E2E testing from config or org-level secrets
 func (s *Server) getE2EPassword(instanceType string) string {
-	// Determine which password to use based on instance type
 	var password string
 
-	if instanceType == "mobile" {
-		// Try config first, then environment variable mapped from org secret MM_MOBILE_E2E_ADMIN_PASSWORD
-		password = s.Config.E2EMobilePassword
-		if password == "" {
+	// Try config first, then fall back to environment variables
+	password = s.Config.E2EPassword
+	if password == "" {
+		if instanceType == "mobile" {
 			password = os.Getenv("MM_MOBILE_E2E_ADMIN_PASSWORD")
-		}
-	} else {
-		// Desktop or default - try config first, then environment variable mapped from org secret MM_DESKTOP_E2E_USER_CREDENTIALS
-		password = s.Config.E2EDesktopPassword
-		if password == "" {
+		} else {
 			password = os.Getenv("MM_DESKTOP_E2E_USER_CREDENTIALS")
 		}
 	}
@@ -372,7 +369,7 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 		"inputs": map[string]interface{}{
 			"instance_details":  instanceDetailsJSON,
 			"version_name":      pr.Ref,
-			"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
+			"MM_TEST_USER_NAME": s.Config.E2EUsername,
 			"MM_SERVER_VERSION": s.Config.E2EServerVersion,
 		},
 	}
@@ -582,7 +579,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
 		"version_name":      ref,
-		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
+		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"MM_SERVER_VERSION": serverVersion,
 	}
 
@@ -751,7 +748,7 @@ func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber
 	// Build the workflow dispatch request for CMT
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
-		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
+		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"MM_SERVER_VERSION": serverVersion,
 		"cmt_mode":          "true",
 	}

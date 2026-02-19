@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -243,17 +242,19 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version st
 	})
 
 	// Get credentials
-	username := s.Config.E2EDesktopUsername
-	if instanceType == "mobile" {
-		username = s.Config.E2EMobileUsername
-	}
+	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	// Add timestamp to ensure unique instance names across multiple CMT runs
-	timestamp := time.Now().Unix()
-
-	for i, platform := range platforms {
-		name := fmt.Sprintf("%s-cmt-%s-%s-%d-%d", sanitizedRepoName, sanitizedVersion, platform, i+1, timestamp)
+	for _, platform := range platforms {
+		suffix := fmt.Sprintf("-cmt-%s-%s", sanitizedVersion, platform)
+		repoPrefix := sanitizedRepoName
+		if maxLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix); len(repoPrefix) > maxLen {
+			if maxLen < 1 {
+				maxLen = 1
+			}
+			repoPrefix = strings.TrimRight(repoPrefix[:maxLen], "-")
+		}
+		name := repoPrefix + suffix
 
 		instance, err := s.createCloudInstallation(name, version, username, password, logger)
 		if err != nil {
@@ -403,7 +404,7 @@ func (s *Server) dispatchDesktopCMTWorkflowForServerVersions(repoOwner, repoName
 
 	workflowInputs := map[string]interface{}{
 		"instance_details":  instanceDetailsJSON,
-		"MM_TEST_USER_NAME": s.Config.E2EDesktopUsername,
+		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"cmt_mode":          "true",
 		"MM_SERVER_VERSION": serverVersion,
 	}

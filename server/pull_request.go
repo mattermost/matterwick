@@ -40,12 +40,6 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 
-		if label == s.Config.CMTMatrixLabel {
-			logger.WithField("label", label).Info("PR received CMT matrix label")
-			go s.handleCMTTestRequest(pr)
-			return
-		}
-
 		if s.isE2ELabel(label) {
 			logger.WithField("label", label).Info("PR received E2E test label")
 			go s.handleE2ETestRequest(pr, label)
@@ -68,11 +62,6 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 	case "unlabeled":
 		if event.Label == nil {
 			logger.Error("Unlabel event received, but label object was empty")
-			return
-		}
-		if label == s.Config.CMTMatrixLabel {
-			logger.WithField("label", label).Info("PR CMT matrix label was removed")
-			go s.handleCMTCleanup(pr)
 			return
 		}
 		if s.isE2ELabel(label) {
@@ -167,9 +156,7 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 
 // isE2ELabel checks if a label is an E2E test label (desktop or mobile)
 func (s *Server) isE2ELabel(label string) bool {
-	return label == s.Config.SetupE2ETests ||
-		label == s.Config.E2EDesktopLabel ||
-		label == s.Config.E2EMobileLabel ||
+	return label == s.Config.E2ELabel ||
 		label == s.Config.E2EMobileIOSLabel ||
 		label == s.Config.E2EMobileAndroidLabel
 }
@@ -181,8 +168,6 @@ func (s *Server) extractPlatformFromLabel(label string) string {
 		return "ios"
 	case s.Config.E2EMobileAndroidLabel:
 		return "android"
-	case s.Config.E2EMobileLabel, s.Config.SetupE2ETests:
-		return "both"
 	default:
 		return "both"
 	}
