@@ -280,6 +280,26 @@ func (s *Server) initializeMattermostE2EServer(spinwickURL, username, password s
 	return s.setupE2EServerCredentials(spinwickURL, username, password, logger)
 }
 
+// createE2EDefaultTeam creates the 'ad-1' team and adds userID to it.
+// Separated so it can be unit-tested without DNS/ping dependencies.
+func createE2EDefaultTeam(client *mattermostModel.Client4, userID string, logger logrus.FieldLogger) error {
+	team := &mattermostModel.Team{
+		Name:        "ad-1",
+		DisplayName: "ad-1",
+		Type:        "O",
+	}
+	createdTeam, _, err := client.CreateTeam(team)
+	if err != nil {
+		return fmt.Errorf("failed to create E2E default team 'ad-1': %w", err)
+	}
+	_, _, err = client.AddTeamMember(createdTeam.Id, userID)
+	if err != nil {
+		return fmt.Errorf("failed to add admin user to E2E team 'ad-1': %w", err)
+	}
+	logger.Info("Created default team 'ad-1' and added admin user")
+	return nil
+}
+
 // setupE2EServerCredentials sets up a Mattermost server with provided E2E credentials
 func (s *Server) setupE2EServerCredentials(spinwickURL, username, password string, logger logrus.FieldLogger) error {
 	logger.Info("Setting up E2E server with provided credentials")
@@ -320,10 +340,15 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 		return fmt.Errorf("failed to create E2E admin user: %w", err)
 	}
 
-	// Login as admin
-	_, _, err = client.Login(username, password)
+	// Login as admin and capture the user ID
+	userLogged, _, err := client.Login(username, password)
 	if err != nil {
 		return fmt.Errorf("failed to log in as E2E admin user: %w", err)
+	}
+
+	// Create the default team 'ad-1' and add admin user to it
+	if err := createE2EDefaultTeam(client, userLogged.Id, logger); err != nil {
+		return err
 	}
 
 	logger.Info("E2E server setup complete")

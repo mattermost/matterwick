@@ -5,8 +5,11 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -621,6 +624,202 @@ func TestInstancePlatformMapping(t *testing.T) {
 
 			assert.Equal(t, tt.isDesktop, isDesktop, tt.description+" (desktop check)")
 			assert.Equal(t, tt.isMobile, isMobile, tt.description+" (mobile check)")
+		})
+	}
+}
+
+// TestCreateE2EDefaultTeam tests team creation with mocked Mattermost API
+func TestCreateE2EDefaultTeam(t *testing.T) {
+	tests := []struct {
+		name          string
+		mockCreateFn  func(w http.ResponseWriter, r *http.Request)
+		mockAddMembFn func(w http.ResponseWriter, r *http.Request)
+		shouldFail    bool
+		description   string
+	}{
+		{
+			name: "Successful team creation and member addition",
+			mockCreateFn: func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "POST", r.Method, "Should use POST for team creation")
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":"team-abc","name":"ad-1","display_name":"ad-1","type":"O"}`))
+			},
+			mockAddMembFn: func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "POST", r.Method, "Should use POST for team member addition")
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"user_id":"user-123","team_id":"team-abc"}`))
+			},
+			shouldFail:  false,
+			description: "Should successfully create team and add member",
+		},
+		{
+			name: "Team creation fails with 500",
+			mockCreateFn: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"message":"Internal server error"}`))
+			},
+			mockAddMembFn: func(w http.ResponseWriter, r *http.Request) {
+				// Should not be called
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+			shouldFail:  true,
+			description: "Should fail when CreateTeam returns 500",
+		},
+		{
+			name: "Add team member fails with 500",
+			mockCreateFn: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+				w.Write([]byte(`{"id":"team-abc","name":"ad-1"}`))
+			},
+			mockAddMembFn: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"message":"Internal server error"}`))
+			},
+			shouldFail:  true,
+			description: "Should fail when AddTeamMember returns 500",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a test server with mux to handle multiple endpoints
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v4/teams", tt.mockCreateFn)
+			mux.HandleFunc("/api/v4/teams/team-abc/members", tt.mockAddMembFn)
+
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			client := mattermostModel.NewAPIv4Client(server.URL)
+			logger := logrus.New()
+
+			err := createE2EDefaultTeam(client, "user-123", logger)
+
+			if tt.shouldFail {
+				assert.Error(t, err, tt.description)
+			} else {
+				assert.NoError(t, err, tt.description)
+			}
+		})
+	}
+}
+
+// TestIsE2ELabel tests the isE2ELabel function
+func TestIsE2ELabel(t *testing.T) {
+	tests := []struct {
+		name        string
+		label       string
+		shouldMatch bool
+		description string
+	}{
+		{
+			name:        "Desktop E2E label",
+			label:       "E2E/Run",
+			shouldMatch: true,
+			description: "E2E/Run should match",
+		},
+		{
+			name:        "iOS E2E label",
+			label:       "E2E/Run-iOS",
+			shouldMatch: true,
+			description: "E2E/Run-iOS should match",
+		},
+		{
+			name:        "Android E2E label",
+			label:       "E2E/Run-Android",
+			shouldMatch: true,
+			description: "E2E/Run-Android should match",
+		},
+		{
+			name:        "Non-matching label",
+			label:       "spinwick",
+			shouldMatch: false,
+			description: "spinwick should not match",
+		},
+		{
+			name:        "Partial match",
+			label:       "E2E/Run-Desktop",
+			shouldMatch: false,
+			description: "E2E/Run-Desktop should not match (not configured)",
+		},
+		{
+			name:        "Case sensitive",
+			label:       "e2e/run",
+			shouldMatch: false,
+			description: "e2e/run should not match (case sensitive)",
+		},
+	}
+
+	server := &Server{
+		Config: &MatterwickConfig{
+			E2ELabel:               "E2E/Run",
+			E2EMobileIOSLabel:      "E2E/Run-iOS",
+			E2EMobileAndroidLabel:  "E2E/Run-Android",
+		},
+		Logger: logrus.New(),
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := server.isE2ELabel(tt.label)
+			assert.Equal(t, tt.shouldMatch, result, tt.description)
+		})
+	}
+}
+
+// TestExtractPlatformFromLabel tests the extractPlatformFromLabel function
+func TestExtractPlatformFromLabel(t *testing.T) {
+	tests := []struct {
+		name        string
+		label       string
+		expected    string
+		description string
+	}{
+		{
+			name:        "iOS label",
+			label:       "E2E/Run-iOS",
+			expected:    "ios",
+			description: "E2E/Run-iOS should extract to 'ios'",
+		},
+		{
+			name:        "Android label",
+			label:       "E2E/Run-Android",
+			expected:    "android",
+			description: "E2E/Run-Android should extract to 'android'",
+		},
+		{
+			name:        "Desktop label defaults to both",
+			label:       "E2E/Run",
+			expected:    "both",
+			description: "E2E/Run should default to 'both'",
+		},
+		{
+			name:        "Unknown label defaults to both",
+			label:       "unknown",
+			expected:    "both",
+			description: "unknown label should default to 'both'",
+		},
+		{
+			name:        "E2E/Run-Mobile defaults to both",
+			label:       "E2E/Run-Mobile",
+			expected:    "both",
+			description: "E2E/Run-Mobile should default to 'both'",
+		},
+	}
+
+	server := &Server{
+		Config: &MatterwickConfig{
+			E2ELabel:               "E2E/Run",
+			E2EMobileIOSLabel:      "E2E/Run-iOS",
+			E2EMobileAndroidLabel:  "E2E/Run-Android",
+		},
+		Logger: logrus.New(),
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := server.extractPlatformFromLabel(tt.label)
+			assert.Equal(t, tt.expected, result, tt.description)
 		})
 	}
 }
