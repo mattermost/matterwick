@@ -256,7 +256,7 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version st
 		}
 		name := repoPrefix + suffix
 
-		instance, err := s.createCloudInstallation(name, version, username, password, logger)
+		instance, err := s.createCloudInstallation(name, version, username, password, instanceType, logger)
 		if err != nil {
 			logger.WithError(err).Errorf("Failed to create instance for platform %s", platform)
 			// Cleanup already created instances on failure

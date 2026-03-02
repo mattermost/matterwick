@@ -168,7 +168,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		logger.WithField("instance", instanceName).Info("Creating E2E instance")
 
 		// Create the installation
-		instance, err := s.createCloudInstallation(instanceName, s.Config.E2EServerVersion, username, password, logger)
+		instance, err := s.createCloudInstallation(instanceName, s.Config.E2EServerVersion, username, password, instanceType, logger)
 		if err != nil {
 			logger.WithError(err).Error("Failed to create cloud installation")
 			// Cleanup already created instances on failure
@@ -190,8 +190,19 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 }
 
 // createCloudInstallation creates a single installation via provisioner API
-func (s *Server) createCloudInstallation(name, version, username, password string, logger logrus.FieldLogger) (*E2EInstance, error) {
+func (s *Server) createCloudInstallation(name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	// Create installation request
+	envVars := cloudModel.EnvVarMap{
+		"MM_SERVICESETTINGS_ENABLETUTORIAL":       cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW": cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICEENVIRONMENT":                   cloudModel.EnvVar{Value: "test"},
+	}
+
+	// Enable automatic replies for mobile E2E tests
+	if instanceType == "mobile" {
+		envVars["MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES"] = cloudModel.EnvVar{Value: "true"}
+	}
+
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:     name,
 		Version:     version,
@@ -201,11 +212,7 @@ func (s *Server) createCloudInstallation(name, version, username, password strin
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
 		Filestore:   cloudModel.InstallationFilestoreBifrost,
 		Annotations: []string{defaultMultiTenantAnnotation},
-		PriorityEnv: cloudModel.EnvVarMap{
-			"MM_SERVICESETTINGS_ENABLETUTORIAL":       cloudModel.EnvVar{Value: "false"},
-			"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW": cloudModel.EnvVar{Value: "false"},
-			"MM_SERVICEENVIRONMENT":                   cloudModel.EnvVar{Value: "test"},
-		},
+		PriorityEnv: envVars,
 	}
 
 	if len(s.Config.CloudGroupID) != 0 {

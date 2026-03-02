@@ -180,7 +180,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		// Get password from config or org-level secrets
 		password := s.getE2EPassword(instanceType)
 
-		instance, err := s.createCloudInstallation(name, serverVersion, username, password, logger)
+		instance, err := s.createCloudInstallation(name, serverVersion, username, password, instanceType, logger)
 		if err != nil {
 			logger.WithError(err).Errorf("Failed to create instance for platform %s", platform)
 			// Cleanup already created instances on failure
