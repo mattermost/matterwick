@@ -113,20 +113,24 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 	logger.WithField("instanceCount", len(instances)).Info("E2E instances created successfully")
 
-	// Trigger the appropriate E2E workflow
-	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, instances)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger E2E workflow")
-		// Attempt cleanup on workflow trigger failure
-		s.destroyE2EInstances(instances, logger)
-		return
-	}
-
-	// Track instances for cleanup (keyed by repo-branch-sha to ensure uniqueness across multiple pushes)
+	// Track instances BEFORE dispatching so that a fast-completing workflow_run
+	// completed event cannot race ahead of us and find nothing to clean up.
 	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, sha)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
+
+	// Trigger the appropriate E2E workflow
+	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, instances)
+	if err != nil {
+		logger.WithError(err).Error("Failed to trigger E2E workflow")
+		// Remove from tracking and destroy instances on dispatch failure
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
 
 	logger.Info("E2E workflow triggered successfully and instances tracked for cleanup")
 }
@@ -252,7 +256,16 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 
 	logger.WithField("instanceDetails", instanceDetailsJSON).Debug("Triggering desktop E2E workflow")
 
-	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON)
+	runType := "MASTER"
+	if s.isReleaseBranch(branch) {
+		runType = "RELEASE"
+	}
+
+	// Dispatch to the exact commit SHA so the workflow_run completed event carries the
+	// same head_sha we stored in the tracking key ({repo}-push-{branch}-{sha}).
+	// Using the branch ref risks a head_sha mismatch if another commit lands during
+	// the ~30 min instance-creation window.
+	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, sha, sha, instanceDetailsJSON, runType, false)
 }
 
 // triggerMobileE2EWorkflowForPushEvent triggers the mobile E2E workflow (e2e-detox-pr.yml)
@@ -273,54 +286,18 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"site_3_url": instances[2].URL,
 	}).Debug("Triggering mobile E2E workflow (e2e-detox-pr.yml) for push event")
 
-	// Use e2e-detox-pr.yml for ALL scenarios (PR, release, master)
-	// Provide SITE_1/2/3_URL as individual inputs (not instance_details JSON)
-	// For push events, always test both iOS and Android
+	runType := "MASTER"
+	if s.isReleaseBranch(branch) {
+		runType = "RELEASE"
+	}
+
+	// Dispatch to the exact commit SHA (not branch) so the workflow_run completed event
+	// carries the same head_sha stored in the tracking key ({repo}-push-{branch}-{sha}).
 	return s.dispatchMobileE2EWorkflow(
-		repoOwner, repoName, branch, sha,
+		repoOwner, repoName, sha, sha,
 		instances[0].URL, instances[1].URL, instances[2].URL,
 		"both", // Push events (release/master) test both platforms
+		runType,
 	)
 }
 
-// handlePushEventE2ECleanup destroys E2E instances created for push events
-// This should be called by a scheduled job or webhook when workflow completes
-func (s *Server) handlePushEventE2ECleanup(repoName, branch string) {
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":   repoName,
-		"branch": branch,
-		"type":   "e2e_cleanup_push",
-	})
-	logger.Info("Handling push event E2E cleanup")
-
-	// Retrieve and remove instances from tracking.
-	// Instances may be stored under a key including the SHA (e.g. "%s-push-%s-%s"),
-	// so we collect and delete all matching keys for this repo/branch.
-	s.e2eInstancesLock.Lock()
-	var instances []*E2EInstance
-
-	// Backwards-compatible: check the simple key without SHA.
-	baseKey := fmt.Sprintf("%s-push-%s", repoName, branch)
-	if v, ok := s.e2eInstances[baseKey]; ok {
-		instances = append(instances, v...)
-		delete(s.e2eInstances, baseKey)
-	}
-
-	// Also remove any SHA-suffixed keys for this repo/branch.
-	prefixWithSHA := baseKey + "-"
-	for k, v := range s.e2eInstances {
-		if strings.HasPrefix(k, prefixWithSHA) {
-			instances = append(instances, v...)
-			delete(s.e2eInstances, k)
-		}
-	}
-	s.e2eInstancesLock.Unlock()
-
-	if len(instances) == 0 {
-		logger.Warn("No E2E instances found for push event cleanup")
-		return
-	}
-
-	logger.WithField("instances", len(instances)).Info("Destroying push event E2E instances")
-	s.destroyE2EInstances(instances, logger)
-}

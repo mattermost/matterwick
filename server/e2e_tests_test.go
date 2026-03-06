@@ -19,11 +19,11 @@ import (
 // TestBuildInstanceDetailsJSON tests the buildInstanceDetailsJSON function with critical fixes
 func TestBuildInstanceDetailsJSON(t *testing.T) {
 	tests := []struct {
-		name              string
-		instances         []*E2EInstance
-		expectedFields    []string // fields that must be present in JSON
-		shouldFail        bool
-		description       string
+		name           string
+		instances      []*E2EInstance
+		expectedFields []string // fields that must be present in JSON
+		shouldFail     bool
+		description    string
 	}{
 		{
 			name: "Single instance with all fields",
@@ -70,8 +70,8 @@ func TestBuildInstanceDetailsJSON(t *testing.T) {
 			description:    "Multiple instances with different server versions for CMT",
 		},
 		{
-			name: "Empty instance array",
-			instances: []*E2EInstance{},
+			name:           "Empty instance array",
+			instances:      []*E2EInstance{},
 			expectedFields: []string{},
 			shouldFail:     false,
 			description:    "Empty array should produce empty JSON array",
@@ -134,10 +134,10 @@ func TestBuildInstanceDetailsJSON(t *testing.T) {
 // TestGetRunnerForPlatform tests platform-to-runner mapping (critical fix for consolidated logic)
 func TestGetRunnerForPlatform(t *testing.T) {
 	tests := []struct {
-		name          string
-		platform      string
-		expected      string
-		description   string
+		name        string
+		platform    string
+		expected    string
+		description string
 	}{
 		{
 			name:        "Linux platform",
@@ -188,10 +188,10 @@ func TestGetRunnerForPlatform(t *testing.T) {
 // TestE2EInstanceValidation tests instance creation and validation logic
 func TestE2EInstanceValidation(t *testing.T) {
 	tests := []struct {
-		name            string
-		instance        *E2EInstance
-		shouldBeValid   bool
-		description     string
+		name          string
+		instance      *E2EInstance
+		shouldBeValid bool
+		description   string
 	}{
 		{
 			name: "Valid desktop instance",
@@ -393,28 +393,28 @@ func TestDesktopInstanceDetailsFormat(t *testing.T) {
 // TestServerVersionConsistency tests that ServerVersion is consistent across instances
 func TestServerVersionConsistency(t *testing.T) {
 	tests := []struct {
-		name            string
-		instances       []*E2EInstance
-		allSameVersion  bool
-		description     string
+		name           string
+		instances      []*E2EInstance
+		allSameVersion bool
+		description    string
 	}{
 		{
 			name: "All instances same version (CMT scenario)",
 			instances: []*E2EInstance{
 				{
-					URL:           "https://server1.com",
+					URL:            "https://server1.com",
 					InstallationID: "id-1",
-					ServerVersion: "v11.1.0",
+					ServerVersion:  "v11.1.0",
 				},
 				{
-					URL:           "https://server2.com",
+					URL:            "https://server2.com",
 					InstallationID: "id-2",
-					ServerVersion: "v11.1.0",
+					ServerVersion:  "v11.1.0",
 				},
 				{
-					URL:           "https://server3.com",
+					URL:            "https://server3.com",
 					InstallationID: "id-3",
-					ServerVersion: "v11.1.0",
+					ServerVersion:  "v11.1.0",
 				},
 			},
 			allSameVersion: true,
@@ -424,19 +424,19 @@ func TestServerVersionConsistency(t *testing.T) {
 			name: "Different versions per instance (future feature)",
 			instances: []*E2EInstance{
 				{
-					URL:           "https://server1.com",
+					URL:            "https://server1.com",
 					InstallationID: "id-1",
-					ServerVersion: "v11.1.0",
+					ServerVersion:  "v11.1.0",
 				},
 				{
-					URL:           "https://server2.com",
+					URL:            "https://server2.com",
 					InstallationID: "id-2",
-					ServerVersion: "v11.2.0",
+					ServerVersion:  "v11.2.0",
 				},
 				{
-					URL:           "https://server3.com",
+					URL:            "https://server3.com",
 					InstallationID: "id-3",
-					ServerVersion: "v12.0.0",
+					ServerVersion:  "v12.0.0",
 				},
 			},
 			allSameVersion: false,
@@ -478,10 +478,10 @@ func TestServerVersionConsistency(t *testing.T) {
 // TestE2EInstanceCreation tests instance creation with proper field initialization
 func TestE2EInstanceCreation(t *testing.T) {
 	tests := []struct {
-		name         string
-		platform     string
+		name          string
+		platform      string
 		serverVersion string
-		description  string
+		description   string
 	}{
 		{
 			name:          "Desktop instance creation",
@@ -567,11 +567,11 @@ func TestE2EPullRequestModel(t *testing.T) {
 // TestInstancePlatformMapping tests platform name consistency
 func TestInstancePlatformMapping(t *testing.T) {
 	tests := []struct {
-		name           string
-		platform       string
-		isDesktop      bool
-		isMobile       bool
-		description    string
+		name        string
+		platform    string
+		isDesktop   bool
+		isMobile    bool
+		description string
 	}{
 		{
 			name:        "Linux platform",
@@ -752,9 +752,9 @@ func TestIsE2ELabel(t *testing.T) {
 
 	server := &Server{
 		Config: &MatterwickConfig{
-			E2ELabel:               "E2E/Run",
-			E2EMobileIOSLabel:      "E2E/Run-iOS",
-			E2EMobileAndroidLabel:  "E2E/Run-Android",
+			E2ELabel:              "E2E/Run",
+			E2EMobileIOSLabel:     "E2E/Run-iOS",
+			E2EMobileAndroidLabel: "E2E/Run-Android",
 		},
 		Logger: logrus.New(),
 	}
@@ -809,9 +809,9 @@ func TestExtractPlatformFromLabel(t *testing.T) {
 
 	server := &Server{
 		Config: &MatterwickConfig{
-			E2ELabel:               "E2E/Run",
-			E2EMobileIOSLabel:      "E2E/Run-iOS",
-			E2EMobileAndroidLabel:  "E2E/Run-Android",
+			E2ELabel:              "E2E/Run",
+			E2EMobileIOSLabel:     "E2E/Run-iOS",
+			E2EMobileAndroidLabel: "E2E/Run-Android",
 		},
 		Logger: logrus.New(),
 	}

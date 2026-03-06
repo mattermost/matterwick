@@ -353,9 +353,9 @@ func TestMarshalToJSONArray(t *testing.T) {
 // TestWorkflowRunActionFiltering tests filtering non-requested actions
 func TestWorkflowRunActionFiltering(t *testing.T) {
 	tests := []struct {
-		name           string
-		action         string
-		shouldProcess  bool
+		name          string
+		action        string
+		shouldProcess bool
 	}{
 		{
 			name:          "Requested action",

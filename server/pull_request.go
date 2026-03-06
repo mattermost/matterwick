@@ -84,6 +84,9 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		s.handleSynchronizeSpinwick(pr, spinwick.RepeatableID, false)
 	case "closed":
 		logger.Info("PR was closed")
+		// Always attempt E2E cleanup on close — the label may not have been removed
+		// before the PR was merged/closed, which would otherwise leak cloud instances.
+		go s.handleE2ECleanup(pr)
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
 				s.handleDestroySpinWick(pr, true)

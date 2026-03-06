@@ -43,8 +43,8 @@ type Server struct {
 	envMapsLock sync.Mutex
 
 	// e2eInstances tracks E2E test instances for cleanup.
-	// Keys are instance identifiers, currently including formats such as
-	// "%s-pr-%d", "%s-cmt-pr-%d", and "%s-push-%s-%s".
+	// Key formats: "%s-pr-%d" (PR), "%s-push-%s-%s" (push, ends with SHA),
+	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
 }

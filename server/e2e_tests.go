@@ -403,6 +403,7 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 			"version_name":      pr.Ref,
 			"MM_TEST_USER_NAME": s.Config.E2EUsername,
 			"MM_SERVER_VERSION": s.Config.E2EServerVersion,
+			"pr_number":         fmt.Sprintf("%d", pr.Number),
 		},
 	}
 
@@ -440,6 +441,7 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 	inputs := map[string]interface{}{
 		"MOBILE_VERSION": pr.Sha,
 		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
+		"pr_number":      fmt.Sprintf("%d", pr.Number),
 	}
 	for i, inst := range instances {
 		// SITE_1_URL, SITE_2_URL, SITE_3_URL
@@ -583,7 +585,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 }
 
 // dispatchDesktopE2EWorkflow triggers the desktop E2E workflow via GitHub Actions API
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON string) error {
+func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string, nightly bool) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -613,6 +615,8 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"version_name":      ref,
 		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"MM_SERVER_VERSION": serverVersion,
+		"run_type":          runType,
+		"nightly":           fmt.Sprintf("%t", nightly),
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
@@ -643,7 +647,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 }
 
 // dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform string) error {
+func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -658,7 +662,8 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 		"SITE_2_URL":     site2URL,
 		"SITE_3_URL":     site3URL,
 		"MOBILE_VERSION": sha,
-		"PLATFORM":       platform, // CHANGED: parameterized
+		"PLATFORM":       platform,
+		"run_type":       runType,
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
@@ -685,192 +690,6 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 	}
 
 	logger.Info("Mobile E2E workflow dispatched successfully")
-	return nil
-}
-
-// dispatchMobileE2EWorkflowWithInstances triggers the mobile E2E workflow with full instance details
-// This version includes installation IDs for cleanup tracking
-func (s *Server) dispatchMobileE2EWorkflowWithInstances(repoOwner, repoName, ref, sha string, instances []*E2EInstance) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"ref":  ref,
-	})
-
-	// Build instance details JSON with URLs and installation IDs for cleanup
-	type instanceDetail struct {
-		URL            string `json:"url"`
-		InstallationID string `json:"installation_id"`
-	}
-	details := make([]instanceDetail, len(instances))
-	for i, inst := range instances {
-		details[i] = instanceDetail{
-			URL:            inst.URL,
-			InstallationID: inst.InstallationID,
-		}
-	}
-
-	instanceDetailsJSON, err := marshalToJSON(details)
-	if err != nil {
-		logger.WithError(err).Error("Failed to marshal instance details")
-		return err
-	}
-
-	// Build the workflow dispatch request with instance details
-	workflowInputs := map[string]interface{}{
-		"instance_details": instanceDetailsJSON,
-		"MOBILE_VERSION":   sha,
-		"PLATFORM":         "both",
-	}
-
-	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger mobile E2E workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Mobile E2E workflow dispatched successfully with instance details")
-	return nil
-}
-
-// dispatchDesktopCMTWorkflow triggers the desktop CMT workflow
-func (s *Server) dispatchDesktopCMTWorkflow(repoOwner, repoName string, prNumber int, instanceDetailsJSON string) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"pr":   prNumber,
-	})
-
-	// Determine the server version to use for the workflow.
-	// For CMT, instances may have different server versions, so we use the first
-	// instance's version as the base version for the workflow.
-	serverVersion := s.Config.E2EServerVersion
-	if instanceDetailsJSON != "" {
-		var instances []struct {
-			ServerVersion string `json:"server_version"`
-		}
-		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
-			if len(instances) > 0 && instances[0].ServerVersion != "" {
-				serverVersion = instances[0].ServerVersion
-			}
-		}
-	}
-
-	// Build the workflow dispatch request for CMT
-	workflowInputs := map[string]interface{}{
-		"instance_details":  instanceDetailsJSON,
-		"MM_TEST_USER_NAME": s.Config.E2EUsername,
-		"MM_SERVER_VERSION": serverVersion,
-		"cmt_mode":          "true",
-	}
-
-	// Use REST API to trigger workflow dispatch
-	// Try the default branch (main or master) for mattermost repos
-	ref := "main"
-
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create CMT workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger desktop CMT workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from CMT workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Desktop CMT workflow dispatched successfully")
-	return nil
-}
-
-// dispatchMobileCMTWorkflow triggers the mobile CMT workflow
-func (s *Server) dispatchMobileCMTWorkflow(repoOwner, repoName string, prNumber int, instances []*E2EInstance) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"pr":   prNumber,
-	})
-
-	// Build the workflow dispatch request for mobile CMT
-	workflowInputs := map[string]interface{}{
-		"cmt_mode": "true",
-	}
-
-	// Add SITE URLs if instances are provided
-	if len(instances) >= 3 {
-		workflowInputs["SITE_1_URL"] = instances[0].URL
-		workflowInputs["SITE_2_URL"] = instances[1].URL
-		workflowInputs["SITE_3_URL"] = instances[2].URL
-		logger.WithFields(logrus.Fields{
-			"site_1_url": instances[0].URL,
-			"site_2_url": instances[1].URL,
-			"site_3_url": instances[2].URL,
-		}).Debug("Added SITE URLs to mobile CMT workflow")
-	} else {
-		logger.Warn("Mobile CMT: Less than 3 instances provided, workflow may not execute properly")
-	}
-
-	// Use REST API to trigger workflow dispatch
-	// Try the default branch (main or master) for mattermost repos
-	ref := "main"
-
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create mobile CMT workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger mobile CMT workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from mobile CMT workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Mobile CMT workflow dispatched successfully")
 	return nil
 }
 
