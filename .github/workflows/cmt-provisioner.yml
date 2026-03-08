@@ -1,0 +1,43 @@
+name: CMT Provisioner
+
+# Entry point for Compatibility Matrix Testing.
+# Run this workflow from the Actions tab to provision Mattermost Cloud instances
+# and trigger compatibility-matrix-testing.yml in the target repo.
+# Matterwick intercepts the workflow_run:requested event, provisions one instance
+# per server version, and dispatches compatibility-matrix-testing.yml.
+# Instances are destroyed automatically when compatibility-matrix-testing.yml finishes.
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Target repository to test"
+        required: true
+        type: choice
+        options:
+          - desktop
+          - mobile
+      server_versions:
+        description: "Comma-separated server versions (max 5, e.g. v11.1.0,v11.2.0)"
+        required: true
+        type: string
+      target_ref:
+        description: "Branch or tag in the target repo to test against (e.g. main, release-v5.8)"
+        required: false
+        default: "main"
+        type: string
+
+jobs:
+  signal:
+    runs-on: ubuntu-22.04
+    env:
+      REPO: ${{ inputs.repo }}
+      SERVER_VERSIONS: ${{ inputs.server_versions }}
+      TARGET_REF: ${{ inputs.target_ref }}
+    steps:
+      - name: Record CMT provisioning request
+        run: |
+          echo "CMT provisioning requested"
+          echo "Repo: $REPO"
+          echo "Server versions: $SERVER_VERSIONS"
+          echo "Target ref: $TARGET_REF"
+          echo "Matterwick will provision instances and dispatch compatibility-matrix-testing.yml"
