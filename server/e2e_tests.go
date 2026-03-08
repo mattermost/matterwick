@@ -498,6 +498,10 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 
 // destroyE2EInstances destroys all given E2E instances
 func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
+	if s.CloudClient == nil {
+		logger.Warn("CloudClient is nil; skipping instance destruction")
+		return
+	}
 	for _, instance := range instances {
 		logger := logger.WithField("instance_id", instance.InstallationID)
 		logger.Info("Destroying E2E instance")

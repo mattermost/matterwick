@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+
+	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 )
 
 // TestParseServerVersionsFromString tests the version parsing function
@@ -537,6 +540,33 @@ func TestWorkflowSelectionByRepo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFindAndDestroyInstancesByRunID(t *testing.T) {
+	s := &Server{
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+		Config:       &MatterwickConfig{ProvisionerServer: "http://fake"},
+	}
+	instance := &E2EInstance{Name: "test-instance", InstallationID: "fake-id"}
+	s.e2eInstances["desktop-cmt-42"] = []*E2EInstance{instance}
+
+	s.findAndDestroyInstancesByRunID("desktop", 42, s.Logger)
+
+	s.e2eInstancesLock.Lock()
+	_, exists := s.e2eInstances["desktop-cmt-42"]
+	s.e2eInstancesLock.Unlock()
+	require.False(t, exists, "instances should be removed from map")
+}
+
+func TestFindAndDestroyInstancesByRunID_NotFound(t *testing.T) {
+	s := &Server{
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+		Config:       &MatterwickConfig{ProvisionerServer: "http://fake"},
+	}
+	// Should not panic when nothing found
+	s.findAndDestroyInstancesByRunID("desktop", 999, s.Logger)
 }
 
 // TestVersionParsingWithVariations tests parsing with various version formats

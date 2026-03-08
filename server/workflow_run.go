@@ -251,6 +251,29 @@ func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, logger l
 	s.destroyE2EInstances(found, logger)
 }
 
+// findAndDestroyInstancesByRunID destroys CMT instances tracked by the provisioner
+// workflow run ID. Used by the /cleanup_e2e callback endpoint.
+func (s *Server) findAndDestroyInstancesByRunID(repoName string, runID int64, logger logrus.FieldLogger) {
+	key := fmt.Sprintf("%s-cmt-%d", repoName, runID)
+
+	s.e2eInstancesLock.Lock()
+	instances, ok := s.e2eInstances[key]
+	if ok {
+		delete(s.e2eInstances, key)
+	}
+	s.e2eInstancesLock.Unlock()
+
+	if !ok {
+		logger.WithField("key", key).Debug("No CMT instances found for run ID cleanup")
+		return
+	}
+	logger.WithFields(logrus.Fields{
+		"key":       key,
+		"instances": len(instances),
+	}).Info("Destroying CMT instances for completed workflow")
+	s.destroyE2EInstances(instances, logger)
+}
+
 // parseServerVersionsFromString parses comma-separated server versions string
 // Example input: "v11.1.0, v11.2.0, v12.0.0"
 // Returns: ["v11.1.0", "v11.2.0", "v12.0.0"]
