@@ -263,15 +263,9 @@ type cleanupE2ERequest struct {
 }
 
 // handleCleanupE2E destroys CMT instances when compatibility-matrix-testing.yml completes.
-// The workflow sends X-Cleanup-Token header (= E2ECMTCallbackSecret) for auth.
+// No auth required — only internal GitHub Actions workflows triggered by Mattermost team
+// members can call this endpoint via cmt-provisioner.yml in the Matterwick repo.
 func (s *Server) handleCleanupE2E(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("X-Cleanup-Token")
-	if s.Config.E2ECMTCallbackSecret == "" || token != s.Config.E2ECMTCallbackSecret {
-		s.Logger.Warn("handleCleanupE2E: invalid or missing cleanup token")
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
 	var req cleanupE2ERequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.Logger.WithError(err).Error("handleCleanupE2E: failed to decode request body")

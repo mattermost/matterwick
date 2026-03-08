@@ -82,6 +82,5 @@
   "E2ENightlyTriggerWorkflowName": "E2E Nightly Trigger",
   "E2ETestWorkflowNames": ["Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"],
   "E2EDesktopRepo": "desktop",
-  "E2EMobileRepo": "mattermost-mobile",
-  "E2ECMTCallbackSecret": ""
+  "E2EMobileRepo": "mattermost-mobile"
 }
