@@ -5,6 +5,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -122,6 +123,7 @@ func (s *Server) initializeRouter() {
 	s.Router.HandleFunc("/github_event", s.githubEvent).Methods(http.MethodPost)
 	s.Router.HandleFunc("/cloud_webhooks", s.handleCloudWebhook).Methods(http.MethodPost)
 	s.Router.HandleFunc("/shrug_wick", s.serveShrugWick).Methods(http.MethodGet)
+	s.Router.HandleFunc("/cleanup_e2e", s.handleCleanupE2E).Methods(http.MethodPost)
 }
 
 func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +254,61 @@ func (s *Server) handleCloudWebhook(w http.ResponseWriter, r *http.Request) {
 		}(channel, payloadClone)
 	}
 	s.webhookChannelsLock.Unlock()
+}
+
+// cleanupE2ERequest is the JSON body for the /cleanup_e2e endpoint.
+type cleanupE2ERequest struct {
+	Repo  string `json:"repo"`
+	RunID int64  `json:"run_id"`
+}
+
+// handleCleanupE2E destroys CMT instances when compatibility-matrix-testing.yml completes.
+// The workflow sends X-Cleanup-Token header (= E2ECMTCallbackSecret) for auth.
+func (s *Server) handleCleanupE2E(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("X-Cleanup-Token")
+	if s.Config.E2ECMTCallbackSecret == "" || token != s.Config.E2ECMTCallbackSecret {
+		s.Logger.Warn("handleCleanupE2E: invalid or missing cleanup token")
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	var req cleanupE2ERequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.Logger.WithError(err).Error("handleCleanupE2E: failed to decode request body")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if req.Repo == "" || req.RunID == 0 {
+		s.Logger.Error("handleCleanupE2E: missing repo or run_id")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	logger := s.Logger.WithFields(logrus.Fields{
+		"repo":   req.Repo,
+		"run_id": req.RunID,
+	})
+	logger.Info("handleCleanupE2E: destroying CMT instances")
+
+	// Remove instances from the tracking map synchronously so callers (and tests)
+	// see an immediate consistent state, then destroy the cloud resources in a
+	// background goroutine so we can return 202 quickly.
+	key := fmt.Sprintf("%s-cmt-%d", req.Repo, req.RunID)
+	s.e2eInstancesLock.Lock()
+	instances, ok := s.e2eInstances[key]
+	if ok {
+		delete(s.e2eInstances, key)
+	}
+	s.e2eInstancesLock.Unlock()
+
+	if ok {
+		go s.destroyE2EInstances(instances, logger)
+	} else {
+		logger.WithField("key", key).Debug("handleCleanupE2E: no CMT instances found for key")
+	}
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) getEnvMap(spinwickID string) cloudModel.EnvVarMap {
