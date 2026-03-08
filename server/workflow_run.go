@@ -103,16 +103,42 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 			return
 		}
 		logger.WithField("serverVersions", serverVersions).Info("Extracted server versions from workflow inputs")
-		var instanceType string
+		// Determine target repo and instance type.
+		// When the CMT provisioner runs in the Matterwick repo, read repo+target_ref inputs.
+		// Fall back to inferring from repoName for legacy direct-dispatch paths (desktop/mobile).
+		var instanceType, targetRepoName, targetRef string
 		if strings.Contains(repoName, "desktop") {
 			instanceType = "desktop"
+			targetRepoName = repoName
+			targetRef = headBranch
 		} else if strings.Contains(repoName, "mobile") {
 			instanceType = "mobile"
+			targetRepoName = repoName
+			targetRef = headBranch
 		} else {
-			logger.Warn("Repository is neither desktop nor mobile, skipping CMT")
-			return
+			// Matterwick-hosted provisioner: read repo + target_ref inputs
+			repoInput, ok := payload.WorkflowRun.Inputs["repo"]
+			if !ok || repoInput == "" {
+				logger.Error("CMT workflow from unknown repo and no 'repo' input found")
+				return
+			}
+			targetRef = payload.WorkflowRun.Inputs["target_ref"]
+			if targetRef == "" {
+				targetRef = "main"
+			}
+			switch repoInput {
+			case "desktop":
+				instanceType = "desktop"
+				targetRepoName = s.Config.E2EDesktopRepo
+			case "mobile":
+				instanceType = "mobile"
+				targetRepoName = s.Config.E2EMobileRepo
+			default:
+				logger.Errorf("Unknown repo input '%s' in CMT provisioner", repoInput)
+				return
+			}
 		}
-		go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, serverVersions, runID, logger)
+		go s.handleCMTWithServerVersions(owner, targetRepoName, instanceType, targetRef, serverVersions, runID, logger)
 		return
 	}
 
