@@ -112,7 +112,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 			logger.Warn("Repository is neither desktop nor mobile, skipping CMT")
 			return
 		}
-		go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, headSHA, serverVersions, runID, logger)
+		go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, serverVersions, runID, logger)
 		return
 	}
 
@@ -264,7 +264,7 @@ func parseServerVersionsFromString(input string) []string {
 
 // handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
 // version, builds the CMT_MATRIX JSON, and dispatches compatibility-matrix-testing.yml once.
-func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
+func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, targetRef string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
 	// Cap at 5 versions to prevent runaway provisioning
 	const maxVersions = 5
 	if len(serverVersions) > maxVersions {
@@ -274,8 +274,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	logger = logger.WithFields(logrus.Fields{
 		"serverVersionCount": len(serverVersions),
-		"branch":             branch,
-		"sha":                sha,
+		"targetRef":          targetRef,
 		"run_id":             runID,
 	})
 	logger.Info("Starting CMT with server versions")
@@ -313,7 +312,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 	// Track by runID+sha: runID prevents collision when two dispatches share the same
 	// branch HEAD SHA; the key still ends with "-{sha}" so findAndDestroyInstancesBySHA
 	// can locate it when compatibility-matrix-testing.yml completes (hours later).
-	key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
+	key := fmt.Sprintf("%s-cmt-%d", repoName, runID)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = allInstances
 	s.e2eInstancesLock.Unlock()
@@ -337,7 +336,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	// Dispatch to the exact SHA so the completed workflow_run event carries the same
 	// head_sha, allowing findAndDestroyInstancesBySHA to match the tracking key.
-	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, logger); err != nil {
+	if err := s.dispatchCMTWorkflow(repoOwner, repoName, targetRef, cmtMatrixJSON, instanceType, runID, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
@@ -464,28 +463,29 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
 // CMT_MATRIX JSON. Dispatches with ref=sha so the resulting workflow_run.head_sha matches
 // the tracking key suffix, enabling sha-based cleanup on completion.
-func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, logger logrus.FieldLogger) error {
+func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, targetRef, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	workflowInputs := map[string]interface{}{
 		"CMT_MATRIX": cmtMatrixJSON,
+		"cmt_run_id": fmt.Sprintf("%d", runID),
 	}
 	if instanceType == "desktop" {
-		workflowInputs["DESKTOP_VERSION"] = branch
+		workflowInputs["DESKTOP_VERSION"] = targetRef
 	} else {
-		workflowInputs["MOBILE_VERSION"] = branch
+		workflowInputs["MOBILE_VERSION"] = targetRef
 	}
 
 	logger.WithFields(logrus.Fields{
-		"ref":          sha,
+		"ref":          targetRef,
 		"instanceType": instanceType,
 	}).Debug("Dispatching compatibility-matrix-testing.yml")
 
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/compatibility-matrix-testing.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
-			"ref":    sha,
+			"ref":    targetRef,
 			"inputs": workflowInputs,
 		})
 	if err != nil {
