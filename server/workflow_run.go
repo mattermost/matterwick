@@ -80,10 +80,10 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	// --- CMT trigger workflows ---
 	// "CMT Provisioner" (name contains "CMT") is dispatched by users with server_versions.
 	// "Compatibility Matrix Testing" (the actual test workflow) is dispatched by Matterwick
-	// with CMT_MATRIX; its completion triggers sha-based cleanup via isE2ETestWorkflow.
+	// with CMT_MATRIX; instance cleanup is handled by the /cleanup_e2e HTTP callback.
 	if strings.Contains(workflowName, "cmt") || strings.Contains(workflowName, "CMT") {
 		if payload.Action == "completed" {
-			logger.Debug("CMT trigger workflow completed; sha-based cleanup is primary")
+			logger.Debug("CMT trigger workflow completed; cleanup is handled via /cleanup_e2e callback")
 			s.handleCMTRunCleanup(repoName, headSHA, logger)
 			return
 		}
@@ -309,9 +309,9 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	logger.WithField("totalInstances", len(allInstances)).Info("CMT instances created, tracking for cleanup")
 
-	// Track by runID+sha: runID prevents collision when two dispatches share the same
-	// branch HEAD SHA; the key still ends with "-{sha}" so findAndDestroyInstancesBySHA
-	// can locate it when compatibility-matrix-testing.yml completes (hours later).
+	// Track by runID: each CMT provisioner dispatch gets a unique GitHub Actions runID,
+	// so this key is collision-free. Cleanup is triggered by compatibility-matrix-testing.yml
+	// via the /cleanup_e2e callback, which calls findAndDestroyInstancesByRunID.
 	key := fmt.Sprintf("%s-cmt-%d", repoName, runID)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = allInstances
@@ -334,8 +334,8 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		return
 	}
 
-	// Dispatch to the exact SHA so the completed workflow_run event carries the same
-	// head_sha, allowing findAndDestroyInstancesBySHA to match the tracking key.
+	// Dispatch compatibility-matrix-testing.yml; cmt_run_id is passed as an input so the
+	// workflow can call /cleanup_e2e to destroy instances when it finishes.
 	if err := s.dispatchCMTWorkflow(repoOwner, repoName, targetRef, cmtMatrixJSON, instanceType, runID, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
@@ -461,8 +461,8 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
-// CMT_MATRIX JSON. Dispatches with ref=sha so the resulting workflow_run.head_sha matches
-// the tracking key suffix, enabling sha-based cleanup on completion.
+// CMT_MATRIX JSON. Uses targetRef (branch or tag in the target repo) as the dispatch ref.
+// Includes cmt_run_id in inputs so compatibility-matrix-testing.yml can call /cleanup_e2e.
 func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, targetRef, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
@@ -563,17 +563,17 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, p
 	return instances, nil
 }
 
-// handleCMTRunCleanup is a best-effort fallback for CMT cleanup when the trigger workflow
-// completes. Because the CMT trigger is a lightweight workflow that completes in seconds —
-// well before the 30-minute provisioning goroutine stores instances — this function will
-// most often find nothing. The primary cleanup path is findAndDestroyInstancesBySHA,
-// triggered when compatibility-matrix-testing.yml completes.
+// handleCMTRunCleanup is called when the CMT provisioner workflow completes. Because the
+// provisioner workflow finishes in seconds — well before the provisioning goroutine stores
+// instances under run-ID keys — the sha-based scan here finds nothing for CMT instances.
+// Actual cleanup is handled by the /cleanup_e2e HTTP callback, which calls
+// findAndDestroyInstancesByRunID using the cmt_run_id passed by compatibility-matrix-testing.yml.
 func (s *Server) handleCMTRunCleanup(repoName, sha string, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"repo": repoName,
 		"sha":  sha,
 		"type": "cmt_cleanup_fallback",
 	})
-	logger.Debug("CMT trigger completed — sha-based cleanup is the primary path")
+	logger.Debug("CMT trigger workflow completed; instances are cleaned up via /cleanup_e2e callback (sha-based scan finds nothing for run-ID keys)")
 	s.findAndDestroyInstancesBySHA(repoName, sha, logger)
 }
