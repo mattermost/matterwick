@@ -116,6 +116,9 @@ type MatterwickConfig struct {
 	E2EReleasePatternPrefix       string
 	E2ENightlyTriggerWorkflowName string   // workflow name (name: field) of the nightly trigger workflow
 	E2ETestWorkflowNames          []string // workflow names of the actual test workflows (for completion-based cleanup)
+	E2EDesktopRepo                string   // GitHub repo name for desktop (e.g. "desktop")
+	E2EMobileRepo                 string   // GitHub repo name for mobile (e.g. "mattermost-mobile")
+	E2ECMTCallbackSecret          string   // Shared secret for /cleanup_e2e endpoint auth
 }
 
 func findConfigFile(fileName string) string {
