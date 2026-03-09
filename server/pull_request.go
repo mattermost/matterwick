@@ -40,6 +40,12 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 
+		if s.isE2ELabel(label) {
+			logger.WithField("label", label).Info("PR received E2E test label")
+			go s.handleE2ETestRequest(pr, label)
+			return
+		}
+
 		if s.isSpinWickLabel(label) {
 			logger.WithField("label", label).Info("PR received SpinWick label")
 			switch *event.Label.Name {
@@ -58,6 +64,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			logger.Error("Unlabel event received, but label object was empty")
 			return
 		}
+		if s.isE2ELabel(label) {
+			logger.WithField("label", label).Info("PR E2E test label was removed")
+			go s.handleE2ECleanup(pr)
+			return
+		}
 		if s.isSpinWickLabel(label) {
 			logger.WithField("label", label).Info("PR SpinWick label was removed")
 			switch *event.Label.Name {
@@ -73,6 +84,9 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 		s.handleSynchronizeSpinwick(pr, spinwick.RepeatableID, false)
 	case "closed":
 		logger.Info("PR was closed")
+		// Always attempt E2E cleanup on close — the label may not have been removed
+		// before the PR was merged/closed, which would otherwise leak cloud instances.
+		go s.handleE2ECleanup(pr)
 		if s.isSpinWickLabelInLabels(pr.Labels) {
 			if s.isSpinWickCloudWithCWSLabel(pr.Labels) {
 				s.handleDestroySpinWick(pr, true)
@@ -140,5 +154,24 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 				}
 			}
 		}
+	}
+}
+
+// isE2ELabel checks if a label is an E2E test label (desktop or mobile)
+func (s *Server) isE2ELabel(label string) bool {
+	return label == s.Config.E2ELabel ||
+		label == s.Config.E2EMobileIOSLabel ||
+		label == s.Config.E2EMobileAndroidLabel
+}
+
+// extractPlatformFromLabel determines the platform (ios/android/both) from the label
+func (s *Server) extractPlatformFromLabel(label string) string {
+	switch label {
+	case s.Config.E2EMobileIOSLabel:
+		return "ios"
+	case s.Config.E2EMobileAndroidLabel:
+		return "android"
+	default:
+		return "both"
 	}
 }

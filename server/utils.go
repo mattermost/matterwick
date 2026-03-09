@@ -88,7 +88,7 @@ func splitCommaSeparated(s string) []string {
 	// Split and clean the parts
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
-	
+
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part != "" {

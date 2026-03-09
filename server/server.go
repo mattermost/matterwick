@@ -41,6 +41,12 @@ type Server struct {
 	// envMaps is a map of environment variables for each active installation.
 	envMaps     map[string]cloudModel.EnvVarMap
 	envMapsLock sync.Mutex
+
+	// e2eInstances tracks E2E test instances for cleanup.
+	// Key formats: "%s-pr-%d" (PR), "%s-push-%s-%s" (push, ends with SHA),
+	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
+	e2eInstances     map[string][]*E2EInstance
+	e2eInstancesLock sync.Mutex
 }
 
 const (
@@ -68,6 +74,7 @@ func New(config *MatterwickConfig) *Server {
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
 		envMaps:         make(map[string]cloudModel.EnvVarMap),
+		e2eInstances:    make(map[string][]*E2EInstance),
 	}
 
 	if !isAwsConfigDefined() {
@@ -184,6 +191,32 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(msg, "/") {
 				go s.handleSlashCommand(msg, eventIssueEventComment)
 			}
+		}
+	case "push":
+		event, err := PushEventFromJSON(io.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse push event")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if event != nil {
+			s.Logger.WithField("ref", event.GetRef()).Info("push event")
+			go s.handlePushEvent(event)
+		}
+	case "workflow_run":
+		// For workflow_run, we need to parse both the standard event and extract inputs from raw payload
+		workflowRunPayload, err := ParseWorkflowRunEventWithInputs(io.NopCloser(bytes.NewBuffer(buf)))
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to parse workflow_run event")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if workflowRunPayload != nil {
+			s.Logger.WithFields(logrus.Fields{
+				"workflow": workflowRunPayload.WorkflowRun.Name,
+				"action":   workflowRunPayload.Action,
+			}).Info("workflow_run event")
+			go s.handleWorkflowRunEventWithInputs(workflowRunPayload)
 		}
 	default:
 		s.Logger.Info("Other Events")

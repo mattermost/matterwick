@@ -104,6 +104,18 @@ type MatterwickConfig struct {
 	// Key: repository name (e.g., "mattermost-plugin-boards")
 	// Value: plugin ID to use for mmctl enable command
 	PluginRepoToIDMapping map[string]string
+
+	E2ELabel                      string
+	E2EMobileIOSLabel             string
+	E2EMobileAndroidLabel         string
+	E2EUsername                   string
+	E2EPassword                   string
+	E2EServerVersion              string
+	E2EAutoTriggerOnRelease       bool
+	E2EAutoTriggerOnMaster        bool
+	E2EReleasePatternPrefix       string
+	E2ENightlyTriggerWorkflowName string   // workflow name (name: field) of the nightly trigger workflow
+	E2ETestWorkflowNames          []string // workflow names of the actual test workflows (for completion-based cleanup)
 }
 
 func findConfigFile(fileName string) string {
