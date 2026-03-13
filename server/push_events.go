@@ -153,36 +153,22 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
-	sanitizedRepoName := strings.ToLower(repoName)
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
+	// Name format: {type}-{version}-{platform}-{hex6}
+	serverVersion := s.Config.E2EServerVersion
+	if version != "" {
+		serverVersion = version
+	}
+	sanitizedVersion := sanitizeForDNS(serverVersion)
+	uid := e2eUniqueSuffix()
 
-	sanitizedBranch := strings.ToLower(branch)
-	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "/", "-")
-	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, "_", "-")
-	sanitizedBranch = strings.ReplaceAll(sanitizedBranch, ".", "-")
+	username := s.Config.E2EUsername
+	password := s.getE2EPassword(instanceType)
 
 	for _, platform := range platforms {
-		suffix := fmt.Sprintf("-e2e-%s-%s", sanitizedBranch, platform)
-		repoPrefix := sanitizedRepoName
-		if maxLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix); len(repoPrefix) > maxLen {
-			if maxLen < 1 {
-				maxLen = 1
-			}
-			repoPrefix = strings.TrimRight(repoPrefix[:maxLen], "-")
-		}
-		name := repoPrefix + suffix
-
-		// Use version if provided, otherwise use server version from config
-		serverVersion := s.Config.E2EServerVersion
-		if version != "" {
-			serverVersion = version
-		}
-
-		username := s.Config.E2EUsername
-
-		// Get password from config or org-level secrets
-		password := s.getE2EPassword(instanceType)
+		name := e2eInstanceName(
+			s.Config.DNSNameTestServer,
+			instanceType, sanitizedVersion, platform, uid,
+		)
 
 		instance, err := s.createCloudInstallation(name, serverVersion, username, password, instanceType, logger)
 		if err != nil {
