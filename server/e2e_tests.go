@@ -151,7 +151,6 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	logger.Info("Successfully triggered E2E workflow")
-	s.postE2EStartedComment(pr, instances)
 }
 
 // createMultipleE2EInstances creates multiple instances for E2E testing
