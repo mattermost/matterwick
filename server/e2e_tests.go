@@ -33,6 +33,34 @@ type E2EInstance struct {
 	ServerVersion  string `json:"server_version"`
 }
 
+// e2eUniqueSuffix returns an 8-character hex timestamp for instance name uniqueness.
+func e2eUniqueSuffix() string {
+	return fmt.Sprintf("%08x", time.Now().Unix())
+}
+
+// sanitizeForDNS lowercases and replaces non-DNS characters with hyphens.
+func sanitizeForDNS(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", "-")
+	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, "/", "-")
+	return s
+}
+
+// e2eInstanceName builds a DNS-safe instance name and truncates if needed.
+// parts are joined with "-". The total name + dnsSuffix must be <= 62.
+func e2eInstanceName(dnsSuffix string, parts ...string) string {
+	name := strings.Join(parts, "-")
+	maxLen := 62 - len(dnsSuffix)
+	if maxLen < 1 {
+		maxLen = 1
+	}
+	if len(name) > maxLen {
+		name = strings.TrimRight(name[:maxLen], "-")
+	}
+	return name
+}
+
 // handleE2ETestRequest is the main orchestrator for E2E test requests
 func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -149,21 +177,14 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	// Get password from environment or generate one
 	password = s.getE2EPassword(instanceType)
 
-	sanitizedRepo := strings.ToLower(pr.RepoName)
-	sanitizedRepo = strings.ReplaceAll(sanitizedRepo, "_", "-")
-	sanitizedRepo = strings.ReplaceAll(sanitizedRepo, ".", "-")
+	// Name format: {type}-pr-{pr}-{platform}-{hex6}
+	uid := e2eUniqueSuffix()
 
 	for _, platform := range platforms {
-		suffix := fmt.Sprintf("-e2e-%d-%s", pr.Number, platform)
-		maxRepoLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix)
-		if maxRepoLen < 1 {
-			maxRepoLen = 1
-		}
-		repo := sanitizedRepo
-		if len(repo) > maxRepoLen {
-			repo = strings.TrimRight(repo[:maxRepoLen], "-")
-		}
-		instanceName := repo + suffix
+		instanceName := e2eInstanceName(
+			s.Config.DNSNameTestServer,
+			instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, uid,
+		)
 
 		logger.WithField("instance", instanceName).Info("Creating E2E instance")
 

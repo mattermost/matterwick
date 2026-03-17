@@ -353,22 +353,10 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 // Unlike createCMTInstancesForVersion (which creates 3 platform-specific instances for
 // nightly runs), CMT only needs one server — the matrix handles parallelism.
 func (s *Server) createSingleCMTInstance(repoName, instanceType, version string, logger logrus.FieldLogger) (*E2EInstance, error) {
-	sanitizedRepoName := strings.ToLower(repoName)
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
-
-	sanitizedVersion := strings.ToLower(version)
-	sanitizedVersion = strings.ReplaceAll(sanitizedVersion, ".", "-")
-
-	suffix := fmt.Sprintf("-cmt-%s", sanitizedVersion)
-	repoPrefix := sanitizedRepoName
-	if maxLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix); len(repoPrefix) > maxLen {
-		if maxLen < 1 {
-			maxLen = 1
-		}
-		repoPrefix = strings.TrimRight(repoPrefix[:maxLen], "-")
-	}
-	name := repoPrefix + suffix
+	// Name format: {type}-{version}-{hex6}
+	sanitizedVersion := sanitizeForDNS(version)
+	uid := e2eUniqueSuffix()
+	name := e2eInstanceName(s.Config.DNSNameTestServer, instanceType, sanitizedVersion, uid)
 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
@@ -517,11 +505,9 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, p
 		platforms = []string{"site-1", "site-2", "site-3"}
 	}
 
-	sanitizedRepoName := strings.ToLower(repoName)
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, "_", "-")
-	sanitizedRepoName = strings.ReplaceAll(sanitizedRepoName, ".", "-")
-
-	sanitizedVersion := strings.ReplaceAll(version, ".", "-")
+	// Name format: {type}-{version}-{platform}-{hex6}
+	sanitizedVersion := sanitizeForDNS(version)
+	uid := e2eUniqueSuffix()
 
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":    repoName,
@@ -529,20 +515,14 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, p
 		"version": version,
 	})
 
-	// Get credentials
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
 	for _, platform := range platforms {
-		suffix := fmt.Sprintf("-%s-%s-%s", purpose, sanitizedVersion, platform)
-		repoPrefix := sanitizedRepoName
-		if maxLen := 63 - len(s.Config.DNSNameTestServer) - len(suffix); len(repoPrefix) > maxLen {
-			if maxLen < 1 {
-				maxLen = 1
-			}
-			repoPrefix = strings.TrimRight(repoPrefix[:maxLen], "-")
-		}
-		name := repoPrefix + suffix
+		name := e2eInstanceName(
+			s.Config.DNSNameTestServer,
+			instanceType, sanitizedVersion, platform, uid,
+		)
 
 		instance, err := s.createCloudInstallation(name, version, username, password, instanceType, logger)
 		if err != nil {
