@@ -112,7 +112,6 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
 	} else {
 		logger.Error("Unable to determine E2E instance type from repository name")
-		s.postE2EErrorComment(pr, "Unable to determine E2E instance type. Only desktop and mobile repos are supported.")
 		return
 	}
 
@@ -152,7 +151,6 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	logger.Info("Successfully triggered E2E workflow")
-	s.postE2EStartedComment(pr, instances)
 }
 
 // createMultipleE2EInstances creates multiple instances for E2E testing
