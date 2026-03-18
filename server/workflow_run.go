@@ -337,7 +337,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	// Dispatch to the exact SHA so the completed workflow_run event carries the same
 	// head_sha, allowing findAndDestroyInstancesBySHA to match the tracking key.
-	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, logger); err != nil {
+	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, runID, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
@@ -452,12 +452,15 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
 // CMT_MATRIX JSON. Dispatches with ref=sha so the resulting workflow_run.head_sha matches
 // the tracking key suffix, enabling sha-based cleanup on completion.
-func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, logger logrus.FieldLogger) error {
+// runID is the CMT provisioner workflow run ID, passed as cmt_run_id so the test workflow
+// can call back to Matterwick for instance cleanup.
+func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	workflowInputs := map[string]interface{}{
 		"CMT_MATRIX": cmtMatrixJSON,
+		"cmt_run_id": fmt.Sprintf("%d", runID),
 	}
 	if instanceType == "desktop" {
 		workflowInputs["DESKTOP_VERSION"] = branch
