@@ -490,7 +490,7 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 	return nil
 }
 
-// handleE2ECleanup destroys all E2E instances for a PR
+// handleE2ECleanup destroys tracked E2E instances, then queries the cloud API by DNS pattern to catch orphans.
 func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo": pr.RepoName,
@@ -499,20 +499,56 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	})
 	logger.Info("Handling E2E cleanup request")
 
-	// Retrieve and remove instances from tracking
+	// Fast path: in-memory map
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
 	s.e2eInstancesLock.Unlock()
 
-	if len(instances) == 0 {
-		logger.Warn("No E2E instances found for cleanup")
+	if len(instances) > 0 {
+		logger.WithField("instances", len(instances)).Info("Destroying tracked E2E instances")
+		s.destroyE2EInstances(instances, logger)
+	}
+
+	// Fallback: catch orphans from restarts, map overwrites, or failed goroutines
+	s.cleanupOrphanedE2EInstances(pr, logger)
+}
+
+// cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
+func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
+	instanceType := "mobile"
+	if strings.Contains(pr.RepoName, "desktop") {
+		instanceType = "desktop"
+	}
+
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
+
+	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
+		DNS: dnsPattern,
+		Paging: cloudModel.Paging{
+			Page:    0,
+			PerPage: 50,
+		},
+	})
+	if err != nil {
+		logger.WithError(err).Error("Failed to query cloud API for orphaned E2E instances")
 		return
 	}
 
-	logger.WithField("instances", len(instances)).Info("Destroying E2E instances")
-	s.destroyE2EInstances(instances, logger)
+	if len(installations) == 0 {
+		logger.Debug("No orphaned E2E instances found via cloud API")
+		return
+	}
+
+	logger.WithField("orphans", len(installations)).Warn("Found orphaned E2E instances via cloud API")
+	for _, inst := range installations {
+		instLogger := logger.WithField("installation_id", inst.ID)
+		instLogger.Info("Destroying orphaned E2E instance")
+		if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
+			instLogger.WithError(err).Error("Failed to destroy orphaned E2E instance")
+		}
+	}
 }
 
 // destroyE2EInstances destroys all given E2E instances
