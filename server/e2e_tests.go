@@ -525,11 +525,8 @@ func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logru
 	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
 
 	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
-		DNS: dnsPattern,
-		Paging: cloudModel.Paging{
-			Page:    0,
-			PerPage: 50,
-		},
+		DNS:    dnsPattern,
+		Paging: cloudModel.AllPagesNotDeleted(),
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to query cloud API for orphaned E2E instances")
