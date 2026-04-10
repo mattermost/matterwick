@@ -101,7 +101,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	if len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-		go s.cancelPRWorkflowRuns(pr, logger)
+		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(existingInstances, logger)
 		if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
@@ -113,7 +113,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
 		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-		go s.cancelPRWorkflowRuns(pr, logger)
+		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(cloudInstances, logger)
 		s.e2eInstancesLock.Lock()
 		s.e2eInstances[key] = cloudInstances
@@ -218,14 +218,19 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 func (s *Server) createCloudInstallation(name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	// Create installation request
 	envVars := cloudModel.EnvVarMap{
-		"MM_SERVICESETTINGS_ENABLETUTORIAL":       cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW": cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICEENVIRONMENT":                   cloudModel.EnvVar{Value: "test"},
-	}
-
-	// Enable automatic replies for mobile E2E tests
-	if instanceType == "mobile" {
-		envVars["MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES"] = cloudModel.EnvVar{Value: "true"}
+		"MM_SERVICESETTINGS_ENABLETUTORIAL":                cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":          cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":      cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":    cloudModel.EnvVar{Value: "5000"},
+		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":         cloudModel.EnvVar{Value: "180"},
+		"MM_SERVICEENVIRONMENT":                            cloudModel.EnvVar{Value: "test"},
+		"MM_RATELIMITSETTINGS_ENABLE":                         cloudModel.EnvVar{Value: "true"},
+		"MM_RATELIMITSETTINGS_PERSEC":                         cloudModel.EnvVar{Value: "3000"},
+		"MM_RATELIMITSETTINGS_MAXBURST":                       cloudModel.EnvVar{Value: "5000"},
+		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":                cloudModel.EnvVar{Value: "10000"},
+		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":               cloudModel.EnvVar{Value: "false"},
+		"MM_RATELIMITSETTINGS_VARYBYUSER":                     cloudModel.EnvVar{Value: "false"},
+		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES":  cloudModel.EnvVar{Value: "true"},
 	}
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
@@ -523,9 +528,14 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 
 // cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
 func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
-	instanceType := "mobile"
+	var instanceType string
 	if strings.Contains(pr.RepoName, "desktop") {
 		instanceType = "desktop"
+	} else if strings.Contains(pr.RepoName, "mobile") {
+		instanceType = "mobile"
+	} else {
+		logger.Debug("Skipping orphan E2E cleanup for non-E2E repo")
+		return
 	}
 
 	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
