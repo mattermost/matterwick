@@ -65,8 +65,8 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 		if s.isE2ELabel(label) {
-			logger.WithField("label", label).Info("PR E2E test label was removed")
-			go s.handleE2ECleanup(pr)
+			logger.WithField("label", label).Info("PR E2E test label was removed, canceling workflow runs but keeping servers alive")
+			go s.cancelPRWorkflowRuns(pr, logger)
 			return
 		}
 		if s.isSpinWickLabel(label) {
