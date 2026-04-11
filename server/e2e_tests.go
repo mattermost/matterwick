@@ -347,6 +347,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
 	err = s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
 	if err != nil {
+		deleteInstallation("initializeMattermostE2EServer failed")
 		return nil, fmt.Errorf("failed to initialize Mattermost server: %w", err)
 	}
 
