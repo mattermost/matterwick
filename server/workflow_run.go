@@ -124,7 +124,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	if s.Config.E2ENightlyTriggerWorkflowName != "" && workflowName == s.Config.E2ENightlyTriggerWorkflowName {
 		if payload.Action == "requested" {
 			logger.Info("Nightly trigger workflow started, provisioning E2E servers")
-			go s.handleNightlyE2ETrigger(owner, repoName, headBranch, headSHA, payload.WorkflowRun.Event, logger)
+			go s.handleNightlyE2ETrigger(owner, repoName, headBranch, headSHA, payload.WorkflowRun.Event, runID, logger)
 		}
 		return
 	}
@@ -143,10 +143,11 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 // Called when the E2E trigger workflow starts, whether from schedule, push to master/main,
 // or push to a release branch. The triggerEvent parameter ("schedule", "push", etc.) is
 // used to set runType correctly — scheduled runs always get "NIGHTLY" regardless of branch.
-func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, logger logrus.FieldLogger) {
+func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, runID int64, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"branch": branch,
 		"sha":    sha,
+		"run_id": runID,
 	})
 	logger.Info("Provisioning nightly E2E instances")
 
@@ -164,8 +165,10 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 		return
 	}
 
-	// Track by sha so the test workflow completion can clean up
-	key := fmt.Sprintf("%s-scheduled-%s", repoName, sha)
+	// Include runID so two trigger runs against the same SHA (e.g. manual re-trigger)
+	// get separate tracking keys. The key still ends with "-{sha}" so
+	// findAndDestroyInstancesBySHA continues to match it by suffix.
+	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, sha)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()

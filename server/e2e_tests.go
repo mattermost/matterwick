@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -295,6 +294,19 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		return nil, fmt.Errorf("failed to create installation: %w", err)
 	}
 
+	// deleteInstallation is a best-effort cleanup helper used on all failure paths after
+	// CreateInstallation succeeds. Without it, the cloud installation would be permanently
+	// orphaned because it has not yet been added to the in-memory tracking map.
+	deleteInstallation := func(reason string) {
+		logger.WithFields(logrus.Fields{
+			"installation_id": installation.ID,
+			"reason":          reason,
+		}).Warn("Deleting partially created installation to avoid orphan")
+		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
+			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to delete orphaned installation")
+		}
+	}
+
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
 
 	// Wait for installation to be stable using polling with timeout
@@ -302,6 +314,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	for {
 		inst, err := s.CloudClient.GetInstallation(installation.ID, nil)
 		if err != nil {
+			deleteInstallation("GetInstallation error during polling")
 			return nil, fmt.Errorf("failed to get installation status: %w", err)
 		}
 
@@ -311,12 +324,14 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		}
 
 		if time.Now().After(timeout) {
+			deleteInstallation("timeout waiting for stable state")
 			return nil, fmt.Errorf("timeout waiting for installation to become stable")
 		}
 
 		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
 		select {
 		case <-ctx.Done():
+			deleteInstallation("context cancelled during polling")
 			return nil, fmt.Errorf("installation wait cancelled: %w", ctx.Err())
 		case <-time.After(30 * time.Second):
 		}
@@ -324,6 +339,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Check cancellation before the 10-minute initialization phase (DNS + ping + user setup).
 	if err := ctx.Err(); err != nil {
+		deleteInstallation("context cancelled before initialization")
 		return nil, fmt.Errorf("installation creation cancelled before initialization: %w", err)
 	}
 
@@ -741,20 +757,44 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instance
 		}
 	}
 
-	if len(reusable) != len(platforms) {
-		return nil, fmt.Errorf("found %d reusable instances, expected %d", len(reusable), len(platforms))
+	// Parse the platform token from each OwnerID.
+	// OwnerID format: {type}-{version}-{platform}-{uid} where uid is 8 hex chars.
+	// Strip the trailing "-{uid}" (9 chars) then check which expected platform is a suffix.
+	platformByInst := make(map[string]*cloudModel.InstallationDTO, len(reusable)) // platform → inst
+	for _, inst := range reusable {
+		ownerID := inst.OwnerID
+		var matched string
+		for _, p := range platforms {
+			// OwnerID without uid ends with "-{platform}"; uid is 9 chars ("-" + 8 hex).
+			withoutUID := ownerID
+			if len(ownerID) > 9 {
+				withoutUID = ownerID[:len(ownerID)-9]
+			}
+			if strings.HasSuffix(withoutUID, "-"+p) {
+				matched = p
+				break
+			}
+		}
+		if matched == "" {
+			return nil, fmt.Errorf("could not determine platform for instance %q", ownerID)
+		}
+		if _, dup := platformByInst[matched]; dup {
+			return nil, fmt.Errorf("duplicate platform %q found among cloud instances", matched)
+		}
+		platformByInst[matched] = inst
 	}
 
-	// Sort by OwnerID for consistent platform assignment across calls.
-	// desktop: linux < macos < windows; mobile: site-1 < site-2 < site-3
-	sort.Slice(reusable, func(i, j int) bool {
-		return reusable[i].OwnerID < reusable[j].OwnerID
-	})
+	// Validate that every expected platform is present.
+	for _, p := range platforms {
+		if _, ok := platformByInst[p]; !ok {
+			return nil, fmt.Errorf("expected platform %q not found among cloud instances (found %d, want %d)", p, len(reusable), len(platforms))
+		}
+	}
 
-	result := make([]*E2EInstance, len(reusable))
-	for i, inst := range reusable {
-		platform := platforms[i]
-		// Reconstruct URL from OwnerID + DNSNameTestServer to avoid needing DNS records in list response.
+	// Build result in platforms[] order so index-based assignment is stable for callers.
+	result := make([]*E2EInstance, len(platforms))
+	for i, platform := range platforms {
+		inst := platformByInst[platform]
 		e2eInst := &E2EInstance{
 			Name:           inst.OwnerID,
 			Platform:       platform,
