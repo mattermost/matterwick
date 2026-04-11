@@ -255,6 +255,10 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 // ctx is used to cancel the polling wait so that parallel callers can abort early when a
 // sibling goroutine fails, instead of waiting up to 30 minutes per polling interval.
 func (s *Server) createCloudInstallation(ctx context.Context, name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("installation creation cancelled before request: %w", err)
+	}
+
 	// Create installation request
 	envVars := cloudModel.EnvVarMap{
 		"MM_SERVICESETTINGS_ENABLETUTORIAL":                cloudModel.EnvVar{Value: "false"},
@@ -294,17 +298,15 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		return nil, fmt.Errorf("failed to create installation: %w", err)
 	}
 
-	// deleteInstallation is a best-effort cleanup helper used on all failure paths after
+	// cleanupCreatedInstallation is a best-effort cleanup helper used on all failure paths after
 	// CreateInstallation succeeds. Without it, the cloud installation would be permanently
 	// orphaned because it has not yet been added to the in-memory tracking map.
-	deleteInstallation := func(reason string) {
-		logger.WithFields(logrus.Fields{
-			"installation_id": installation.ID,
-			"reason":          reason,
-		}).Warn("Deleting partially created installation to avoid orphan")
+	// It deletes the installation, logs any deletion error, and returns cause unchanged.
+	cleanupCreatedInstallation := func(cause error) error {
 		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
-			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to delete orphaned installation")
+			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to clean up partially created installation")
 		}
+		return cause
 	}
 
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
@@ -314,8 +316,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	for {
 		inst, err := s.CloudClient.GetInstallation(installation.ID, nil)
 		if err != nil {
-			deleteInstallation("GetInstallation error during polling")
-			return nil, fmt.Errorf("failed to get installation status: %w", err)
+			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to get installation status: %w", err))
 		}
 
 		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
@@ -324,31 +325,27 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		}
 
 		if time.Now().After(timeout) {
-			deleteInstallation("timeout waiting for stable state")
-			return nil, fmt.Errorf("timeout waiting for installation to become stable")
+			return nil, cleanupCreatedInstallation(fmt.Errorf("timeout waiting for installation to become stable"))
 		}
 
 		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
 		select {
 		case <-ctx.Done():
-			deleteInstallation("context cancelled during polling")
-			return nil, fmt.Errorf("installation wait cancelled: %w", ctx.Err())
+			return nil, cleanupCreatedInstallation(fmt.Errorf("installation wait cancelled: %w", ctx.Err()))
 		case <-time.After(30 * time.Second):
 		}
 	}
 
 	// Check cancellation before the 10-minute initialization phase (DNS + ping + user setup).
 	if err := ctx.Err(); err != nil {
-		deleteInstallation("context cancelled before initialization")
-		return nil, fmt.Errorf("installation creation cancelled before initialization: %w", err)
+		return nil, cleanupCreatedInstallation(fmt.Errorf("installation creation cancelled before initialization: %w", err))
 	}
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
 	err = s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
 	if err != nil {
-		deleteInstallation("initializeMattermostE2EServer failed")
-		return nil, fmt.Errorf("failed to initialize Mattermost server: %w", err)
+		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
 	}
 
 	return &E2EInstance{
