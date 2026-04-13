@@ -4,8 +4,10 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/google/go-github/v32/github"
 	"github.com/sirupsen/logrus"
@@ -135,12 +137,10 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	logger.Info("E2E workflow triggered successfully and instances tracked for cleanup")
 }
 
-// createMultipleE2EInstancesForPushEvent creates instances for push event E2E testing
+// createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
+// Results are returned in platforms[] order so index-based assignment is stable.
 func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, _ string) ([]*E2EInstance, error) {
-	var instances []*E2EInstance
 	var platforms []string
-
-	// For push events, always use all platforms
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
 	} else {
@@ -164,25 +164,55 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	for _, platform := range platforms {
-		name := e2eInstanceName(
-			s.Config.DNSNameTestServer,
-			instanceType, sanitizedVersion, platform, uid,
-		)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		instance, err := s.createCloudInstallation(name, serverVersion, username, password, instanceType, logger)
-		if err != nil {
-			logger.WithError(err).Errorf("Failed to create instance for platform %s", platform)
-			// Cleanup already created instances on failure
-			s.destroyE2EInstances(instances, logger)
-			return nil, err
-		}
+	type result struct {
+		instance *E2EInstance
+		err      error
+	}
+	results := make([]result, len(platforms))
+	var wg sync.WaitGroup
 
-		instance.Platform = platform
-		if instanceType == "desktop" {
-			instance.Runner = getRunnerForPlatform(platform)
+	for i, platform := range platforms {
+		wg.Add(1)
+		go func(idx int, platform string) {
+			defer wg.Done()
+			name := e2eInstanceName(
+				s.Config.DNSNameTestServer,
+				instanceType, sanitizedVersion, platform, uid,
+			)
+			inst, err := s.createCloudInstallation(ctx, name, serverVersion, username, password, instanceType, logger)
+			if err != nil {
+				cancel()
+				results[idx] = result{err: err}
+				return
+			}
+			inst.Platform = platform
+			if instanceType == "desktop" {
+				inst.Runner = getRunnerForPlatform(platform)
+			}
+			results[idx] = result{instance: inst}
+		}(i, platform)
+	}
+
+	wg.Wait()
+
+	var instances []*E2EInstance
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		} else {
+			instances = append(instances, r.instance)
 		}
-		instances = append(instances, instance)
+	}
+
+	if firstErr != nil {
+		s.destroyE2EInstances(instances, logger)
+		return nil, firstErr
 	}
 
 	logger.WithField("instanceCount", len(instances)).Info("All E2E instances created successfully")

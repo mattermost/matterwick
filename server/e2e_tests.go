@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-github/v32/github"
@@ -71,43 +72,19 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	})
 	logger.Info("Handling E2E test request")
 
-	// Check if there's already an E2E run in progress for this PR
-	// If yes, cancel it before starting a new one
-	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
-	s.e2eInstancesLock.Lock()
-	existingInstances, hasExisting := s.e2eInstances[key]
-	if hasExisting {
-		logger.WithField("existingInstances", len(existingInstances)).Info("Found existing E2E run, canceling it")
-		// Remove from tracking immediately to prevent race conditions
-		delete(s.e2eInstances, key)
-		s.e2eInstancesLock.Unlock()
-
-		// Destroy old instances in background
-		go s.destroyE2EInstances(existingInstances, logger)
-
-		// Also attempt to cancel the GitHub workflow run
-		go s.cancelPRWorkflowRuns(pr, logger)
-	} else {
-		s.e2eInstancesLock.Unlock()
-	}
-
-	// Determine instance type based on repository
+	// Determine instance type and platforms first — needed for both reuse lookup and creation.
 	var instanceType string
 	var platforms []string
 	var testPlatform string // For mobile: which OS to test (ios/android/both). For desktop: unused (tests all OS platforms)
 
 	if strings.Contains(pr.RepoName, "desktop") {
 		instanceType = "desktop"
-		// Desktop: platforms = OS runners (linux/macos/windows)
-		// Desktop tests run on all OS platforms automatically
 		platforms = []string{"linux", "macos", "windows"}
-		testPlatform = "all" // Desktop always tests all OS platforms (linux/macos/windows)
+		testPlatform = "all"
 	} else if strings.Contains(pr.RepoName, "mobile") {
 		instanceType = "mobile"
-		// Mobile: platforms = server instances (site-1/site-2/site-3)
 		// Always create all 3 mobile instances (workflow expects SITE_1/2/3_URL).
 		platforms = []string{"site-1", "site-2", "site-3"}
-		// Mobile: testPlatform = which mobile OS to test (ios/android/both)
 		testPlatform = s.extractPlatformFromLabel(label)
 		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
 	} else {
@@ -115,7 +92,40 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Create multiple instances
+	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+
+	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
+	s.e2eInstancesLock.Lock()
+	existingInstances := s.e2eInstances[key]
+	s.e2eInstancesLock.Unlock()
+
+	if len(existingInstances) > 0 {
+		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
+		s.cancelPRWorkflowRuns(pr, logger)
+		s.wakeUpHibernatingInstances(existingInstances, logger)
+		if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
+			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
+			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+		}
+		return
+	}
+
+	// 2. Check cloud API for instances that survived a matterwick restart.
+	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
+		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
+		s.cancelPRWorkflowRuns(pr, logger)
+		s.wakeUpHibernatingInstances(cloudInstances, logger)
+		s.e2eInstancesLock.Lock()
+		s.e2eInstances[key] = cloudInstances
+		s.e2eInstancesLock.Unlock()
+		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
+			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+		}
+		return
+	}
+
+	// 3. No existing instances — create fresh ones.
 	instances, err := s.createMultipleE2EInstances(pr, instanceType, platforms)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
@@ -129,23 +139,32 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Store instances for later cleanup (reuse key variable from above)
+	// Instance creation takes ~30 min. Check if the PR was closed during that window.
+	// If so, destroy the freshly created instances — no further cleanup events will fire
+	// for a closed PR, so storing them would leak them permanently.
+	prInfo, _, prErr := newGithubClient(s.Config.GithubAccessToken).PullRequests.Get(
+		context.Background(), pr.RepoOwner, pr.RepoName, pr.Number)
+	if prErr != nil {
+		logger.WithError(prErr).Warn("Failed to check PR state after instance creation; proceeding")
+	} else if prInfo.GetState() == "closed" {
+		logger.Warn("PR was closed during E2E instance creation; destroying instances without tracking")
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
+
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
-	// Trigger the appropriate workflow
-	err = s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform) // Pass testPlatform: "all" for desktop, "ios"/"android"/"both" for mobile
-	if err != nil {
+	if err = s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
-		// Remove instances from tracking map before cleanup to avoid double-destroy on later cleanup.
+		// Remove from tracking before cleanup to avoid double-destroy on later cleanup.
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
 		s.e2eInstancesLock.Unlock()
-		// Attempt cleanup on workflow trigger failure
 		s.destroyE2EInstances(instances, logger)
 		return
 	}
@@ -153,13 +172,13 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.Info("Successfully triggered E2E workflow")
 }
 
-// createMultipleE2EInstances creates multiple instances for E2E testing
+// createMultipleE2EInstances creates all platform instances in parallel.
+// Results are returned in the same order as platforms[] so that callers can rely on
+// index-based platform assignment (e.g. instances[0] = site-1 for mobile).
 func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
 	if len(platforms) == 0 {
 		return nil, fmt.Errorf("no platforms specified")
 	}
-
-	var instances []*E2EInstance
 
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":      pr.RepoName,
@@ -168,58 +187,93 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		"platforms": len(platforms),
 	})
 
-	// Create username and password for this E2E test set
-	var username, password string
-	username = s.Config.E2EUsername
-
-	// Get password from environment or generate one
-	password = s.getE2EPassword(instanceType)
-
+	username := s.Config.E2EUsername
+	password := s.getE2EPassword(instanceType)
 	// Name format: {type}-pr-{pr}-{platform}-{hex6}
 	uid := e2eUniqueSuffix()
 
-	for _, platform := range platforms {
-		instanceName := e2eInstanceName(
-			s.Config.DNSNameTestServer,
-			instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, uid,
-		)
+	// Shared cancellable context: the first goroutine to fail cancels the rest so they
+	// exit their polling loop within one sleep interval (30s) instead of waiting up to 30min.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		logger.WithField("instance", instanceName).Info("Creating E2E instance")
+	type result struct {
+		instance *E2EInstance
+		err      error
+	}
+	// Pre-allocate by index so each goroutine writes to its own slot — no mutex needed.
+	results := make([]result, len(platforms))
+	var wg sync.WaitGroup
 
-		// Create the installation
-		instance, err := s.createCloudInstallation(instanceName, s.Config.E2EServerVersion, username, password, instanceType, logger)
-		if err != nil {
-			logger.WithError(err).Error("Failed to create cloud installation")
-			// Cleanup already created instances on failure
-			s.destroyE2EInstances(instances, logger)
-			return nil, err
+	for i, platform := range platforms {
+		wg.Add(1)
+		go func(idx int, platform string) {
+			defer wg.Done()
+			instanceName := e2eInstanceName(
+				s.Config.DNSNameTestServer,
+				instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, uid,
+			)
+			logger.WithField("instance", instanceName).Info("Creating E2E instance")
+			inst, err := s.createCloudInstallation(ctx, instanceName, s.Config.E2EServerVersion, username, password, instanceType, logger)
+			if err != nil {
+				cancel() // signal sibling goroutines to stop waiting
+				results[idx] = result{err: err}
+				return
+			}
+			inst.Platform = platform
+			if instanceType == "desktop" {
+				inst.Runner = getRunnerForPlatform(platform)
+			}
+			results[idx] = result{instance: inst}
+		}(i, platform)
+	}
+
+	wg.Wait()
+
+	// Collect results in platforms[] order. On any error, destroy all that succeeded.
+	var instances []*E2EInstance
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		} else {
+			instances = append(instances, r.instance)
 		}
+	}
 
-		instance.Platform = platform
-		if instanceType == "desktop" {
-			// Assign appropriate runner for each platform
-			instance.Runner = getRunnerForPlatform(platform)
-		}
-
-		instances = append(instances, instance)
-		logger.WithField("instance", instanceName).Info("Successfully created E2E instance")
+	if firstErr != nil {
+		s.destroyE2EInstances(instances, logger)
+		return nil, firstErr
 	}
 
 	return instances, nil
 }
 
-// createCloudInstallation creates a single installation via provisioner API
-func (s *Server) createCloudInstallation(name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
-	// Create installation request
-	envVars := cloudModel.EnvVarMap{
-		"MM_SERVICESETTINGS_ENABLETUTORIAL":       cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW": cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICEENVIRONMENT":                   cloudModel.EnvVar{Value: "test"},
+// createCloudInstallation creates a single installation via provisioner API.
+// ctx is used to cancel the polling wait so that parallel callers can abort early when a
+// sibling goroutine fails, instead of waiting up to 30 minutes per polling interval.
+func (s *Server) createCloudInstallation(ctx context.Context, name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("installation creation cancelled before request: %w", err)
 	}
 
-	// Enable automatic replies for mobile E2E tests
-	if instanceType == "mobile" {
-		envVars["MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES"] = cloudModel.EnvVar{Value: "true"}
+	// Create installation request
+	envVars := cloudModel.EnvVarMap{
+		"MM_SERVICESETTINGS_ENABLETUTORIAL":                cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":          cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":      cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":    cloudModel.EnvVar{Value: "5000"},
+		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":         cloudModel.EnvVar{Value: "180"},
+		"MM_SERVICEENVIRONMENT":                            cloudModel.EnvVar{Value: "test"},
+		"MM_RATELIMITSETTINGS_ENABLE":                         cloudModel.EnvVar{Value: "true"},
+		"MM_RATELIMITSETTINGS_PERSEC":                         cloudModel.EnvVar{Value: "3000"},
+		"MM_RATELIMITSETTINGS_MAXBURST":                       cloudModel.EnvVar{Value: "5000"},
+		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":                cloudModel.EnvVar{Value: "10000"},
+		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":               cloudModel.EnvVar{Value: "false"},
+		"MM_RATELIMITSETTINGS_VARYBYUSER":                     cloudModel.EnvVar{Value: "false"},
+		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES":  cloudModel.EnvVar{Value: "true"},
 	}
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
@@ -244,6 +298,17 @@ func (s *Server) createCloudInstallation(name, version, username, password, inst
 		return nil, fmt.Errorf("failed to create installation: %w", err)
 	}
 
+	// cleanupCreatedInstallation is a best-effort cleanup helper used on all failure paths after
+	// CreateInstallation succeeds. Without it, the cloud installation would be permanently
+	// orphaned because it has not yet been added to the in-memory tracking map.
+	// It deletes the installation, logs any deletion error, and returns cause unchanged.
+	cleanupCreatedInstallation := func(cause error) error {
+		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
+			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to clean up partially created installation")
+		}
+		return cause
+	}
+
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
 
 	// Wait for installation to be stable using polling with timeout
@@ -251,7 +316,7 @@ func (s *Server) createCloudInstallation(name, version, username, password, inst
 	for {
 		inst, err := s.CloudClient.GetInstallation(installation.ID, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get installation status: %w", err)
+			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to get installation status: %w", err))
 		}
 
 		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
@@ -260,17 +325,27 @@ func (s *Server) createCloudInstallation(name, version, username, password, inst
 		}
 
 		if time.Now().After(timeout) {
-			return nil, fmt.Errorf("timeout waiting for installation to become stable")
+			return nil, cleanupCreatedInstallation(fmt.Errorf("timeout waiting for installation to become stable"))
 		}
 
-		time.Sleep(30 * time.Second)
+		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
+		select {
+		case <-ctx.Done():
+			return nil, cleanupCreatedInstallation(fmt.Errorf("installation wait cancelled: %w", ctx.Err()))
+		case <-time.After(30 * time.Second):
+		}
+	}
+
+	// Check cancellation before the 10-minute initialization phase (DNS + ping + user setup).
+	if err := ctx.Err(); err != nil {
+		return nil, cleanupCreatedInstallation(fmt.Errorf("installation creation cancelled before initialization: %w", err))
 	}
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
 	err = s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize Mattermost server: %w", err)
+		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
 	}
 
 	return &E2EInstance{
@@ -490,7 +565,7 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 	return nil
 }
 
-// handleE2ECleanup destroys all E2E instances for a PR
+// handleE2ECleanup destroys tracked E2E instances, then queries the cloud API by DNS pattern to catch orphans.
 func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo": pr.RepoName,
@@ -499,20 +574,146 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	})
 	logger.Info("Handling E2E cleanup request")
 
-	// Retrieve and remove instances from tracking
+	// Fast path: in-memory map
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
 	s.e2eInstancesLock.Unlock()
 
-	if len(instances) == 0 {
-		logger.Warn("No E2E instances found for cleanup")
+	if len(instances) > 0 {
+		logger.WithField("instances", len(instances)).Info("Destroying tracked E2E instances")
+		s.destroyE2EInstances(instances, logger)
+	}
+
+	// Fallback: catch orphans from restarts, map overwrites, or failed goroutines
+	s.cleanupOrphanedE2EInstances(pr, logger)
+}
+
+// cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
+func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
+	var instanceType string
+	if strings.Contains(pr.RepoName, "desktop") {
+		instanceType = "desktop"
+	} else if strings.Contains(pr.RepoName, "mobile") {
+		instanceType = "mobile"
+	} else {
+		logger.Debug("Skipping orphan E2E cleanup for non-E2E repo")
 		return
 	}
 
-	logger.WithField("instances", len(instances)).Info("Destroying E2E instances")
-	s.destroyE2EInstances(instances, logger)
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
+
+	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
+		DNS:    dnsPattern,
+		Paging: cloudModel.AllPagesNotDeleted(),
+	})
+	if err != nil {
+		logger.WithError(err).Error("Failed to query cloud API for orphaned E2E instances")
+		return
+	}
+
+	if len(installations) == 0 {
+		logger.Debug("No orphaned E2E instances found via cloud API")
+		return
+	}
+
+	logger.WithField("orphans", len(installations)).Warn("Found orphaned E2E instances via cloud API")
+	for _, inst := range installations {
+		// Skip instances already progressing through deletion to avoid redundant API calls.
+		if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
+			inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
+			inst.State == cloudModel.InstallationStateDeletionPending ||
+			inst.State == cloudModel.InstallationStateDeletionRequested ||
+			inst.State == cloudModel.InstallationStateDeletionFailed ||
+			inst.State == cloudModel.InstallationStateDeleted {
+			logger.WithField("installation_id", inst.ID).Debug("Skipping E2E instance already in deletion state")
+			continue
+		}
+		instLogger := logger.WithField("installation_id", inst.ID)
+		instLogger.Info("Destroying orphaned E2E instance")
+		if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
+			instLogger.WithError(err).Error("Failed to destroy orphaned E2E instance")
+		}
+	}
+}
+
+// cleanupNonPRE2EInstancesOnStartup destroys stale non-PR E2E instances left over from a
+// previous matterwick run. When matterwick restarts, the in-memory tracking map is wiped,
+// making push/nightly/CMT instances untrackable — the workflow_run(completed) cleanup path
+// will find nothing. A 8-hour age threshold is used so that instances still being actively
+// used by tests that started before the restart are NOT destroyed mid-run.
+//
+// Reasoning: E2E tests (nightly, push, CMT) take at most a few hours. Any non-PR instance
+// older than 8 hours whose tracking was lost must be orphaned.
+//
+// PR instances (identified by "-pr-" in their OwnerID) are always skipped — handleE2ECleanup
+// on PR close, which includes DNS orphan cleanup, manages their lifecycle.
+func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
+	const maxAge = 8 * time.Hour
+	logger := s.Logger.WithField("type", "startup_e2e_cleanup")
+	logger.WithField("max_age_hours", 8).Info("Scanning for stale non-PR E2E instances from previous matterwick run")
+
+	cutoffMs := time.Now().Add(-maxAge).UnixMilli()
+
+	for _, instanceType := range []string{"desktop", "mobile"} {
+		pattern := instanceType + "-%"
+		installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
+			DNS:    pattern,
+			Paging: cloudModel.AllPagesNotDeleted(),
+		})
+		if err != nil {
+			logger.WithError(err).Errorf("Failed to query %s instances on startup", instanceType)
+			continue
+		}
+
+		for _, inst := range installations {
+			// Guard against a nil embedded Installation — must come first, all other
+			// field accesses (OwnerID, CreateAt, State, ID) are on the embedded struct.
+			if inst.Installation == nil {
+				logger.Warn("Skipping instance with nil Installation pointer in startup cleanup")
+				continue
+			}
+
+			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...").
+			// Skip them — handleE2ECleanup on PR close manages their lifecycle.
+			if strings.Contains(inst.OwnerID, "-pr-") {
+				continue
+			}
+
+			// Skip instances created within the last 8 hours — tests may still be running.
+			// If matterwick restarted mid-test, destroying active test instances would break them.
+			if inst.CreateAt > cutoffMs {
+				logger.WithFields(logrus.Fields{
+					"installation_id": inst.ID,
+					"owner_id":        inst.OwnerID,
+				}).Debug("Skipping non-PR instance younger than 8h (may still be in use)")
+				continue
+			}
+
+			// Skip instances already progressing through deletion.
+			if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
+				inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
+				inst.State == cloudModel.InstallationStateDeletionPending ||
+				inst.State == cloudModel.InstallationStateDeletionRequested ||
+				inst.State == cloudModel.InstallationStateDeletionFailed ||
+				inst.State == cloudModel.InstallationStateDeleted {
+				continue
+			}
+
+			instLogger := logger.WithFields(logrus.Fields{
+				"installation_id": inst.ID,
+				"owner_id":        inst.OwnerID,
+				"state":           inst.State,
+			})
+			instLogger.Warn("Destroying stale non-PR E2E instance (older than 8h) left from previous matterwick run")
+			if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
+				instLogger.WithError(err).Error("Failed to destroy stale non-PR E2E instance")
+			}
+		}
+	}
+
+	logger.Info("Startup non-PR E2E instance cleanup complete")
 }
 
 // destroyE2EInstances destroys all given E2E instances
@@ -528,6 +729,119 @@ func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.Fie
 		}
 
 		logger.Info("Successfully destroyed E2E instance")
+	}
+}
+
+// findExistingE2EInstancesInCloud queries the cloud API for E2E instances that match a PR and
+// reconstructs E2EInstance objects for reuse. Returns an error if the count doesn't match
+// the expected number of platforms (indicating a partial or fully absent set).
+func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number)
+
+	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
+		DNS:    dnsPattern,
+		Paging: cloudModel.AllPagesNotDeleted(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query cloud API for existing E2E instances: %w", err)
+	}
+
+	// Only reuse instances that are in a stable, usable state.
+	var reusable []*cloudModel.InstallationDTO
+	for _, inst := range installations {
+		if inst.State == cloudModel.InstallationStateStable ||
+			inst.State == cloudModel.InstallationStateHibernating {
+			reusable = append(reusable, inst)
+		}
+	}
+
+	// Parse the platform token from each OwnerID.
+	// OwnerID format: {type}-{version}-{platform}-{uid} where uid is 8 hex chars.
+	// Strip the trailing "-{uid}" (9 chars) then check which expected platform is a suffix.
+	platformByInst := make(map[string]*cloudModel.InstallationDTO, len(reusable)) // platform → inst
+	for _, inst := range reusable {
+		ownerID := inst.OwnerID
+		var matched string
+		for _, p := range platforms {
+			// OwnerID without uid ends with "-{platform}"; uid is 9 chars ("-" + 8 hex).
+			withoutUID := ownerID
+			if len(ownerID) > 9 {
+				withoutUID = ownerID[:len(ownerID)-9]
+			}
+			if strings.HasSuffix(withoutUID, "-"+p) {
+				matched = p
+				break
+			}
+		}
+		if matched == "" {
+			return nil, fmt.Errorf("could not determine platform for instance %q", ownerID)
+		}
+		if _, dup := platformByInst[matched]; dup {
+			return nil, fmt.Errorf("duplicate platform %q found among cloud instances", matched)
+		}
+		platformByInst[matched] = inst
+	}
+
+	// Validate that every expected platform is present.
+	for _, p := range platforms {
+		if _, ok := platformByInst[p]; !ok {
+			return nil, fmt.Errorf("expected platform %q not found among cloud instances (found %d, want %d)", p, len(reusable), len(platforms))
+		}
+	}
+
+	// Build result in platforms[] order so index-based assignment is stable for callers.
+	result := make([]*E2EInstance, len(platforms))
+	for i, platform := range platforms {
+		inst := platformByInst[platform]
+		e2eInst := &E2EInstance{
+			Name:           inst.OwnerID,
+			Platform:       platform,
+			URL:            fmt.Sprintf("https://%s.%s", inst.OwnerID, s.Config.DNSNameTestServer),
+			InstallationID: inst.ID,
+			ServerVersion:  inst.Version,
+		}
+		if instanceType == "desktop" {
+			e2eInst.Runner = getRunnerForPlatform(platform)
+		}
+		result[i] = e2eInst
+	}
+	return result, nil
+}
+
+// wakeUpHibernatingInstances checks each instance and wakes any that are hibernating,
+// waiting up to 10 minutes for stable state. Logs warnings on failure and proceeds.
+func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
+	for _, inst := range instances {
+		installation, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+		if err != nil {
+			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to check installation state before wake-up")
+			continue
+		}
+		if installation.State != cloudModel.InstallationStateHibernating {
+			continue
+		}
+		logger.WithField("installation_id", inst.InstallationID).Info("Waking up hibernating E2E instance")
+		if _, err := s.CloudClient.WakeupInstallation(inst.InstallationID, nil); err != nil {
+			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to wake up hibernating E2E instance")
+			continue
+		}
+		timeout := time.Now().Add(10 * time.Minute)
+		for {
+			updated, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+			if err != nil {
+				logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Error polling installation state during wake-up")
+				break
+			}
+			if updated.State == cloudModel.InstallationStateStable {
+				logger.WithField("installation_id", inst.InstallationID).Info("Hibernating E2E instance is now stable")
+				break
+			}
+			if time.Now().After(timeout) {
+				logger.WithField("installation_id", inst.InstallationID).Warn("Timeout waiting for E2E instance to wake up")
+				break
+			}
+			time.Sleep(15 * time.Second)
+		}
 	}
 }
 

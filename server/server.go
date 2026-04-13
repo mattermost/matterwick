@@ -98,6 +98,11 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
+	// Destroy any non-PR E2E instances left over from a previous run.
+	// Must run before the HTTP listener starts so that cleanup completes before
+	// new webhook events can arrive and re-create conflicting instances.
+	s.cleanupNonPRE2EInstancesOnStartup()
+
 	s.initializeRouter()
 
 	var handler http.Handler = s.Router

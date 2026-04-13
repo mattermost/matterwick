@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 )
@@ -27,6 +28,7 @@ type WorkflowRunWithInputs struct {
 	Name       string            `json:"name"`
 	HeadBranch string            `json:"head_branch"`
 	HeadSHA    string            `json:"head_sha"`
+	Event      string            `json:"event"` // triggering event: "push", "schedule", "workflow_dispatch", etc.
 	Inputs     map[string]string `json:"inputs"`
 }
 
@@ -122,7 +124,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	if s.Config.E2ENightlyTriggerWorkflowName != "" && workflowName == s.Config.E2ENightlyTriggerWorkflowName {
 		if payload.Action == "requested" {
 			logger.Info("Nightly trigger workflow started, provisioning E2E servers")
-			go s.handleNightlyE2ETrigger(owner, repoName, headBranch, headSHA, logger)
+			go s.handleNightlyE2ETrigger(owner, repoName, headBranch, headSHA, payload.WorkflowRun.Event, runID, logger)
 		}
 		return
 	}
@@ -137,12 +139,15 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	logger.Debug("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
-// handleNightlyE2ETrigger provisions instances and dispatches the test workflow
-// for scheduled/nightly E2E runs. Called when the nightly trigger workflow starts.
-func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha string, logger logrus.FieldLogger) {
+// handleNightlyE2ETrigger provisions instances and dispatches the test workflow.
+// Called when the E2E trigger workflow starts, whether from schedule, push to master/main,
+// or push to a release branch. The triggerEvent parameter ("schedule", "push", etc.) is
+// used to set runType correctly — scheduled runs always get "NIGHTLY" regardless of branch.
+func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, runID int64, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"branch": branch,
 		"sha":    sha,
+		"run_id": runID,
 	})
 	logger.Info("Provisioning nightly E2E instances")
 
@@ -160,13 +165,30 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha string, lo
 		return
 	}
 
-	// Track by sha so the test workflow completion can clean up
-	key := fmt.Sprintf("%s-scheduled-%s", repoName, sha)
+	// Include runID so two trigger runs against the same SHA (e.g. manual re-trigger)
+	// get separate tracking keys. The key still ends with "-{sha}" so
+	// findAndDestroyInstancesBySHA continues to match it by suffix.
+	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, sha)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
 	logger.WithField("tracking_key", key).Info("Nightly instances tracked, dispatching test workflow")
+
+	// Determine run classification. Scheduled runs are always NIGHTLY regardless of branch
+	// (a scheduled run on master must not be classified as MASTER). Push-triggered runs
+	// derive their type from the branch name.
+	runType := "NIGHTLY"
+	nightly := true
+	if triggerEvent != "schedule" {
+		if branch == "master" || branch == "main" {
+			runType = "MASTER"
+			nightly = false
+		} else if s.isReleaseBranch(branch) {
+			runType = "RELEASE"
+			nightly = false
+		}
+	}
 
 	var dispatchErr error
 	if instanceType == "desktop" {
@@ -180,8 +202,7 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha string, lo
 			return
 		}
 		// Dispatch to the exact SHA so workflow_run completed event matches the tracking key.
-		// Pass runType="NIGHTLY" and nightly=true so the workflow correctly classifies this run.
-		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, sha, sha, instanceDetailsJSON, "NIGHTLY", true)
+		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, sha, sha, instanceDetailsJSON, runType, nightly)
 	} else {
 		if len(instances) < 3 {
 			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
@@ -192,9 +213,8 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha string, lo
 			return
 		}
 		// Dispatch to the exact SHA so workflow_run completed event matches the tracking key.
-		// Pass runType="NIGHTLY" so the workflow correctly classifies this as a nightly run.
 		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, sha, sha,
-			instances[0].URL, instances[1].URL, instances[2].URL, "both", "NIGHTLY")
+			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
 	}
 
 	if dispatchErr != nil {
@@ -361,7 +381,7 @@ func (s *Server) createSingleCMTInstance(repoName, instanceType, version string,
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	return s.createCloudInstallation(name, version, username, password, instanceType, logger)
+	return s.createCloudInstallation(context.Background(), name, version, username, password, instanceType, logger)
 }
 
 // cmtServer is the server entry in CMT_MATRIX JSON.
@@ -495,13 +515,12 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrix
 	return nil
 }
 
-// createCMTInstancesForVersion creates 3 instances (one per platform) for a given server
-// version. Used by nightly runs which dispatch the platform-aware e2e-functional.yml /
-// e2e-detox-pr.yml workflows (not the CMT matrix workflow).
+// createCMTInstancesForVersion creates 3 instances (one per platform) in parallel for a
+// given server version. Used by nightly runs which dispatch the platform-aware
+// e2e-functional.yml / e2e-detox-pr.yml workflows (not the CMT matrix workflow).
+// Results are returned in platforms[] order so index-based assignment is stable.
 func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, purpose string) ([]*E2EInstance, error) {
-	var instances []*E2EInstance
 	var platforms []string
-
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
 	} else {
@@ -521,25 +540,56 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, p
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	for _, platform := range platforms {
-		name := e2eInstanceName(
-			s.Config.DNSNameTestServer,
-			instanceType, sanitizedVersion, platform, uid,
-		)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		instance, err := s.createCloudInstallation(name, version, username, password, instanceType, logger)
-		if err != nil {
-			logger.WithError(err).Errorf("Failed to create instance for platform %s", platform)
-			// Cleanup already created instances on failure
-			s.destroyE2EInstances(instances, logger)
-			return nil, err
-		}
+	type result struct {
+		instance *E2EInstance
+		err      error
+	}
+	results := make([]result, len(platforms))
+	var wg sync.WaitGroup
 
-		instance.Platform = platform
-		if instanceType == "desktop" {
-			instance.Runner = getRunnerForPlatform(platform)
+	for i, platform := range platforms {
+		wg.Add(1)
+		go func(idx int, platform string) {
+			defer wg.Done()
+			name := e2eInstanceName(
+				s.Config.DNSNameTestServer,
+				instanceType, sanitizedVersion, platform, uid,
+			)
+			inst, err := s.createCloudInstallation(ctx, name, version, username, password, instanceType, logger)
+			if err != nil {
+				cancel()
+				results[idx] = result{err: err}
+				return
+			}
+			inst.Platform = platform
+			if instanceType == "desktop" {
+				inst.Runner = getRunnerForPlatform(platform)
+			}
+			results[idx] = result{instance: inst}
+		}(i, platform)
+	}
+
+	wg.Wait()
+
+	var instances []*E2EInstance
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		} else {
+			instances = append(instances, r.instance)
 		}
-		instances = append(instances, instance)
+	}
+
+	if firstErr != nil {
+		logger.WithError(firstErr).Error("Failed to create one or more instances; destroying all")
+		s.destroyE2EInstances(instances, logger)
+		return nil, firstErr
 	}
 
 	logger.WithField("instanceCount", len(instances)).Info("Instances created for version")
