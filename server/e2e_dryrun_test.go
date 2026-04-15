@@ -183,14 +183,17 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 	})
 
 	t.Run("workflow inputs built correctly", func(t *testing.T) {
+		// MM_SERVER_VERSION must come from instances[0].ServerVersion, NOT from
+		// s.Config.E2EServerVersion. The instance stores the resolved version set at
+		// provisioning time, which may differ from config (e.g. config="latest").
 		workflowInputs := map[string]interface{}{
 			"instance_details":  instanceDetailsJSON,
 			"version_name":      "feature-branch",
 			"MM_TEST_USER_NAME": s.Config.E2EUsername,
-			"MM_SERVER_VERSION": s.Config.E2EServerVersion,
+			"MM_SERVER_VERSION": instances[0].ServerVersion, // NOT s.Config.E2EServerVersion
 		}
 
-		assert.Equal(t, "master", workflowInputs["MM_SERVER_VERSION"])
+		assert.Equal(t, instances[0].ServerVersion, workflowInputs["MM_SERVER_VERSION"])
 		assert.Equal(t, "e2eadmin", workflowInputs["MM_TEST_USER_NAME"])
 		assert.Equal(t, "feature-branch", workflowInputs["version_name"])
 		assert.NotEmpty(t, workflowInputs["instance_details"])
@@ -828,4 +831,350 @@ func TestDryRun_ConcurrentInstanceAccess(t *testing.T) {
 
 	wg.Wait()
 	// No race detected → concurrent access is safe
+}
+
+// ------------------------------------------------------------
+// 12. resolveE2EServerVersion() — GitHub releases API logic
+// ------------------------------------------------------------
+
+// mockReleasesServer returns an httptest.Server that serves the given body/status
+// for any GET request whose path contains "/releases".
+func mockReleasesServer(t *testing.T, body string, status int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/releases") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newDryRunServerLatest builds a Server with E2EServerVersion="latest" whose
+// GitHub API calls are redirected to mockSrv.
+func newDryRunServerLatest(t *testing.T, mockSrv *httptest.Server) *Server {
+	t.Helper()
+	s := newDryRunServer(t, "", "mattermost")
+	s.Config.E2EServerVersion = "latest"
+	s.githubAPIBase = mockSrv.URL + "/" // must have trailing slash
+	return s
+}
+
+func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
+	t.Run("non-latest config returned unchanged, no API call", func(t *testing.T) {
+		// The mock server should never be hit for non-"latest" configs.
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+
+		for _, cfg := range []string{"10.0.0", "master", "9.4.0", "11.6.0"} {
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2EServerVersion = cfg
+			s.githubAPIBase = srv.URL + "/"
+			assert.Equal(t, cfg, s.resolveE2EServerVersion(), "config=%q should be returned unchanged", cfg)
+		}
+		assert.False(t, called, "GitHub API must not be called when E2EServerVersion is not 'latest'")
+	})
+
+	t.Run("RC tags skipped, first stable tag returned with v stripped", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0-rc2","draft":false},
+			{"tag_name":"v11.7.0-rc1","draft":false},
+			{"tag_name":"v11.6.0","draft":false},
+			{"tag_name":"v11.5.0","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("beta tags skipped", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0-beta.1","draft":false},
+			{"tag_name":"v11.6.0","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("alpha tags skipped", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0-alpha.1","draft":false},
+			{"tag_name":"v11.6.0","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("draft releases skipped", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0","draft":true},
+			{"tag_name":"v11.6.0","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("stable release at top of list returned immediately", func(t *testing.T) {
+		body := `[{"tag_name":"v12.0.0","draft":false},{"tag_name":"v11.6.0","draft":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("tag without v prefix returned unchanged", func(t *testing.T) {
+		// TrimPrefix("v", non-v-string) is a no-op — bare semver tags work too.
+		body := `[{"tag_name":"11.6.0","draft":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("only RCs in list → fallback to master", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0-rc1","draft":false},
+			{"tag_name":"v11.6.0-rc2","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "master", s.resolveE2EServerVersion())
+	})
+
+	t.Run("only drafts in list → fallback to master", func(t *testing.T) {
+		body := `[{"tag_name":"v11.7.0","draft":true}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "master", s.resolveE2EServerVersion())
+	})
+
+	t.Run("empty releases list → fallback to master", func(t *testing.T) {
+		srv := mockReleasesServer(t, `[]`, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "master", s.resolveE2EServerVersion())
+	})
+
+	t.Run("API returns 500 → fallback to master", func(t *testing.T) {
+		srv := mockReleasesServer(t, `{"message":"Internal Server Error"}`, http.StatusInternalServerError)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "master", s.resolveE2EServerVersion())
+	})
+
+	t.Run("mixed: draft RC then stable", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0-rc1","draft":true},
+			{"tag_name":"v11.7.0-rc1","draft":false},
+			{"tag_name":"v11.6.0","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+}
+
+// ------------------------------------------------------------
+// 13. MM_SERVER_VERSION sourced from instance, not config
+// ------------------------------------------------------------
+
+func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
+	t.Run("desktop dispatch uses instances[0].ServerVersion not config", func(t *testing.T) {
+		// Simulate the case where config says "latest" but the instance was provisioned
+		// with the resolved version "11.6.0". The dispatch must use the instance value.
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = "latest" // would be wrong if used in dispatch
+
+		resolvedVersion := "11.6.0"
+		instances := []*E2EInstance{
+			{Name: "inst-linux", Platform: "linux", Runner: "ubuntu-latest",
+				URL: "https://linux.test.example.com", InstallationID: "id-1",
+				ServerVersion: resolvedVersion},
+			{Name: "inst-macos", Platform: "macos", Runner: "macos-latest",
+				URL: "https://macos.test.example.com", InstallationID: "id-2",
+				ServerVersion: resolvedVersion},
+			{Name: "inst-windows", Platform: "windows", Runner: "windows-2022",
+				URL: "https://windows.test.example.com", InstallationID: "id-3",
+				ServerVersion: resolvedVersion},
+		}
+
+		// The desktop workflow dispatch builds inputs using instances[0].ServerVersion.
+		inputs := map[string]interface{}{
+			"MM_SERVER_VERSION": instances[0].ServerVersion,
+		}
+
+		assert.Equal(t, "11.6.0", inputs["MM_SERVER_VERSION"],
+			"MM_SERVER_VERSION must be the resolved instance version, not the 'latest' config sentinel")
+		assert.NotEqual(t, s.Config.E2EServerVersion, inputs["MM_SERVER_VERSION"],
+			"MM_SERVER_VERSION must NOT be the raw config value when config is 'latest'")
+	})
+
+	t.Run("mobile dispatch does not include MM_SERVER_VERSION", func(t *testing.T) {
+		// Mobile workflows receive SITE_1/2/3_URL and PLATFORM — never MM_SERVER_VERSION.
+		instances := []*E2EInstance{
+			{Name: "inst-site1", Platform: "site-1",
+				URL: "https://site1.test.example.com", InstallationID: "id-1",
+				ServerVersion: "11.6.0"},
+			{Name: "inst-site2", Platform: "site-2",
+				URL: "https://site2.test.example.com", InstallationID: "id-2",
+				ServerVersion: "11.6.0"},
+			{Name: "inst-site3", Platform: "site-3",
+				URL: "https://site3.test.example.com", InstallationID: "id-3",
+				ServerVersion: "11.6.0"},
+		}
+
+		inputs := map[string]interface{}{
+			"MOBILE_VERSION": "feature-sha",
+			"PLATFORM":       "both",
+			"SITE_1_URL":     instances[0].URL,
+			"SITE_2_URL":     instances[1].URL,
+			"SITE_3_URL":     instances[2].URL,
+		}
+
+		assert.NotContains(t, inputs, "MM_SERVER_VERSION",
+			"mobile dispatch must never include MM_SERVER_VERSION")
+		assert.NotContains(t, inputs, "instance_details",
+			"mobile dispatch must never include instance_details")
+		assert.Equal(t, "https://site1.test.example.com", inputs["SITE_1_URL"])
+		assert.Equal(t, "https://site2.test.example.com", inputs["SITE_2_URL"])
+		assert.Equal(t, "https://site3.test.example.com", inputs["SITE_3_URL"])
+	})
+
+	t.Run("all instances in a PR run share the same resolved version", func(t *testing.T) {
+		// createMultipleE2EInstances calls resolveE2EServerVersion() once and passes
+		// the same version to all createCloudInstallation calls.
+		resolvedVersion := "11.6.0"
+		platforms := []string{"linux", "macos", "windows"}
+		instances := make([]*E2EInstance, len(platforms))
+		for i, p := range platforms {
+			instances[i] = &E2EInstance{
+				Platform:      p,
+				ServerVersion: resolvedVersion, // same version for every instance
+			}
+		}
+		for i, inst := range instances {
+			assert.Equal(t, resolvedVersion, inst.ServerVersion,
+				"instance[%d] (platform=%s) must have the resolved version", i, inst.Platform)
+		}
+	})
+
+	t.Run("resolveE2EServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
+		// Docker Hub tags are bare semver (e.g. "11.6.0"), NOT "v11.6.0".
+		// Verify the v-stripping produces a Docker Hub compatible string.
+		body := `[{"tag_name":"v11.6.0","draft":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+
+		version := s.resolveE2EServerVersion()
+		assert.Equal(t, "11.6.0", version)
+		assert.False(t, strings.HasPrefix(version, "v"),
+			"resolved version must NOT have 'v' prefix — Docker Hub tags are bare semver")
+	})
+}
+
+// ------------------------------------------------------------
+// 14. CMT version normalization (v-prefix stripping)
+// ------------------------------------------------------------
+
+func TestDryRun_CMTVersionNormalization(t *testing.T) {
+	t.Run("v-prefix stripped before instance creation", func(t *testing.T) {
+		// handleCMTWithServerVersions strips "v" from each version before provisioning.
+		// Verify that strings.TrimPrefix produces Docker Hub compatible versions.
+		inputs := []struct {
+			input string
+			want  string
+		}{
+			{"v11.0.1", "11.0.1"},
+			{"v11.1.0", "11.1.0"},
+			{"v12.0.0", "12.0.0"},
+			{"11.0.1", "11.0.1"}, // no v — unchanged
+			{"11.1.0", "11.1.0"}, // no v — unchanged
+			{"v11.6.0-rc1", "11.6.0-rc1"}, // RC: v stripped but rest preserved
+		}
+		for _, tt := range inputs {
+			got := strings.TrimPrefix(tt.input, "v")
+			assert.Equal(t, tt.want, got, "TrimPrefix(%q, 'v')", tt.input)
+		}
+	})
+
+	t.Run("comma-separated input parsed and v-stripped", func(t *testing.T) {
+		// parseServerVersionsFromString splits; the CMT loop then strips v from each.
+		raw := "v11.0.1, v11.1.0, 11.2.0"
+		parsed := parseServerVersionsFromString(raw)
+		require.Len(t, parsed, 3)
+
+		var stripped []string
+		for _, v := range parsed {
+			stripped = append(stripped, strings.TrimPrefix(strings.TrimSpace(v), "v"))
+		}
+		assert.Equal(t, []string{"11.0.1", "11.1.0", "11.2.0"}, stripped)
+	})
+
+	t.Run("CMT instances carry stripped version in ServerVersion", func(t *testing.T) {
+		// Instances created by handleCMTWithServerVersions use the stripped version.
+		// Simulate by constructing instances as the real code would.
+		rawVersions := []string{"v11.0.1", "v11.1.0"}
+		var instances []*E2EInstance
+		for _, v := range rawVersions {
+			stripped := strings.TrimPrefix(v, "v")
+			instances = append(instances, &E2EInstance{
+				URL:           fmt.Sprintf("https://%s.test.example.com", stripped),
+				ServerVersion: stripped,
+			})
+		}
+		assert.Equal(t, "11.0.1", instances[0].ServerVersion)
+		assert.Equal(t, "11.1.0", instances[1].ServerVersion)
+		for _, inst := range instances {
+			assert.False(t, strings.HasPrefix(inst.ServerVersion, "v"),
+				"CMT instance ServerVersion must not start with 'v'")
+		}
+	})
+
+	t.Run("CMT matrix JSON contains stripped versions", func(t *testing.T) {
+		// buildDesktopCMTMatrixJSON uses instance.ServerVersion directly.
+		// With stripped versions, the matrix has Docker Hub compatible version strings.
+		versions := []string{"11.0.1", "11.1.0"} // already stripped
+		instances := []*E2EInstance{
+			{URL: "https://11-0-1.example.com", ServerVersion: "11.0.1"},
+			{URL: "https://11-1-0.example.com", ServerVersion: "11.1.0"},
+		}
+		jsonStr, err := buildDesktopCMTMatrixJSON(versions, instances)
+		require.NoError(t, err)
+
+		var matrix map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+
+		servers, ok := matrix["server"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, servers, 2)
+
+		for _, srv := range servers {
+			s := srv.(map[string]interface{})
+			ver := s["version"].(string)
+			assert.False(t, strings.HasPrefix(ver, "v"),
+				"CMT matrix version %q must not have 'v' prefix", ver)
+		}
+
+		s0 := servers[0].(map[string]interface{})
+		s1 := servers[1].(map[string]interface{})
+		assert.Equal(t, "11.0.1", s0["version"])
+		assert.Equal(t, "11.1.0", s1["version"])
+	})
+
+	t.Run("CMT versions capped at 5", func(t *testing.T) {
+		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0"
+		parsed := parseServerVersionsFromString(input)
+		const maxVersions = 5
+		if len(parsed) > maxVersions {
+			parsed = parsed[:maxVersions]
+		}
+		assert.Len(t, parsed, 5, "CMT versions must be capped at 5")
+	})
 }

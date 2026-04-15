@@ -47,6 +47,11 @@ type Server struct {
 	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
+
+	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
+	// When non-empty (tests only), GitHub clients created inside this server will be
+	// redirected to this URL instead of the real GitHub API.
+	githubAPIBase string
 }
 
 const (

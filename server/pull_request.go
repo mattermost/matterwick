@@ -65,8 +65,11 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 		if s.isE2ELabel(label) {
-			logger.WithField("label", label).Info("PR E2E test label was removed, canceling workflow runs but keeping servers alive")
-			go s.cancelPRWorkflowRuns(pr, logger)
+			// Do not cancel in-progress workflow runs on label removal.
+			// The E2E workflow itself removes the label upon completion, so
+			// cancelling here would kill the still-finishing run. Human-triggered
+			// label removals are also left to run to completion.
+			logger.WithField("label", label).Info("PR E2E test label was removed, keeping workflow runs alive")
 			return
 		}
 		if s.isSpinWickLabel(label) {
