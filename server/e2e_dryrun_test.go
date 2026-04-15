@@ -16,15 +16,18 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 
+	gogithub "github.com/google/go-github/v32/github"
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -120,6 +123,18 @@ func newDryRunServer(t *testing.T, apiBase, org string) *Server {
 	}
 }
 
+// newTestGitHubClient creates a *github.Client whose BaseURL points at srv so that
+// production dispatch functions (triggerDesktopE2EWorkflow, triggerMobileE2EWorkflow, …)
+// send their HTTP requests to the mock server instead of api.github.com.
+func newTestGitHubClient(t *testing.T, srv *httptest.Server) *gogithub.Client {
+	t.Helper()
+	client := gogithub.NewClient(nil)
+	baseURL, err := url.Parse(srv.URL + "/")
+	require.NoError(t, err)
+	client.BaseURL = baseURL
+	return client
+}
+
 // makeDesktopInstances fabricates the 3 desktop instances (linux/macos/windows).
 func makeDesktopInstances() []*E2EInstance {
 	return []*E2EInstance{
@@ -183,20 +198,30 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 	})
 
 	t.Run("workflow inputs built correctly", func(t *testing.T) {
-		// MM_SERVER_VERSION must come from instances[0].ServerVersion, NOT from
-		// s.Config.E2EServerVersion. The instance stores the resolved version set at
-		// provisioning time, which may differ from config (e.g. config="latest").
-		workflowInputs := map[string]interface{}{
-			"instance_details":  instanceDetailsJSON,
-			"version_name":      "feature-branch",
-			"MM_TEST_USER_NAME": s.Config.E2EUsername,
-			"MM_SERVER_VERSION": instances[0].ServerVersion, // NOT s.Config.E2EServerVersion
+		// Drive the real triggerDesktopE2EWorkflow so assertions validate the
+		// actual payload produced by production code, not a hand-built map.
+		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
+		client := newTestGitHubClient(t, ghSrv)
+		pr := &model.PullRequest{
+			RepoOwner: "mattermost",
+			RepoName:  "mattermost-desktop",
+			Number:    42,
+			Ref:       "feature-branch",
+			Sha:       "abc123",
 		}
 
-		assert.Equal(t, instances[0].ServerVersion, workflowInputs["MM_SERVER_VERSION"])
-		assert.Equal(t, "e2eadmin", workflowInputs["MM_TEST_USER_NAME"])
-		assert.Equal(t, "feature-branch", workflowInputs["version_name"])
-		assert.NotEmpty(t, workflowInputs["instance_details"])
+		err := s.triggerDesktopE2EWorkflow(context.Background(), client, pr, instances)
+		require.NoError(t, err)
+		require.Len(t, *captures, 1)
+
+		c := (*captures)[0]
+		// MM_SERVER_VERSION must come from instances[0].ServerVersion, NOT from
+		// s.Config.E2EServerVersion (which may be "latest").
+		assert.Equal(t, instances[0].ServerVersion, c.Inputs["MM_SERVER_VERSION"],
+			"MM_SERVER_VERSION must come from instances[0].ServerVersion, not from config")
+		assert.Equal(t, s.Config.E2EUsername, c.Inputs["MM_TEST_USER_NAME"])
+		assert.Equal(t, pr.Ref, c.Inputs["version_name"])
+		assert.NotEmpty(t, c.Inputs["instance_details"])
 	})
 
 	t.Run("workflow path targets e2e-functional.yml", func(t *testing.T) {
@@ -1067,8 +1092,8 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 
 func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 	t.Run("desktop dispatch uses instances[0].ServerVersion not config", func(t *testing.T) {
-		// Simulate the case where config says "latest" but the instance was provisioned
-		// with the resolved version "11.6.0". The dispatch must use the instance value.
+		// Config says "latest" but instances were provisioned with resolved "11.6.0".
+		// Drive triggerDesktopE2EWorkflow so we assert the real payload, not a hand-built map.
 		s := newDryRunServer(t, "", "mattermost")
 		s.Config.E2EServerVersion = "latest" // would be wrong if used in dispatch
 
@@ -1085,19 +1110,30 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 				ServerVersion: resolvedVersion},
 		}
 
-		// The desktop workflow dispatch builds inputs using instances[0].ServerVersion.
-		inputs := map[string]interface{}{
-			"MM_SERVER_VERSION": instances[0].ServerVersion,
+		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
+		client := newTestGitHubClient(t, ghSrv)
+		pr := &model.PullRequest{
+			RepoOwner: "mattermost",
+			RepoName:  "mattermost-desktop",
+			Number:    99,
+			Ref:       "feature-branch",
+			Sha:       "abc123",
 		}
 
-		assert.Equal(t, "11.6.0", inputs["MM_SERVER_VERSION"],
+		err := s.triggerDesktopE2EWorkflow(context.Background(), client, pr, instances)
+		require.NoError(t, err)
+		require.Len(t, *captures, 1)
+
+		c := (*captures)[0]
+		assert.Equal(t, "11.6.0", c.Inputs["MM_SERVER_VERSION"],
 			"MM_SERVER_VERSION must be the resolved instance version, not the 'latest' config sentinel")
-		assert.NotEqual(t, s.Config.E2EServerVersion, inputs["MM_SERVER_VERSION"],
+		assert.NotEqual(t, s.Config.E2EServerVersion, c.Inputs["MM_SERVER_VERSION"],
 			"MM_SERVER_VERSION must NOT be the raw config value when config is 'latest'")
 	})
 
 	t.Run("mobile dispatch does not include MM_SERVER_VERSION", func(t *testing.T) {
-		// Mobile workflows receive SITE_1/2/3_URL and PLATFORM — never MM_SERVER_VERSION.
+		// Drive triggerMobileE2EWorkflow so we assert the real payload, not a hand-built map.
+		s := newDryRunServer(t, "", "mattermost")
 		instances := []*E2EInstance{
 			{Name: "inst-site1", Platform: "site-1",
 				URL: "https://site1.test.example.com", InstallationID: "id-1",
@@ -1110,21 +1146,28 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 				ServerVersion: "11.6.0"},
 		}
 
-		inputs := map[string]interface{}{
-			"MOBILE_VERSION": "feature-sha",
-			"PLATFORM":       "both",
-			"SITE_1_URL":     instances[0].URL,
-			"SITE_2_URL":     instances[1].URL,
-			"SITE_3_URL":     instances[2].URL,
+		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
+		client := newTestGitHubClient(t, ghSrv)
+		pr := &model.PullRequest{
+			RepoOwner: "mattermost",
+			RepoName:  "mattermost-mobile",
+			Number:    99,
+			Ref:       "feature-branch",
+			Sha:       "feature-sha",
 		}
 
-		assert.NotContains(t, inputs, "MM_SERVER_VERSION",
+		err := s.triggerMobileE2EWorkflow(context.Background(), client, pr, instances, "both")
+		require.NoError(t, err)
+		require.Len(t, *captures, 1)
+
+		c := (*captures)[0]
+		assert.NotContains(t, c.Inputs, "MM_SERVER_VERSION",
 			"mobile dispatch must never include MM_SERVER_VERSION")
-		assert.NotContains(t, inputs, "instance_details",
+		assert.NotContains(t, c.Inputs, "instance_details",
 			"mobile dispatch must never include instance_details")
-		assert.Equal(t, "https://site1.test.example.com", inputs["SITE_1_URL"])
-		assert.Equal(t, "https://site2.test.example.com", inputs["SITE_2_URL"])
-		assert.Equal(t, "https://site3.test.example.com", inputs["SITE_3_URL"])
+		assert.Equal(t, "https://site1.test.example.com", c.Inputs["SITE_1_URL"])
+		assert.Equal(t, "https://site2.test.example.com", c.Inputs["SITE_2_URL"])
+		assert.Equal(t, "https://site3.test.example.com", c.Inputs["SITE_3_URL"])
 	})
 
 	t.Run("all instances in a PR run share the same resolved version", func(t *testing.T) {
