@@ -154,7 +154,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	})
 
 	// Name format: {type}-{version}-{platform}-{hex6}
-	serverVersion := s.Config.E2EServerVersion
+	serverVersion := s.resolveE2EServerVersion()
 	if version != "" {
 		serverVersion = version
 	}

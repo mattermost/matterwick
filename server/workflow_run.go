@@ -159,7 +159,7 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 		return
 	}
 
-	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.Config.E2EServerVersion, "nightly")
+	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveE2EServerVersion(), "nightly")
 	if err != nil {
 		logger.WithError(err).Error("Failed to create nightly E2E instances")
 		return
@@ -310,6 +310,8 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		if version == "" {
 			continue
 		}
+		// Docker Hub tags use bare semver (e.g. "11.6.0"), not "v11.6.0".
+		version = strings.TrimPrefix(version, "v")
 
 		logger.WithField("version", version).Info("Creating CMT instance for server version")
 

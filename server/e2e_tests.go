@@ -187,6 +187,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		"platforms": len(platforms),
 	})
 
+	version := s.resolveE2EServerVersion()
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 	// Name format: {type}-pr-{pr}-{platform}-{hex6}
@@ -214,7 +215,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 				instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, uid,
 			)
 			logger.WithField("instance", instanceName).Info("Creating E2E instance")
-			inst, err := s.createCloudInstallation(ctx, instanceName, s.Config.E2EServerVersion, username, password, instanceType, logger)
+			inst, err := s.createCloudInstallation(ctx, instanceName, version, username, password, instanceType, logger)
 			if err != nil {
 				cancel() // signal sibling goroutines to stop waiting
 				results[idx] = result{err: err}
@@ -496,7 +497,7 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 			"instance_details":  instanceDetailsJSON,
 			"version_name":      pr.Ref,
 			"MM_TEST_USER_NAME": s.Config.E2EUsername,
-			"MM_SERVER_VERSION": s.Config.E2EServerVersion,
+			"MM_SERVER_VERSION": instances[0].ServerVersion,
 			"pr_number":         fmt.Sprintf("%d", pr.Number),
 		},
 	}
@@ -716,6 +717,89 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 	logger.Info("Startup non-PR E2E instance cleanup complete")
 }
 
+// resolveE2EServerVersion returns the Mattermost server version to use for E2E instances.
+// If E2EServerVersion is "latest", it fetches the mattermost/mattermost GitHub releases,
+// skips drafts, prerelease-flagged releases, and RC/beta/alpha tag-name patterns, then
+// returns the first (newest) fully stable tag stripped of its "v" prefix
+// (e.g. "v11.6.0" → "11.6.0") to match the Docker Hub tag format.
+//
+// The resolved version is cached in memory for 1 hour so that back-to-back provisioning
+// calls (e.g. three parallel platform instances) share a single GitHub API round-trip.
+// Falls back to "master" on any API error or when no stable release is found.
+func (s *Server) resolveE2EServerVersion() string {
+	if s.Config.E2EServerVersion != "latest" {
+		return s.Config.E2EServerVersion
+	}
+
+	const cacheTTL = 1 * time.Hour
+
+	// Return cached value if still fresh.
+	s.e2eVersionCacheLock.Lock()
+	if s.e2eVersionCache != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
+		cached := s.e2eVersionCache
+		s.e2eVersionCacheLock.Unlock()
+		s.Logger.WithField("version", cached).Debug("[resolveE2EServerVersion] Returning cached version")
+		return cached
+	}
+	s.e2eVersionCacheLock.Unlock()
+
+	// 10-second timeout prevents blocking instance-creation goroutines indefinitely
+	// if the GitHub API is slow or unreachable.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+
+	// Redirect to a mock server when running tests (githubAPIBase is empty in production).
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+	}
+
+	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=20", nil)
+	if err != nil {
+		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to build request, falling back to master")
+		return "master"
+	}
+	if _, err = client.Do(ctx, req, &releases); err != nil {
+		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to fetch releases, falling back to master")
+		return "master"
+	}
+
+	for _, r := range releases {
+		// Skip drafts and GitHub's explicit prerelease flag first.
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		// Also skip by tag-name pattern as a secondary guard for releases whose
+		// prerelease flag may not be set correctly (e.g. some RC tags).
+		lower := strings.ToLower(r.TagName)
+		if strings.Contains(lower, "-rc") || strings.Contains(lower, "-beta") || strings.Contains(lower, "-alpha") {
+			continue
+		}
+		// Strip "v" prefix to match Docker Hub tag format (e.g. "v11.6.0" → "11.6.0").
+		version := strings.TrimPrefix(r.TagName, "v")
+		s.Logger.WithField("version", version).Info("[resolveE2EServerVersion] Resolved latest Mattermost server version")
+
+		s.e2eVersionCacheLock.Lock()
+		s.e2eVersionCache = version
+		s.e2eVersionCacheTime = time.Now()
+		s.e2eVersionCacheLock.Unlock()
+
+		return version
+	}
+
+	s.Logger.Warn("[resolveE2EServerVersion] No stable release found, falling back to master")
+	return "master"
+}
+
 // destroyE2EInstances destroys all given E2E instances
 func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
 	for _, instance := range instances {
@@ -930,7 +1014,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	// Determine the server version to use for the workflow.
 	// Default to the configured E2E server version, but prefer the actual
 	// provisioned version from the instance details when available.
-	serverVersion := s.Config.E2EServerVersion
+	serverVersion := s.resolveE2EServerVersion()
 	if instanceDetailsJSON != "" {
 		var instances []struct {
 			ServerVersion string `json:"server_version"`

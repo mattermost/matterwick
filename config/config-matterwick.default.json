@@ -75,7 +75,7 @@
   "E2EMobileIOSLabel": "E2E/Run-iOS",
   "E2EMobileAndroidLabel": "E2E/Run-Android",
   "E2EUsername": "admin",
-  "E2EServerVersion": "master",
+  "E2EServerVersion": "latest",
   "E2EAutoTriggerOnRelease": true,
   "E2EAutoTriggerOnMaster": true,
   "E2EReleasePatternPrefix": "release-",

@@ -47,6 +47,20 @@ type Server struct {
 	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
+
+	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
+	// When non-empty (tests only), GitHub clients created inside this server will be
+	// redirected to this URL instead of the real GitHub API.
+	githubAPIBase string
+
+	// e2eVersionCache holds the last successfully resolved "latest" server version so
+	// that back-to-back E2E provisioning requests (e.g. three parallel platform
+	// instances) share one GitHub API round-trip instead of each making their own.
+	// The cache is intentionally short-lived: new stable releases ship at most once a
+	// month, so a 1-hour TTL gives a good hit rate without risking stale data.
+	e2eVersionCache     string
+	e2eVersionCacheTime time.Time
+	e2eVersionCacheLock sync.Mutex
 }
 
 const (
