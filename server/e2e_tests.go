@@ -719,14 +719,35 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 
 // resolveE2EServerVersion returns the Mattermost server version to use for E2E instances.
 // If E2EServerVersion is "latest", it fetches the mattermost/mattermost GitHub releases,
-// skips RC/beta/alpha tags by name, and returns the first (newest) full release tag
-// stripped of its "v" prefix (e.g. "v11.6.0" → "11.6.0"), matching the Docker Hub tag format.
+// skips drafts, prerelease-flagged releases, and RC/beta/alpha tag-name patterns, then
+// returns the first (newest) fully stable tag stripped of its "v" prefix
+// (e.g. "v11.6.0" → "11.6.0") to match the Docker Hub tag format.
+//
+// The resolved version is cached in memory for 1 hour so that back-to-back provisioning
+// calls (e.g. three parallel platform instances) share a single GitHub API round-trip.
+// Falls back to "master" on any API error or when no stable release is found.
 func (s *Server) resolveE2EServerVersion() string {
 	if s.Config.E2EServerVersion != "latest" {
 		return s.Config.E2EServerVersion
 	}
 
-	ctx := context.Background()
+	const cacheTTL = 1 * time.Hour
+
+	// Return cached value if still fresh.
+	s.e2eVersionCacheLock.Lock()
+	if s.e2eVersionCache != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
+		cached := s.e2eVersionCache
+		s.e2eVersionCacheLock.Unlock()
+		s.Logger.WithField("version", cached).Debug("[resolveE2EServerVersion] Returning cached version")
+		return cached
+	}
+	s.e2eVersionCacheLock.Unlock()
+
+	// 10-second timeout prevents blocking instance-creation goroutines indefinitely
+	// if the GitHub API is slow or unreachable.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	// Redirect to a mock server when running tests (githubAPIBase is empty in production).
@@ -737,8 +758,9 @@ func (s *Server) resolveE2EServerVersion() string {
 	}
 
 	var releases []struct {
-		TagName string `json:"tag_name"`
-		Draft   bool   `json:"draft"`
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
 	}
 
 	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=20", nil)
@@ -752,9 +774,12 @@ func (s *Server) resolveE2EServerVersion() string {
 	}
 
 	for _, r := range releases {
-		if r.Draft {
+		// Skip drafts and GitHub's explicit prerelease flag first.
+		if r.Draft || r.Prerelease {
 			continue
 		}
+		// Also skip by tag-name pattern as a secondary guard for releases whose
+		// prerelease flag may not be set correctly (e.g. some RC tags).
 		lower := strings.ToLower(r.TagName)
 		if strings.Contains(lower, "-rc") || strings.Contains(lower, "-beta") || strings.Contains(lower, "-alpha") {
 			continue
@@ -762,6 +787,12 @@ func (s *Server) resolveE2EServerVersion() string {
 		// Strip "v" prefix to match Docker Hub tag format (e.g. "v11.6.0" → "11.6.0").
 		version := strings.TrimPrefix(r.TagName, "v")
 		s.Logger.WithField("version", version).Info("[resolveE2EServerVersion] Resolved latest Mattermost server version")
+
+		s.e2eVersionCacheLock.Lock()
+		s.e2eVersionCache = version
+		s.e2eVersionCacheTime = time.Now()
+		s.e2eVersionCacheLock.Unlock()
+
 		return version
 	}
 

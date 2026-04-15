@@ -979,6 +979,86 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		s := newDryRunServerLatest(t, srv)
 		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
 	})
+
+	t.Run("prerelease flag skipped even when tag name looks stable", func(t *testing.T) {
+		// GitHub marks v11.6.0 as prerelease=true (unusual but possible).
+		// The prerelease field must take precedence over the tag name check.
+		body := `[
+			{"tag_name":"v11.6.0","draft":false,"prerelease":true},
+			{"tag_name":"v11.5.0","draft":false,"prerelease":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.5.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("prerelease and rc tag both skipped, stable returned", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.0","draft":false,"prerelease":true},
+			{"tag_name":"v11.6.1-rc1","draft":false,"prerelease":false},
+			{"tag_name":"v11.6.0","draft":false,"prerelease":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+	})
+
+	t.Run("resolved version is cached — API called only once", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/releases") {
+				callCount++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`[{"tag_name":"v11.6.0","draft":false,"prerelease":false}]`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServerLatest(t, srv)
+
+		v1 := s.resolveE2EServerVersion()
+		v2 := s.resolveE2EServerVersion()
+		v3 := s.resolveE2EServerVersion()
+
+		assert.Equal(t, "11.6.0", v1)
+		assert.Equal(t, "11.6.0", v2)
+		assert.Equal(t, "11.6.0", v3)
+		assert.Equal(t, 1, callCount, "GitHub API must be called exactly once; subsequent calls use the cache")
+	})
+
+	t.Run("fallback master is not cached — retried on next call", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/releases") {
+				callCount++
+				// First call fails; second call succeeds.
+				if callCount == 1 {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`[{"tag_name":"v11.6.0","draft":false,"prerelease":false}]`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServerLatest(t, srv)
+
+		v1 := s.resolveE2EServerVersion() // API error → fallback "master" (not cached)
+		v2 := s.resolveE2EServerVersion() // retried → "11.6.0" (now cached)
+		v3 := s.resolveE2EServerVersion() // cache hit → "11.6.0"
+
+		assert.Equal(t, "master", v1, "first call: API error should fall back to master")
+		assert.Equal(t, "11.6.0", v2, "second call: should retry and resolve correctly")
+		assert.Equal(t, "11.6.0", v3, "third call: should return cached value")
+		assert.Equal(t, 2, callCount, "API should be called twice: once for the failed attempt, once for the retry")
+	})
 }
 
 // ------------------------------------------------------------
