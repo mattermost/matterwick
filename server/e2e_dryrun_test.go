@@ -98,6 +98,7 @@ func mockGitHubServer(t *testing.T, status int) (*httptest.Server, *[]dispatchCa
 
 		w.WriteHeader(status)
 	}))
+	t.Cleanup(srv.Close)
 
 	return srv, &captures
 }
