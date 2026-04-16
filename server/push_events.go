@@ -115,6 +115,15 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 	logger.WithField("instanceCount", len(instances)).Info("E2E instances created successfully")
 
+	// Fail fast if the push event carried no commit SHA — an empty SHA would
+	// produce a malformed tracking key and send an empty MOBILE_VERSION to the
+	// test workflow.
+	if sha == "" {
+		logger.Error("Push event has no commit SHA, skipping E2E dispatch")
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
+
 	// Track instances BEFORE dispatching so that a fast-completing workflow_run
 	// completed event cannot race ahead of us and find nothing to clean up.
 	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, sha)

@@ -34,12 +34,11 @@ type E2EInstance struct {
 	ServerVersion  string `json:"server_version"`
 }
 
-// e2eUniqueSuffix returns an 8-character hex suffix for instance name uniqueness.
-// Uses the lower 32 bits of the nanosecond clock so that two calls within the
-// same second produce different values, preventing 409 conflicts when duplicate
-// webhook deliveries trigger concurrent instance creation.
+// e2eUniqueSuffix returns an 8-character random hex suffix for instance name uniqueness.
+// Uses cloudModel.NewID (crypto/rand-based UUID) truncated to 8 chars so that
+// concurrent calls always produce distinct values regardless of clock resolution.
 func e2eUniqueSuffix() string {
-	return fmt.Sprintf("%08x", uint32(time.Now().UnixNano()))
+	return cloudModel.NewID()[:8]
 }
 
 // sanitizeForDNS lowercases and replaces non-DNS characters with hyphens.
@@ -97,20 +96,23 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
-	// Guard against duplicate webhook deliveries: if another goroutine is already
-	// handling this PR key (check, cloud lookup, or 30-min creation), drop the
-	// duplicate rather than racing to create conflicting cloud installations.
+	// Guard against duplicate webhook deliveries. The in-progress key includes
+	// the test platform so that a second mobile label with a *different* platform
+	// (e.g. E2E/Run-Android while E2E/Run-iOS is provisioning) is not incorrectly
+	// dropped — it will reuse the in-flight instances once they are stored, or
+	// create its own if they are not yet available.
+	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
 	s.e2eInProgressLock.Lock()
-	if s.e2eInProgress[key] {
+	if s.e2eInProgress[inProgressKey] {
 		s.e2eInProgressLock.Unlock()
-		logger.Warn("E2E instance creation already in progress for this PR, skipping duplicate request")
+		logger.Warn("E2E instance creation already in progress for this PR and platform, skipping duplicate request")
 		return
 	}
-	s.e2eInProgress[key] = true
+	s.e2eInProgress[inProgressKey] = true
 	s.e2eInProgressLock.Unlock()
 	defer func() {
 		s.e2eInProgressLock.Lock()
-		delete(s.e2eInProgress, key)
+		delete(s.e2eInProgress, inProgressKey)
 		s.e2eInProgressLock.Unlock()
 	}()
 

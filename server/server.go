@@ -49,11 +49,15 @@ type Server struct {
 	e2eInstancesLock sync.Mutex
 
 	// e2eInProgress guards against concurrent handleE2ETestRequest executions for the
-	// same PR key (e.g. duplicate webhook deliveries). Only one goroutine per key may
-	// run the check-and-create flow at a time; a second arrival while the first is
-	// still running is silently dropped.
+	// same PR+platform key (e.g. duplicate webhook deliveries). Only one goroutine per
+	// key may run the check-and-create flow at a time; a second arrival while the first
+	// is still running is silently dropped.
 	e2eInProgress     map[string]bool
 	e2eInProgressLock sync.Mutex
+
+	// stopCh is closed by Stop() to signal long-running background goroutines
+	// (e.g. the periodic E2E cleanup ticker) to exit cleanly.
+	stopCh chan struct{}
 
 	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
 	// When non-empty (tests only), GitHub clients created inside this server will be
@@ -97,6 +101,7 @@ func New(config *MatterwickConfig) *Server {
 		envMaps:       make(map[string]cloudModel.EnvVarMap),
 		e2eInstances:  make(map[string][]*E2EInstance),
 		e2eInProgress: make(map[string]bool),
+		stopCh:        make(chan struct{}),
 	}
 
 	if !isAwsConfigDefined() {
@@ -133,8 +138,13 @@ func (s *Server) Start() {
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			s.cleanupStaleNonPRE2EInstances()
+		for {
+			select {
+			case <-ticker.C:
+				s.cleanupStaleNonPRE2EInstances()
+			case <-s.stopCh:
+				return
+			}
 		}
 	}()
 
@@ -154,6 +164,7 @@ func (s *Server) Start() {
 // Stop stops a server
 func (s *Server) Stop() {
 	s.Logger.Info("Stopping MatterWick")
+	close(s.stopCh)
 	manners.Close()
 }
 
