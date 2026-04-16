@@ -64,7 +64,8 @@ type Server struct {
 
 	// stopCh is closed by Stop() to signal long-running background goroutines
 	// (e.g. the periodic E2E cleanup ticker) to exit cleanly.
-	stopCh chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
 
 	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
 	// When non-empty (tests only), GitHub clients created inside this server will be
@@ -172,7 +173,7 @@ func (s *Server) Start() {
 // Stop stops a server
 func (s *Server) Stop() {
 	s.Logger.Info("Stopping MatterWick")
-	close(s.stopCh)
+	s.stopOnce.Do(func() { close(s.stopCh) })
 	manners.Close()
 }
 
