@@ -641,13 +641,6 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 
 	// Fallback: catch orphans from restarts, map overwrites, or failed goroutines
 	s.cleanupOrphanedE2EInstances(pr, logger)
-
-	// Remove the generation counter for this key now that cleanup is complete.
-	// Leaving stale entries would cause e2ePRCleanupGeneration to grow without
-	// bound across the lifetime of the server (one entry per cleaned-up PR).
-	s.e2ePRCleanupGenerationLock.Lock()
-	delete(s.e2ePRCleanupGeneration, key)
-	s.e2ePRCleanupGenerationLock.Unlock()
 }
 
 // cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
