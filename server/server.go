@@ -48,6 +48,13 @@ type Server struct {
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
 
+	// e2eInProgress guards against concurrent handleE2ETestRequest executions for the
+	// same PR key (e.g. duplicate webhook deliveries). Only one goroutine per key may
+	// run the check-and-create flow at a time; a second arrival while the first is
+	// still running is silently dropped.
+	e2eInProgress     map[string]bool
+	e2eInProgressLock sync.Mutex
+
 	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
 	// When non-empty (tests only), GitHub clients created inside this server will be
 	// redirected to this URL instead of the real GitHub API.
@@ -87,8 +94,9 @@ func New(config *MatterwickConfig) *Server {
 		StartTime:       time.Now(),
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
-		envMaps:         make(map[string]cloudModel.EnvVarMap),
-		e2eInstances:    make(map[string][]*E2EInstance),
+		envMaps:       make(map[string]cloudModel.EnvVarMap),
+		e2eInstances:  make(map[string][]*E2EInstance),
+		e2eInProgress: make(map[string]bool),
 	}
 
 	if !isAwsConfigDefined() {
@@ -112,10 +120,23 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
-	// Destroy any non-PR E2E instances left over from a previous run.
-	// Must run before the HTTP listener starts so that cleanup completes before
-	// new webhook events can arrive and re-create conflicting instances.
-	s.cleanupNonPRE2EInstancesOnStartup()
+	// Destroy stale non-PR E2E instances left from a previous run immediately on startup,
+	// then continue scanning periodically so a mid-run restart doesn't leave orphaned
+	// instances alive until the *next* matterwick restart.
+	// The scan interval is half the configured max-age so the worst-case orphan lifetime
+	// is maxAge + interval ≈ 1.5× maxAge.
+	s.cleanupStaleNonPRE2EInstances()
+	go func() {
+		interval := s.e2eInstanceMaxAge() / 2
+		if interval < 30*time.Minute {
+			interval = 30 * time.Minute
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.cleanupStaleNonPRE2EInstances()
+		}
+	}()
 
 	s.initializeRouter()
 

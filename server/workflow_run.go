@@ -129,9 +129,30 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// --- Test workflow completion: sha-based cleanup for push events and nightly runs ---
+	// --- Test workflow completion: clean up provisioned instances ---
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		logger.Info("Test workflow completed, checking for sha-based instance cleanup")
+		logger.Info("Test workflow completed, checking for instance cleanup")
+
+		// Primary path: direct tracking-key lookup using the key embedded in dispatch
+		// inputs. Immune to SHA mismatch (new commits during ~30 min provisioning window)
+		// and to runID collisions (two runs sharing the same branch HEAD sha).
+		// Reading a nil Inputs map in Go returns "" safely — no nil check required.
+		if trackingKey := payload.WorkflowRun.Inputs["mw_tracking_key"]; trackingKey != "" {
+			s.e2eInstancesLock.Lock()
+			instances := s.e2eInstances[trackingKey]
+			delete(s.e2eInstances, trackingKey)
+			s.e2eInstancesLock.Unlock()
+			if len(instances) > 0 {
+				logger.WithField("tracking_key", trackingKey).Info("Destroying instances by tracking key")
+				s.destroyE2EInstances(instances, logger)
+			} else {
+				logger.WithField("tracking_key", trackingKey).Debug("No in-memory instances for tracking key (matterwick restarted or already cleaned)")
+			}
+			return
+		}
+
+		// Fallback: SHA-based scan for runs dispatched before mw_tracking_key was added.
+		logger.Debug("No mw_tracking_key in workflow inputs, falling back to SHA-based instance cleanup")
 		s.findAndDestroyInstancesBySHA(repoName, headSHA, logger)
 		return
 	}
@@ -201,8 +222,10 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 			s.destroyE2EInstances(instances, logger)
 			return
 		}
-		// Dispatch to the exact SHA so workflow_run completed event matches the tracking key.
-		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, sha, sha, instanceDetailsJSON, runType, nightly)
+		// Pass the tracking key so the workflow_run completed handler can clean up by
+		// direct key lookup rather than SHA suffix matching (immune to new commits during
+		// the ~30 min instance-creation window).
+		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType, key, nightly)
 	} else {
 		if len(instances) < 3 {
 			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
@@ -212,9 +235,8 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 			s.destroyE2EInstances(instances, logger)
 			return
 		}
-		// Dispatch to the exact SHA so workflow_run completed event matches the tracking key.
-		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, sha, sha,
-			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
+		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, branch, sha,
+			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType, key)
 	}
 
 	if dispatchErr != nil {
@@ -357,9 +379,9 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		return
 	}
 
-	// Dispatch to the exact SHA so the completed workflow_run event carries the same
-	// head_sha, allowing findAndDestroyInstancesBySHA to match the tracking key.
-	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, runID, logger); err != nil {
+	// Pass the tracking key so the workflow_run completed handler can clean up by
+	// direct key lookup rather than SHA suffix matching.
+	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, key, runID, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
@@ -472,17 +494,19 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
-// CMT_MATRIX JSON. Dispatches with ref=sha so the resulting workflow_run.head_sha matches
-// the tracking key suffix, enabling sha-based cleanup on completion.
+// CMT_MATRIX JSON. trackingKey is the s.e2eInstances map key for this run; it is
+// embedded as "mw_tracking_key" in the workflow inputs so the workflow_run completed
+// handler can do a direct key lookup instead of fragile SHA suffix matching.
 // runID is the CMT provisioner workflow run ID, passed as cmt_run_id so the test workflow
 // can call back to Matterwick for instance cleanup.
-func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
+func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, trackingKey string, runID int64, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	workflowInputs := map[string]interface{}{
-		"CMT_MATRIX": cmtMatrixJSON,
-		"cmt_run_id": fmt.Sprintf("%d", runID),
+		"CMT_MATRIX":      cmtMatrixJSON,
+		"cmt_run_id":      fmt.Sprintf("%d", runID),
+		"mw_tracking_key": trackingKey,
 	}
 	if instanceType == "desktop" {
 		workflowInputs["DESKTOP_VERSION"] = branch
@@ -491,14 +515,15 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrix
 	}
 
 	logger.WithFields(logrus.Fields{
-		"ref":          sha,
+		"ref":          branch,
 		"instanceType": instanceType,
 	}).Debug("Dispatching compatibility-matrix-testing.yml")
 
+	// GitHub workflow_dispatch requires a branch or tag name as ref, not a commit SHA.
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/compatibility-matrix-testing.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
-			"ref":    sha,
+			"ref":    branch,
 			"inputs": workflowInputs,
 		})
 	if err != nil {

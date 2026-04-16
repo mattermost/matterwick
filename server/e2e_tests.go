@@ -34,9 +34,12 @@ type E2EInstance struct {
 	ServerVersion  string `json:"server_version"`
 }
 
-// e2eUniqueSuffix returns an 8-character hex timestamp for instance name uniqueness.
+// e2eUniqueSuffix returns an 8-character hex suffix for instance name uniqueness.
+// Uses the lower 32 bits of the nanosecond clock so that two calls within the
+// same second produce different values, preventing 409 conflicts when duplicate
+// webhook deliveries trigger concurrent instance creation.
 func e2eUniqueSuffix() string {
-	return fmt.Sprintf("%08x", time.Now().Unix())
+	return fmt.Sprintf("%08x", uint32(time.Now().UnixNano()))
 }
 
 // sanitizeForDNS lowercases and replaces non-DNS characters with hyphens.
@@ -93,6 +96,23 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+
+	// Guard against duplicate webhook deliveries: if another goroutine is already
+	// handling this PR key (check, cloud lookup, or 30-min creation), drop the
+	// duplicate rather than racing to create conflicting cloud installations.
+	s.e2eInProgressLock.Lock()
+	if s.e2eInProgress[key] {
+		s.e2eInProgressLock.Unlock()
+		logger.Warn("E2E instance creation already in progress for this PR, skipping duplicate request")
+		return
+	}
+	s.e2eInProgress[key] = true
+	s.e2eInProgressLock.Unlock()
+	defer func() {
+		s.e2eInProgressLock.Lock()
+		delete(s.e2eInProgress, key)
+		s.e2eInProgressLock.Unlock()
+	}()
 
 	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
 	s.e2eInstancesLock.Lock()
@@ -639,21 +659,33 @@ func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logru
 	}
 }
 
-// cleanupNonPRE2EInstancesOnStartup destroys stale non-PR E2E instances left over from a
-// previous matterwick run. When matterwick restarts, the in-memory tracking map is wiped,
-// making push/nightly/CMT instances untrackable — the workflow_run(completed) cleanup path
-// will find nothing. A 8-hour age threshold is used so that instances still being actively
-// used by tests that started before the restart are NOT destroyed mid-run.
+// e2eInstanceMaxAge returns the configured maximum age for non-PR E2E instances before
+// they are considered orphaned and eligible for deletion by the periodic cleanup scan.
+// Falls back to 3 hours when the config value is 0 (unset).
+func (s *Server) e2eInstanceMaxAge() time.Duration {
+	if s.Config.E2EInstanceMaxAge > 0 {
+		return time.Duration(s.Config.E2EInstanceMaxAge) * time.Hour
+	}
+	return 3 * time.Hour
+}
+
+// cleanupStaleNonPRE2EInstances destroys non-PR E2E instances (push/nightly/CMT) that
+// are older than e2eInstanceMaxAge() and not already in a deletion state.
 //
-// Reasoning: E2E tests (nightly, push, CMT) take at most a few hours. Any non-PR instance
-// older than 8 hours whose tracking was lost must be orphaned.
+// Called on startup (to recover from a previous matterwick crash/restart that wiped the
+// in-memory tracking map) and periodically during normal operation (so orphaned instances
+// from a mid-run restart are cleaned up without waiting for the next matterwick restart).
+//
+// The age threshold prevents destroying instances that are still actively used by a test
+// that started before the restart. Set E2EInstanceMaxAge to a value larger than the
+// longest expected E2E test run duration.
 //
 // PR instances (identified by "-pr-" in their OwnerID) are always skipped — handleE2ECleanup
-// on PR close, which includes DNS orphan cleanup, manages their lifecycle.
-func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
-	const maxAge = 8 * time.Hour
-	logger := s.Logger.WithField("type", "startup_e2e_cleanup")
-	logger.WithField("max_age_hours", 8).Info("Scanning for stale non-PR E2E instances from previous matterwick run")
+// on PR close manages their lifecycle via cloud-API orphan scan.
+func (s *Server) cleanupStaleNonPRE2EInstances() {
+	maxAge := s.e2eInstanceMaxAge()
+	logger := s.Logger.WithField("type", "periodic_e2e_cleanup")
+	logger.WithField("max_age_hours", maxAge.Hours()).Info("Scanning for stale non-PR E2E instances")
 
 	cutoffMs := time.Now().Add(-maxAge).UnixMilli()
 
@@ -664,7 +696,7 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 			Paging: cloudModel.AllPagesNotDeleted(),
 		})
 		if err != nil {
-			logger.WithError(err).Errorf("Failed to query %s instances on startup", instanceType)
+			logger.WithError(err).Errorf("Failed to query %s instances", instanceType)
 			continue
 		}
 
@@ -672,7 +704,7 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 			// Guard against a nil embedded Installation — must come first, all other
 			// field accesses (OwnerID, CreateAt, State, ID) are on the embedded struct.
 			if inst.Installation == nil {
-				logger.Warn("Skipping instance with nil Installation pointer in startup cleanup")
+				logger.Warn("Skipping instance with nil Installation pointer in cleanup scan")
 				continue
 			}
 
@@ -682,13 +714,12 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 				continue
 			}
 
-			// Skip instances created within the last 8 hours — tests may still be running.
-			// If matterwick restarted mid-test, destroying active test instances would break them.
+			// Skip instances younger than maxAge — a test may still be using them.
 			if inst.CreateAt > cutoffMs {
 				logger.WithFields(logrus.Fields{
 					"installation_id": inst.ID,
 					"owner_id":        inst.OwnerID,
-				}).Debug("Skipping non-PR instance younger than 8h (may still be in use)")
+				}).Debug("Skipping non-PR instance younger than max age (may still be in use)")
 				continue
 			}
 
@@ -707,14 +738,14 @@ func (s *Server) cleanupNonPRE2EInstancesOnStartup() {
 				"owner_id":        inst.OwnerID,
 				"state":           inst.State,
 			})
-			instLogger.Warn("Destroying stale non-PR E2E instance (older than 8h) left from previous matterwick run")
+			instLogger.Warn("Destroying stale non-PR E2E instance")
 			if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
 				instLogger.WithError(err).Error("Failed to destroy stale non-PR E2E instance")
 			}
 		}
 	}
 
-	logger.Info("Startup non-PR E2E instance cleanup complete")
+	logger.Info("Non-PR E2E instance cleanup scan complete")
 }
 
 // resolveE2EServerVersion returns the Mattermost server version to use for E2E instances.
@@ -1001,8 +1032,11 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow via GitHub Actions API
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string, nightly bool) error {
+// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow via GitHub Actions API.
+// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
+// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
+// a direct key lookup instead of fragile SHA suffix matching.
+func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType, trackingKey string, nightly bool) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1035,6 +1069,9 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"run_type":          runType,
 		"nightly":           fmt.Sprintf("%t", nightly),
 	}
+	if trackingKey != "" {
+		workflowInputs["mw_tracking_key"] = trackingKey
+	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
 	req, err := client.NewRequest("POST",
@@ -1063,8 +1100,11 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	return nil
 }
 
-// dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
+// dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API.
+// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
+// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
+// a direct key lookup instead of fragile SHA suffix matching.
+func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType, trackingKey string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1081,6 +1121,9 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 		"MOBILE_VERSION": sha,
 		"PLATFORM":       platform,
 		"run_type":       runType,
+	}
+	if trackingKey != "" {
+		workflowInputs["mw_tracking_key"] = trackingKey
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)

@@ -122,8 +122,9 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
-	// Trigger the appropriate E2E workflow
-	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, instances)
+	// Trigger the appropriate E2E workflow, passing the tracking key so it reaches
+	// the workflow inputs as mw_tracking_key for reliable cleanup on completion.
+	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, key, instances)
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		// Remove from tracking and destroy instances on dispatch failure
@@ -233,8 +234,10 @@ func getRunnerForPlatform(platform string) string {
 	}
 }
 
-// triggerE2EWorkflowForPushEvent triggers the E2E workflow for a push event
-func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha string, instances []*E2EInstance) error {
+// triggerE2EWorkflowForPushEvent triggers the E2E workflow for a push event.
+// trackingKey is threaded through to the dispatch call so it appears as mw_tracking_key
+// in the workflow inputs, enabling direct key-based cleanup on completion.
+func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":         repoName,
 		"instanceType": instanceType,
@@ -250,14 +253,14 @@ func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, 
 	}
 
 	if instanceType == "desktop" {
-		return s.triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, instances)
+		return s.triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey, instances)
 	}
 
-	return s.triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, instances)
+	return s.triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey, instances)
 }
 
 // triggerDesktopE2EWorkflowForPushEvent triggers the desktop E2E workflow
-func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha string, instances []*E2EInstance) error {
+func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"branch": branch,
@@ -277,15 +280,11 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 		runType = "RELEASE"
 	}
 
-	// Dispatch to the exact commit SHA so the workflow_run completed event carries the
-	// same head_sha we stored in the tracking key ({repo}-push-{branch}-{sha}).
-	// Using the branch ref risks a head_sha mismatch if another commit lands during
-	// the ~30 min instance-creation window.
-	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, sha, sha, instanceDetailsJSON, runType, false)
+	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, runType, trackingKey, false)
 }
 
 // triggerMobileE2EWorkflowForPushEvent triggers the mobile E2E workflow (e2e-detox-pr.yml)
-func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha string, instances []*E2EInstance) error {
+func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"branch": branch,
@@ -307,13 +306,11 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		runType = "RELEASE"
 	}
 
-	// Dispatch to the exact commit SHA (not branch) so the workflow_run completed event
-	// carries the same head_sha stored in the tracking key ({repo}-push-{branch}-{sha}).
 	return s.dispatchMobileE2EWorkflow(
-		repoOwner, repoName, sha, sha,
+		repoOwner, repoName, branch, sha,
 		instances[0].URL, instances[1].URL, instances[2].URL,
 		"both", // Push events (release/master) test both platforms
-		runType,
+		runType, trackingKey,
 	)
 }
 

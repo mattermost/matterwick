@@ -116,6 +116,12 @@ type MatterwickConfig struct {
 	E2EReleasePatternPrefix       string
 	E2ENightlyTriggerWorkflowName string   // workflow name (name: field) of the nightly trigger workflow
 	E2ETestWorkflowNames          []string // workflow names of the actual test workflows (for completion-based cleanup)
+	// E2EInstanceMaxAge is the minimum age (in hours) a non-PR E2E instance must reach
+	// before the periodic orphan-cleanup scan will delete it. This prevents the scan
+	// from destroying instances that are still being used by a currently-running test.
+	// Set to the longest expected E2E run duration plus a small buffer.
+	// Default (0): 3 hours.
+	E2EInstanceMaxAge int
 }
 
 func findConfigFile(fileName string) string {
