@@ -108,6 +108,7 @@ type MatterwickConfig struct {
 	E2ELabel                      string
 	E2EMobileIOSLabel             string
 	E2EMobileAndroidLabel         string
+	E2EResetServersLabel          string
 	E2EUsername                   string
 	E2EPassword                   string
 	E2EServerVersion              string

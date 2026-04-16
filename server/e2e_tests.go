@@ -669,17 +669,6 @@ func (s *Server) e2eInstanceMaxAge() time.Duration {
 	return 3 * time.Hour
 }
 
-// cleanupStaleNonPRE2EInstances destroys non-PR E2E instances (push/nightly/CMT) that
-// are older than e2eInstanceMaxAge() and not already in a deletion state.
-//
-// Called on startup (to recover from a previous matterwick crash/restart that wiped the
-// in-memory tracking map) and periodically during normal operation (so orphaned instances
-// from a mid-run restart are cleaned up without waiting for the next matterwick restart).
-//
-// The age threshold prevents destroying instances that are still actively used by a test
-// that started before the restart. Set E2EInstanceMaxAge to a value larger than the
-// longest expected E2E test run duration.
-//
 // PR instances (identified by "-pr-" in their OwnerID) are always skipped — handleE2ECleanup
 // on PR close manages their lifecycle via cloud-API orphan scan.
 func (s *Server) cleanupStaleNonPRE2EInstances() {
