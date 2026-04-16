@@ -55,6 +55,13 @@ type Server struct {
 	e2eInProgress     map[string]bool
 	e2eInProgressLock sync.Mutex
 
+	// e2ePRCleanupGeneration tracks how many times handleE2ECleanup has run for
+	// each PR key. handleE2ETestRequest captures the counter before provisioning
+	// and aborts if it has changed when provisioning completes, preventing stale
+	// instances from being stored after a concurrent reset.
+	e2ePRCleanupGeneration     map[string]int64
+	e2ePRCleanupGenerationLock sync.Mutex
+
 	// stopCh is closed by Stop() to signal long-running background goroutines
 	// (e.g. the periodic E2E cleanup ticker) to exit cleanly.
 	stopCh chan struct{}
@@ -98,10 +105,11 @@ func New(config *MatterwickConfig) *Server {
 		StartTime:       time.Now(),
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
-		envMaps:       make(map[string]cloudModel.EnvVarMap),
-		e2eInstances:  make(map[string][]*E2EInstance),
-		e2eInProgress: make(map[string]bool),
-		stopCh:        make(chan struct{}),
+		envMaps:                make(map[string]cloudModel.EnvVarMap),
+		e2eInstances:           make(map[string][]*E2EInstance),
+		e2eInProgress:          make(map[string]bool),
+		e2ePRCleanupGeneration: make(map[string]int64),
+		stopCh:                 make(chan struct{}),
 	}
 
 	if !isAwsConfigDefined() {

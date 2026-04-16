@@ -96,6 +96,13 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
+	// Snapshot the cleanup generation before provisioning begins. If handleE2ECleanup
+	// fires while the ~30 min creation is in flight, it increments this counter.
+	// We re-check below before storing instances so we never write stale entries.
+	s.e2ePRCleanupGenerationLock.Lock()
+	startGeneration := s.e2ePRCleanupGeneration[key]
+	s.e2ePRCleanupGenerationLock.Unlock()
+
 	// Guard against duplicate webhook deliveries. The in-progress key includes
 	// the test platform so that a second mobile label with a *different* platform
 	// (e.g. E2E/Run-Android while E2E/Run-iOS is provisioning) is not incorrectly
@@ -170,6 +177,19 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.WithError(prErr).Warn("Failed to check PR state after instance creation; proceeding")
 	} else if prInfo.GetState() == "closed" {
 		logger.Warn("PR was closed during E2E instance creation; destroying instances without tracking")
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
+
+	// Check whether E2EResetServersLabel was applied while provisioning was in flight.
+	// If the cleanup generation advanced, handleE2ECleanup already deleted the cloud
+	// installations; storing them here would put stale, deleted instances into the
+	// tracking map and dispatch a workflow against non-existent servers.
+	s.e2ePRCleanupGenerationLock.Lock()
+	resetDuringProvisioning := s.e2ePRCleanupGeneration[key] != startGeneration
+	s.e2ePRCleanupGenerationLock.Unlock()
+	if resetDuringProvisioning {
+		logger.Warn("E2E reset was requested during provisioning; discarding freshly created instances")
 		s.destroyE2EInstances(instances, logger)
 		return
 	}
@@ -597,8 +617,18 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	})
 	logger.Info("Handling E2E cleanup request")
 
-	// Fast path: in-memory map
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+
+	// Increment the cleanup generation counter *before* destroying anything.
+	// handleE2ETestRequest captures this value before provisioning starts and
+	// checks it again after the ~30 min creation window. If the counter advanced,
+	// provisioning discards its result instead of writing stale instances to the
+	// tracking map and dispatching a workflow against already-deleted servers.
+	s.e2ePRCleanupGenerationLock.Lock()
+	s.e2ePRCleanupGeneration[key]++
+	s.e2ePRCleanupGenerationLock.Unlock()
+
+	// Fast path: in-memory map
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
