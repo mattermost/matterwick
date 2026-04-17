@@ -48,6 +48,25 @@ type Server struct {
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
 
+	// e2eInProgress guards against concurrent handleE2ETestRequest executions for the
+	// same PR+platform key (e.g. duplicate webhook deliveries). Only one goroutine per
+	// key may run the check-and-create flow at a time; a second arrival while the first
+	// is still running is silently dropped.
+	e2eInProgress     map[string]bool
+	e2eInProgressLock sync.Mutex
+
+	// e2ePRCleanupGeneration tracks how many times handleE2ECleanup has run for
+	// each PR key. handleE2ETestRequest captures the counter before provisioning
+	// and aborts if it has changed when provisioning completes, preventing stale
+	// instances from being stored after a concurrent reset.
+	e2ePRCleanupGeneration     map[string]int64
+	e2ePRCleanupGenerationLock sync.Mutex
+
+	// stopCh is closed by Stop() to signal long-running background goroutines
+	// (e.g. the periodic E2E cleanup ticker) to exit cleanly.
+	stopCh   chan struct{}
+	stopOnce sync.Once
+
 	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
 	// When non-empty (tests only), GitHub clients created inside this server will be
 	// redirected to this URL instead of the real GitHub API.
@@ -87,8 +106,11 @@ func New(config *MatterwickConfig) *Server {
 		StartTime:       time.Now(),
 		Logger:          logger.WithField("instance", cloudModel.NewID()),
 		CloudClient:     cloudClient,
-		envMaps:         make(map[string]cloudModel.EnvVarMap),
-		e2eInstances:    make(map[string][]*E2EInstance),
+		envMaps:                make(map[string]cloudModel.EnvVarMap),
+		e2eInstances:           make(map[string][]*E2EInstance),
+		e2eInProgress:          make(map[string]bool),
+		e2ePRCleanupGeneration: make(map[string]int64),
+		stopCh:                 make(chan struct{}),
 	}
 
 	if !isAwsConfigDefined() {
@@ -112,10 +134,28 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
-	// Destroy any non-PR E2E instances left over from a previous run.
-	// Must run before the HTTP listener starts so that cleanup completes before
-	// new webhook events can arrive and re-create conflicting instances.
-	s.cleanupNonPRE2EInstancesOnStartup()
+	// Destroy stale non-PR E2E instances left from a previous run immediately on startup,
+	// then continue scanning periodically so a mid-run restart doesn't leave orphaned
+	// instances alive until the *next* matterwick restart.
+	// The scan interval is half the configured max-age so the worst-case orphan lifetime
+	// is maxAge + interval ≈ 1.5× maxAge.
+	s.cleanupStaleNonPRE2EInstances()
+	go func() {
+		interval := s.e2eInstanceMaxAge() / 2
+		if interval < 30*time.Minute {
+			interval = 30 * time.Minute
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.cleanupStaleNonPRE2EInstances()
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
 
 	s.initializeRouter()
 
@@ -133,6 +173,7 @@ func (s *Server) Start() {
 // Stop stops a server
 func (s *Server) Stop() {
 	s.Logger.Info("Stopping MatterWick")
+	s.stopOnce.Do(func() { close(s.stopCh) })
 	manners.Close()
 }
 

@@ -46,6 +46,12 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			return
 		}
 
+		if label == s.Config.E2EResetServersLabel {
+			logger.WithField("label", label).Info("PR received E2E reset-servers label, destroying existing servers")
+			go s.handleE2ECleanup(pr)
+			return
+		}
+
 		if s.isSpinWickLabel(label) {
 			logger.WithField("label", label).Info("PR received SpinWick label")
 			switch *event.Label.Name {
@@ -160,14 +166,14 @@ func (s *Server) removeOldComments(comments []*github.IssueComment, pr *model.Pu
 	}
 }
 
-// isE2ELabel checks if a label is an E2E test label (desktop or mobile)
+// isE2ELabel checks if a label is an E2E test label (desktop or mobile).
 func (s *Server) isE2ELabel(label string) bool {
 	return label == s.Config.E2ELabel ||
 		label == s.Config.E2EMobileIOSLabel ||
 		label == s.Config.E2EMobileAndroidLabel
 }
 
-// extractPlatformFromLabel determines the platform (ios/android/both) from the label
+// extractPlatformFromLabel determines the platform (ios/android/both) from the label.
 func (s *Server) extractPlatformFromLabel(label string) string {
 	switch label {
 	case s.Config.E2EMobileIOSLabel:
