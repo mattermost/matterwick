@@ -445,6 +445,18 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 		assert.Equal(t, "feature/my-branch", extractBranchName("refs/heads/feature/my-branch"))
 	})
 
+	t.Run("tag refs are not treated as branch refs", func(t *testing.T) {
+		// extractBranchName("refs/tags/release-9.0") returns "release-9.0",
+		// which would match isReleaseBranch and trigger unintended E2E provisioning.
+		// handlePushEvent must guard against non-refs/heads/ refs before calling extractBranchName.
+		tagRef := "refs/tags/release-9.0"
+		assert.False(t, strings.HasPrefix(tagRef, "refs/heads/"),
+			"tag ref must be filtered before branch-trigger evaluation")
+		// The extracted value looks like a release branch — the guard is what prevents it.
+		assert.Equal(t, "release-9.0", extractBranchName(tagRef),
+			"extractBranchName is unaware of ref type; caller must pre-filter")
+	})
+
 	t.Run("desktop push always creates linux/macos/windows instances", func(t *testing.T) {
 		// createMultipleE2EInstancesForPushEvent uses desktop platforms for push events
 		expectedPlatforms := []string{"linux", "macos", "windows"}

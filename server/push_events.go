@@ -16,7 +16,20 @@ import (
 // handlePushEvent triggers E2E tests on release branches or master/main pushes.
 func (s *Server) handlePushEvent(event *github.PushEvent) {
 	repoName := event.GetRepo().GetName()
-	branchRef := event.GetRef() // "refs/heads/branch-name"
+	branchRef := event.GetRef()
+
+	// Ignore tag pushes (refs/tags/*) — only branch pushes should trigger E2E.
+	// Without this guard, a tag like "refs/tags/release-9.0" would pass through
+	// extractBranchName as "release-9.0" and accidentally match isReleaseBranch.
+	if !strings.HasPrefix(branchRef, "refs/heads/") {
+		s.Logger.WithFields(logrus.Fields{
+			"repo":   repoName,
+			"ref":    branchRef,
+			"action": "push",
+		}).Info("Push ref is not a branch, skipping E2E trigger")
+		return
+	}
+
 	branch := extractBranchName(branchRef)
 
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -55,7 +68,7 @@ func (s *Server) isReleaseBranch(branch string) bool {
 	return strings.HasPrefix(branch, s.Config.E2EReleasePatternPrefix)
 }
 
-// serverVersionForPushEvent always returns the latest stable Mattermost release.
+// serverVersionForPushEvent resolves the server version via resolveE2EServerVersion.
 // Branch name is ignored — derived names like "9.0" don't exist as Docker Hub tags ("9.0.0").
 func (s *Server) serverVersionForPushEvent(branch string) string {
 	_ = branch
