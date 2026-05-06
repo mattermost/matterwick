@@ -167,7 +167,8 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 // createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
 // Results are returned in platforms[] order so index-based assignment is stable.
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, _ string) ([]*E2EInstance, error) {
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, sha string) ([]*E2EInstance, error) {
+	_ = sha // intentionally unused; push events always provision the latest stable release — see serverVersionForPushEvent
 	var platforms []string
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
