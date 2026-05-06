@@ -129,7 +129,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	logger.WithField("instanceType", instanceType).Info("Creating E2E instances for push event")
 
 	// Create instances based on repo type
-	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, sha)
+	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		return
@@ -167,8 +167,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 // createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
 // Results are returned in platforms[] order so index-based assignment is stable.
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, sha string) ([]*E2EInstance, error) {
-	_ = sha // intentionally unused; push events always provision the latest stable release — see serverVersionForPushEvent
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch string) ([]*E2EInstance, error) {
 	var platforms []string
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
