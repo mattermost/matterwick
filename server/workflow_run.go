@@ -43,8 +43,7 @@ func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload
 	return &payload, nil
 }
 
-// handleWorkflowRunEventWithInputs handles GitHub workflow_run events.
-// Routes events to CMT, nightly trigger, or test-workflow completion handlers.
+// handleWorkflowRunEventWithInputs routes workflow_run events to CMT, nightly, or cleanup handlers.
 func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPayload) {
 	// Extract repository info
 	repoData := payload.Repository
@@ -79,10 +78,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		"head_sha": headSHA,
 	})
 
-	// --- CMT trigger workflows ---
-	// "CMT Provisioner" (name contains "CMT") is dispatched by users with server_versions.
-	// "Compatibility Matrix Testing" (the actual test workflow) is dispatched by Matterwick
-	// with CMT_MATRIX; its completion triggers sha-based cleanup via isE2ETestWorkflow.
+	// CMT: "CMT Provisioner" (user-dispatched) provisions servers; "Compatibility Matrix Testing" runs tests.
 	if strings.Contains(workflowName, "cmt") || strings.Contains(workflowName, "CMT") {
 		if payload.Action == "completed" {
 			logger.Debug("CMT trigger workflow completed; sha-based cleanup is primary")
@@ -118,9 +114,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// --- Nightly trigger workflow ---
-	// When the lightweight nightly trigger workflow is requested, provision instances and
-	// dispatch the actual test workflow. The nightly trigger workflow does no testing itself.
+	// Nightly: lightweight trigger workflow fires first; matterwick provisions instances and dispatches the real test workflow.
 	if s.Config.E2ENightlyTriggerWorkflowName != "" && workflowName == s.Config.E2ENightlyTriggerWorkflowName {
 		if payload.Action == "requested" {
 			logger.Info("Nightly trigger workflow started, provisioning E2E servers")
@@ -133,10 +127,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
 		logger.Info("Test workflow completed, checking for instance cleanup")
 
-		// Primary path: direct tracking-key lookup using the key embedded in dispatch
-		// inputs. Immune to SHA mismatch (new commits during ~30 min provisioning window)
-		// and to runID collisions (two runs sharing the same branch HEAD sha).
-		// Reading a nil Inputs map in Go returns "" safely — no nil check required.
+		// Primary: look up by mw_tracking_key embedded at dispatch time (immune to SHA races).
 		if trackingKey := payload.WorkflowRun.Inputs["mw_tracking_key"]; trackingKey != "" {
 			s.e2eInstancesLock.Lock()
 			instances := s.e2eInstances[trackingKey]
@@ -151,16 +142,12 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 			return
 		}
 
-		// Fallback: SHA-based scan for runs dispatched before mw_tracking_key was added.
+		// Fallback: SHA-based scan (runs dispatched before mw_tracking_key was introduced).
 		logger.Debug("No mw_tracking_key in workflow inputs, falling back to SHA-based instance cleanup")
 		s.findAndDestroyInstancesBySHA(repoName, headSHA, logger)
 		return
 	}
 
-	// Promoted from Debug to Info so operators can see why a workflow_run event was
-	// ignored without enabling debug logging. The most common cause of "nightly never
-	// fires" is workflowName not matching the configured E2ENightlyTriggerWorkflowName
-	// — this log line surfaces the comparison directly.
 	logger.WithFields(logrus.Fields{
 		"configured_nightly_name":   s.Config.E2ENightlyTriggerWorkflowName,
 		"configured_test_workflows": s.Config.E2ETestWorkflowNames,
