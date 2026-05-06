@@ -421,16 +421,40 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 		assert.False(t, s.isReleaseBranch("feature-branch"))
 	})
 
-	t.Run("version extracted from release branch", func(t *testing.T) {
-		assert.Equal(t, "8.0", extractVersionFromReleaseBranch("release-8.0", "release-"))
-		assert.Equal(t, "10.5", extractVersionFromReleaseBranch("release-10.5", "release-"))
-		assert.Equal(t, "", extractVersionFromReleaseBranch("master", "release-"))
+	t.Run("empty release pattern prefix never matches any branch", func(t *testing.T) {
+		// strings.HasPrefix(any, "") is always true. Without this guard, a missing
+		// or empty E2EReleasePatternPrefix in the deployed config would classify
+		// every push (master, feature branches, anything) as a release branch and
+		// trigger spurious E2E provisioning on every push.
+		empty := newDryRunServer(t, "", "mattermost")
+		empty.Config.E2EReleasePatternPrefix = ""
+
+		assert.False(t, empty.isReleaseBranch("master"),
+			"empty prefix must not match master")
+		assert.False(t, empty.isReleaseBranch("release-8.0"),
+			"empty prefix must not match release-8.0")
+		assert.False(t, empty.isReleaseBranch("anything"),
+			"empty prefix must not match arbitrary branches")
+		assert.False(t, empty.isReleaseBranch(""),
+			"empty prefix must not match empty branch")
 	})
 
 	t.Run("branch name extracted from git ref", func(t *testing.T) {
 		assert.Equal(t, "release-8.0", extractBranchName("refs/heads/release-8.0"))
 		assert.Equal(t, "master", extractBranchName("refs/heads/master"))
 		assert.Equal(t, "feature/my-branch", extractBranchName("refs/heads/feature/my-branch"))
+	})
+
+	t.Run("tag refs are not treated as branch refs", func(t *testing.T) {
+		// extractBranchName("refs/tags/release-9.0") returns "release-9.0",
+		// which would match isReleaseBranch and trigger unintended E2E provisioning.
+		// handlePushEvent must guard against non-refs/heads/ refs before calling extractBranchName.
+		tagRef := "refs/tags/release-9.0"
+		assert.False(t, strings.HasPrefix(tagRef, "refs/heads/"),
+			"tag ref must be filtered before branch-trigger evaluation")
+		// The extracted value looks like a release branch — the guard is what prevents it.
+		assert.Equal(t, "release-9.0", extractBranchName(tagRef),
+			"extractBranchName is unaware of ref type; caller must pre-filter")
 	})
 
 	t.Run("desktop push always creates linux/macos/windows instances", func(t *testing.T) {
@@ -909,6 +933,33 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		assert.False(t, called, "GitHub API must not be called when E2EServerVersion is not 'latest'")
 	})
 
+	t.Run("empty config falls back to latest resolution, not empty version", func(t *testing.T) {
+		// A missing E2EServerVersion field in the deployed config decodes to "".
+		// Before the fix, "" was returned as-is and flowed to CreateInstallation,
+		// which silently failed to provision any server. Empty must be treated
+		// as "latest" so the GitHub-releases lookup runs.
+		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = ""
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion(),
+			"empty E2EServerVersion must fall back to latest resolution, not return empty")
+	})
+
+	t.Run("whitespace-only config falls back to latest resolution", func(t *testing.T) {
+		// Defensive: treat whitespace as empty for the same reason — a config-edit
+		// typo with stray whitespace should not silently break provisioning.
+		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = "   "
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion())
+	})
+
 	t.Run("RC tags skipped, first stable tag returned with v stripped", func(t *testing.T) {
 		body := `[
 			{"tag_name":"v11.7.0-rc2","draft":false},
@@ -1084,6 +1135,37 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		assert.Equal(t, "11.6.0", v2, "second call: should retry and resolve correctly")
 		assert.Equal(t, "11.6.0", v3, "third call: should return cached value")
 		assert.Equal(t, 2, callCount, "API should be called twice: once for the failed attempt, once for the retry")
+	})
+}
+
+// ------------------------------------------------------------
+// 12b. Push-event server version selection — always latest, ignore branch suffix
+// ------------------------------------------------------------
+
+func TestDryRun_PushEventServerVersion(t *testing.T) {
+	// Push events (release branch, master, main) must always provision the latest
+	// stable Mattermost release. Deriving a version from a release branch name
+	// (e.g. "release-9.0" → "9.0") would attempt to pull a Docker tag that
+	// typically doesn't exist (Docker Hub publishes full SemVer like "9.0.0"),
+	// causing silent installation failures and no E2E workflow dispatch.
+	t.Run("release branch push uses latest version, ignoring branch-derived version", func(t *testing.T) {
+		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("release-9.0"),
+			"release-9.0 push must provision latest server (12.0.0), not branch-derived 9.0")
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("release-10.5"),
+			"release-10.5 push must provision latest server (12.0.0), not branch-derived 10.5")
+	})
+
+	t.Run("master push uses latest version", func(t *testing.T) {
+		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("master"))
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("main"))
 	})
 }
 

@@ -13,10 +13,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// handlePushEvent processes push events to trigger E2E tests on release branches or master/main
+// handlePushEvent triggers E2E tests on release branches or master/main pushes.
 func (s *Server) handlePushEvent(event *github.PushEvent) {
 	repoName := event.GetRepo().GetName()
-	branchRef := event.GetRef() // Format: "refs/heads/branch-name"
+	branchRef := event.GetRef()
+
+	// Ignore tag pushes (refs/tags/*) — only branch pushes should trigger E2E.
+	// Without this guard, a tag like "refs/tags/release-9.0" would pass through
+	// extractBranchName as "release-9.0" and accidentally match isReleaseBranch.
+	if !strings.HasPrefix(branchRef, "refs/heads/") {
+		s.Logger.WithFields(logrus.Fields{
+			"repo":   repoName,
+			"ref":    branchRef,
+			"action": "push",
+		}).Info("Push ref is not a branch, skipping E2E trigger")
+		return
+	}
+
 	branch := extractBranchName(branchRef)
 
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -26,31 +39,43 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	})
 	logger.Info("Push event received")
 
-	// Detect if this is a release branch push
 	if s.Config.E2EAutoTriggerOnRelease && s.isReleaseBranch(branch) {
 		logger.WithField("type", "release_branch").Info("Release branch detected, triggering E2E tests")
-		version := extractVersionFromReleaseBranch(branch, s.Config.E2EReleasePatternPrefix)
-		go s.handlePushEventE2E(event, branch, version)
+		go s.handlePushEventE2E(event, branch)
 		return
 	}
 
-	// Detect if this is a master/main branch push
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
-		go s.handlePushEventE2E(event, branch, "")
+		go s.handlePushEventE2E(event, branch)
 		return
 	}
 
-	logger.Debug("Push event does not match E2E trigger conditions")
+	logger.WithFields(logrus.Fields{
+		"auto_release":           s.Config.E2EAutoTriggerOnRelease,
+		"auto_master":            s.Config.E2EAutoTriggerOnMaster,
+		"release_pattern_prefix": s.Config.E2EReleasePatternPrefix,
+		"is_release_branch":      s.isReleaseBranch(branch),
+	}).Info("Push event does not match E2E trigger conditions")
 }
 
-// isReleaseBranch checks if a branch name is a release branch
+// isReleaseBranch returns true if branch matches E2EReleasePatternPrefix.
+// Rejects empty prefix — strings.HasPrefix(x, "") is always true.
 func (s *Server) isReleaseBranch(branch string) bool {
+	if s.Config.E2EReleasePatternPrefix == "" {
+		return false
+	}
 	return strings.HasPrefix(branch, s.Config.E2EReleasePatternPrefix)
 }
 
-// extractBranchName extracts the branch name from the ref
-// GitHub sends refs in the format "refs/heads/branch-name"
+// serverVersionForPushEvent resolves the server version via resolveE2EServerVersion.
+// Branch name is ignored — derived names like "9.0" don't exist as Docker Hub tags ("9.0.0").
+func (s *Server) serverVersionForPushEvent(branch string) string {
+	_ = branch
+	return s.resolveE2EServerVersion()
+}
+
+// extractBranchName extracts the branch name from "refs/heads/branch-name".
 func extractBranchName(ref string) string {
 	parts := strings.Split(ref, "/")
 	if len(parts) < 3 {
@@ -59,17 +84,9 @@ func extractBranchName(ref string) string {
 	return strings.Join(parts[2:], "/")
 }
 
-// extractVersionFromReleaseBranch extracts version from release branch name
-// Example: "release-8.0" -> "8.0"
-func extractVersionFromReleaseBranch(branch string, prefix string) string {
-	if !strings.HasPrefix(branch, prefix) {
-		return ""
-	}
-	return strings.TrimPrefix(branch, prefix)
-}
-
-// handlePushEventE2E orchestrates E2E testing for push events (release or master/main)
-func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, version string) {
+// handlePushEventE2E provisions E2E servers and dispatches the test workflow
+// for a push to a release branch or master/main. Only acts on desktop/mobile repos.
+func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	repoName := event.GetRepo().GetName()
 	commit := event.GetHeadCommit()
 	sha := ""
@@ -78,13 +95,11 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	}
 
 	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":    repoName,
-		"branch":  branch,
-		"version": version,
-		"sha":     sha,
+		"repo":   repoName,
+		"branch": branch,
+		"sha":    sha,
 	})
 
-	// Determine if this is a desktop or mobile repository
 	isDesktop := strings.Contains(repoName, "desktop")
 	isMobile := strings.Contains(repoName, "mobile")
 
@@ -93,14 +108,11 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 		return
 	}
 
-	// Create E2E instances for testing
 	instanceType := "desktop"
 	if isMobile {
 		instanceType = "mobile"
 	}
 
-	// Validate SHA before provisioning — an empty SHA would produce a malformed
-	// tracking key and send an empty MOBILE_VERSION to the test workflow.
 	if sha == "" {
 		logger.Error("Push event has no commit SHA, skipping E2E dispatch")
 		return
@@ -108,8 +120,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 	logger.WithField("instanceType", instanceType).Info("Creating E2E instances for push event")
 
-	// Create instances based on repo type
-	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, sha)
+	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		return
@@ -122,19 +133,16 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 	logger.WithField("instanceCount", len(instances)).Info("E2E instances created successfully")
 
-	// Track instances BEFORE dispatching so that a fast-completing workflow_run
-	// completed event cannot race ahead of us and find nothing to clean up.
+	// Store instances before dispatching so a fast-completing workflow_run event
+	// doesn't race ahead and find nothing to clean up.
 	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, sha)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
-	// Trigger the appropriate E2E workflow, passing the tracking key so it reaches
-	// the workflow inputs as mw_tracking_key for reliable cleanup on completion.
 	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, key, instances)
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
-		// Remove from tracking and destroy instances on dispatch failure
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
 		s.e2eInstancesLock.Unlock()
@@ -147,7 +155,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 // createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
 // Results are returned in platforms[] order so index-based assignment is stable.
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, _ string) ([]*E2EInstance, error) {
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch string) ([]*E2EInstance, error) {
 	var platforms []string
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
@@ -161,11 +169,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
-	// Name format: {type}-{version}-{platform}-{hex6}
-	serverVersion := s.resolveE2EServerVersion()
-	if version != "" {
-		serverVersion = version
-	}
+	serverVersion := s.serverVersionForPushEvent(branch)
 	sanitizedVersion := sanitizeForDNS(serverVersion)
 	uid := e2eUniqueSuffix()
 
@@ -227,7 +231,10 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	return instances, nil
 }
 
-// getRunnerForPlatform returns the GitHub Actions runner for a given platform
+// getRunnerForPlatform returns the GitHub Actions runner label for E2E functional
+// workflows (PR label + push events). CMT workflows use a separate hardcoded matrix
+// in buildDesktopCMTMatrixJSON (macos-13) because compatibility testing pins a
+// specific OS version; functional tests track latest.
 func getRunnerForPlatform(platform string) string {
 	switch strings.ToLower(platform) {
 	case "linux":
@@ -241,9 +248,8 @@ func getRunnerForPlatform(platform string) string {
 	}
 }
 
-// triggerE2EWorkflowForPushEvent triggers the E2E workflow for a push event.
-// trackingKey is threaded through to the dispatch call so it appears as mw_tracking_key
-// in the workflow inputs, enabling direct key-based cleanup on completion.
+// triggerE2EWorkflowForPushEvent routes to the desktop or mobile dispatch function.
+// trackingKey is embedded in workflow inputs as mw_tracking_key for cleanup on completion.
 func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":         repoName,
@@ -252,7 +258,6 @@ func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, 
 		"sha":          sha,
 	})
 
-	// Determine repo owner
 	repoOwner := s.Config.Org
 	if repoOwner == "" {
 		logger.Error("Organization not configured")
@@ -266,14 +271,13 @@ func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, 
 	return s.triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey, instances)
 }
 
-// triggerDesktopE2EWorkflowForPushEvent triggers the desktop E2E workflow
+// triggerDesktopE2EWorkflowForPushEvent dispatches the desktop E2E workflow.
 func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"branch": branch,
 	})
 
-	// Build instance details JSON for desktop workflow
 	instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
 	if err != nil {
 		logger.WithError(err).Error("Failed to build instance details JSON")
@@ -290,7 +294,7 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, runType, trackingKey, false)
 }
 
-// triggerMobileE2EWorkflowForPushEvent triggers the mobile E2E workflow (e2e-detox-pr.yml)
+// triggerMobileE2EWorkflowForPushEvent dispatches the mobile E2E workflow (e2e-detox-pr.yml).
 func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
@@ -306,7 +310,7 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"site_1_url": instances[0].URL,
 		"site_2_url": instances[1].URL,
 		"site_3_url": instances[2].URL,
-	}).Debug("Triggering mobile E2E workflow (e2e-detox-pr.yml) for push event")
+	}).Debug("Triggering mobile E2E workflow for push event")
 
 	runType := "MASTER"
 	if s.isReleaseBranch(branch) {
@@ -316,8 +320,7 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 	return s.dispatchMobileE2EWorkflow(
 		repoOwner, repoName, branch, sha,
 		instances[0].URL, instances[1].URL, instances[2].URL,
-		"both", // Push events (release/master) test both platforms
+		"both", // push events always test both iOS and Android
 		runType, trackingKey,
 	)
 }
-
