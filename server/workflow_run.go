@@ -157,7 +157,14 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	logger.Debug("Ignoring workflow_run event (not relevant to E2E lifecycle)")
+	// Promoted from Debug to Info so operators can see why a workflow_run event was
+	// ignored without enabling debug logging. The most common cause of "nightly never
+	// fires" is workflowName not matching the configured E2ENightlyTriggerWorkflowName
+	// — this log line surfaces the comparison directly.
+	logger.WithFields(logrus.Fields{
+		"configured_nightly_name":   s.Config.E2ENightlyTriggerWorkflowName,
+		"configured_test_workflows": s.Config.E2ETestWorkflowNames,
+	}).Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
 // handleNightlyE2ETrigger provisions instances and dispatches the test workflow.

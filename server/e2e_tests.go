@@ -770,17 +770,28 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 }
 
 // resolveE2EServerVersion returns the Mattermost server version to use for E2E instances.
-// If E2EServerVersion is "latest", it fetches the mattermost/mattermost GitHub releases,
-// skips drafts, prerelease-flagged releases, and RC/beta/alpha tag-name patterns, then
-// returns the first (newest) fully stable tag stripped of its "v" prefix
-// (e.g. "v11.6.0" → "11.6.0") to match the Docker Hub tag format.
+// If E2EServerVersion is "latest" (or empty/whitespace, which is treated as "latest"),
+// it fetches the mattermost/mattermost GitHub releases, skips drafts, prerelease-flagged
+// releases, and RC/beta/alpha tag-name patterns, then returns the first (newest) fully
+// stable tag stripped of its "v" prefix (e.g. "v11.6.0" → "11.6.0") to match the Docker
+// Hub tag format.
 //
 // The resolved version is cached in memory for 1 hour so that back-to-back provisioning
 // calls (e.g. three parallel platform instances) share a single GitHub API round-trip.
 // Falls back to "master" on any API error or when no stable release is found.
+//
+// Empty/whitespace handling: a missing or blank E2EServerVersion in the deployed config
+// previously flowed through as "" to CreateInstallation, which silently failed. Treating
+// it as "latest" makes the misconfiguration recoverable and is loudly logged so the
+// operator can fix the config without losing E2E coverage in the meantime.
 func (s *Server) resolveE2EServerVersion() string {
-	if s.Config.E2EServerVersion != "latest" {
-		return s.Config.E2EServerVersion
+	cfg := strings.TrimSpace(s.Config.E2EServerVersion)
+	if cfg == "" {
+		s.Logger.Warn("[resolveE2EServerVersion] E2EServerVersion is empty in config; defaulting to 'latest'")
+		cfg = "latest"
+	}
+	if cfg != "latest" {
+		return cfg
 	}
 
 	const cacheTTL = 1 * time.Hour

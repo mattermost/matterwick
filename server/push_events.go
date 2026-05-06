@@ -29,24 +29,51 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	// Detect if this is a release branch push
 	if s.Config.E2EAutoTriggerOnRelease && s.isReleaseBranch(branch) {
 		logger.WithField("type", "release_branch").Info("Release branch detected, triggering E2E tests")
-		version := extractVersionFromReleaseBranch(branch, s.Config.E2EReleasePatternPrefix)
-		go s.handlePushEventE2E(event, branch, version)
+		go s.handlePushEventE2E(event, branch)
 		return
 	}
 
 	// Detect if this is a master/main branch push
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
-		go s.handlePushEventE2E(event, branch, "")
+		go s.handlePushEventE2E(event, branch)
 		return
 	}
 
-	logger.Debug("Push event does not match E2E trigger conditions")
+	// Promoted from Debug to Info so operators can see why an event was dropped
+	// without having to enable debug logging. The field values reveal which gate
+	// closed (auto-trigger flag off, release prefix mismatch, or unrecognised branch).
+	logger.WithFields(logrus.Fields{
+		"auto_release":           s.Config.E2EAutoTriggerOnRelease,
+		"auto_master":            s.Config.E2EAutoTriggerOnMaster,
+		"release_pattern_prefix": s.Config.E2EReleasePatternPrefix,
+		"is_release_branch":      s.isReleaseBranch(branch),
+	}).Info("Push event does not match E2E trigger conditions")
 }
 
-// isReleaseBranch checks if a branch name is a release branch
+// isReleaseBranch checks if a branch name is a release branch.
+// An empty E2EReleasePatternPrefix is rejected — strings.HasPrefix(any, "") is
+// always true, which would silently mark every branch (including master/main and
+// feature branches) as a release branch.
 func (s *Server) isReleaseBranch(branch string) bool {
+	if s.Config.E2EReleasePatternPrefix == "" {
+		return false
+	}
 	return strings.HasPrefix(branch, s.Config.E2EReleasePatternPrefix)
+}
+
+// serverVersionForPushEvent returns the Mattermost server version to provision for
+// any push event (release branch, master, or main). Always uses the latest stable
+// release; the branch name is intentionally ignored.
+//
+// Why we don't derive a version from the branch: a "release-9.0" branch would yield
+// "9.0", but Docker Hub publishes full SemVer tags like "9.0.0". Provisioning with
+// "9.0" results in an installation create error and the E2E workflow is never
+// dispatched. The "Latest Version Servers" feature (PR #87) is unambiguous — push
+// events always test against the latest stable release.
+func (s *Server) serverVersionForPushEvent(branch string) string {
+	_ = branch // intentionally unused; documented above
+	return s.resolveE2EServerVersion()
 }
 
 // extractBranchName extracts the branch name from the ref
@@ -59,17 +86,11 @@ func extractBranchName(ref string) string {
 	return strings.Join(parts[2:], "/")
 }
 
-// extractVersionFromReleaseBranch extracts version from release branch name
-// Example: "release-8.0" -> "8.0"
-func extractVersionFromReleaseBranch(branch string, prefix string) string {
-	if !strings.HasPrefix(branch, prefix) {
-		return ""
-	}
-	return strings.TrimPrefix(branch, prefix)
-}
-
-// handlePushEventE2E orchestrates E2E testing for push events (release or master/main)
-func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, version string) {
+// handlePushEventE2E orchestrates E2E testing for push events (release or master/main).
+// The branch name is used only to classify the run (RELEASE vs MASTER) and to dispatch
+// the workflow against the correct ref. The Mattermost server version provisioned for
+// testing is always the latest stable release — see serverVersionForPushEvent.
+func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	repoName := event.GetRepo().GetName()
 	commit := event.GetHeadCommit()
 	sha := ""
@@ -78,10 +99,9 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	}
 
 	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":    repoName,
-		"branch":  branch,
-		"version": version,
-		"sha":     sha,
+		"repo":   repoName,
+		"branch": branch,
+		"sha":    sha,
 	})
 
 	// Determine if this is a desktop or mobile repository
@@ -109,7 +129,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 	logger.WithField("instanceType", instanceType).Info("Creating E2E instances for push event")
 
 	// Create instances based on repo type
-	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, sha)
+	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, sha)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		return
@@ -147,7 +167,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string, vers
 
 // createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
 // Results are returned in platforms[] order so index-based assignment is stable.
-func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, version, _ string) ([]*E2EInstance, error) {
+func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch, _ string) ([]*E2EInstance, error) {
 	var platforms []string
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
@@ -161,11 +181,10 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
-	// Name format: {type}-{version}-{platform}-{hex6}
-	serverVersion := s.resolveE2EServerVersion()
-	if version != "" {
-		serverVersion = version
-	}
+	// Name format: {type}-{version}-{platform}-{hex6}.
+	// Always provision the latest stable Mattermost release for push events —
+	// see serverVersionForPushEvent for why branch-derived versions are not used.
+	serverVersion := s.serverVersionForPushEvent(branch)
 	sanitizedVersion := sanitizeForDNS(serverVersion)
 	uid := e2eUniqueSuffix()
 
