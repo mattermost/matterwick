@@ -218,7 +218,10 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	return instances, nil
 }
 
-// getRunnerForPlatform returns the GitHub Actions runner label for a given platform.
+// getRunnerForPlatform returns the GitHub Actions runner label for E2E functional
+// workflows (PR label + push events). CMT workflows use a separate hardcoded matrix
+// in buildDesktopCMTMatrixJSON (macos-13) because compatibility testing pins a
+// specific OS version; functional tests track latest.
 func getRunnerForPlatform(platform string) string {
 	switch strings.ToLower(platform) {
 	case "linux":
