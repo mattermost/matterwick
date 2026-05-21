@@ -78,39 +78,21 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		"head_sha": headSHA,
 	})
 
-	// CMT: "CMT Provisioner" (user-dispatched) provisions servers; "Compatibility Matrix Testing" runs tests.
+	// CMT: "CMT Provisioner" workflow_run events are no longer used to start provisioning.
+	// GitHub's workflow_run webhook payload does not carry workflow_dispatch inputs (the
+	// "inputs" field is not in the workflow_run schema), so server_versions cannot be
+	// read from this event. cmt-provisioner.yml now POSTs directly to /cmt_dispatch with
+	// the full context, handled by handleCMTDispatch.
+	//
+	// We still listen for workflow_run.completed on CMT as a defensive fallback to clean
+	// up any instances that somehow got tracked but were never reaped via /cleanup_e2e.
 	if strings.Contains(workflowName, "cmt") || strings.Contains(workflowName, "CMT") {
 		if payload.Action == "completed" {
-			logger.Debug("CMT trigger workflow completed; sha-based cleanup is primary")
+			logger.Debug("CMT trigger workflow completed; sha-based cleanup is a fallback for stuck instances")
 			s.handleCMTRunCleanup(repoName, headSHA, logger)
-			return
-		}
-		if payload.Action != "requested" {
-			logger.Debug("Ignoring CMT workflow action (not requested or completed)")
-			return
-		}
-		logger.Info("Processing CMT workflow_run event")
-		serverVersionsStr, ok := payload.WorkflowRun.Inputs["server_versions"]
-		if !ok || serverVersionsStr == "" {
-			logger.Error("No server_versions found in workflow inputs")
-			return
-		}
-		serverVersions := parseServerVersionsFromString(serverVersionsStr)
-		if len(serverVersions) == 0 {
-			logger.Error("Failed to parse server versions from workflow input")
-			return
-		}
-		logger.WithField("serverVersions", serverVersions).Info("Extracted server versions from workflow inputs")
-		var instanceType string
-		if strings.Contains(repoName, "desktop") {
-			instanceType = "desktop"
-		} else if strings.Contains(repoName, "mobile") {
-			instanceType = "mobile"
 		} else {
-			logger.Warn("Repository is neither desktop nor mobile, skipping CMT")
-			return
+			logger.WithField("action", payload.Action).Debug("Ignoring CMT workflow_run event; provisioning is driven by /cmt_dispatch")
 		}
-		go s.handleCMTWithServerVersions(owner, repoName, instanceType, headBranch, headSHA, serverVersions, runID, logger)
 		return
 	}
 

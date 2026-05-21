@@ -123,6 +123,18 @@ type MatterwickConfig struct {
 	// Set to the longest expected E2E run duration plus a small buffer.
 	// Default (0): 3 hours.
 	E2EInstanceMaxAge int
+
+	// CMTTriggerSecret is the shared secret presented in the X-Trigger-Token header by
+	// cmt-provisioner.yml when POSTing to /cmt_dispatch. The webhook payload from
+	// GitHub does not carry workflow_dispatch inputs (verified against the
+	// workflow_run schema), so cmt-provisioner calls matterwick directly with the
+	// server_versions input. Empty value disables the endpoint.
+	CMTTriggerSecret string
+
+	// CleanupSecret is the shared secret presented in the X-Cleanup-Token header by
+	// compatibility-matrix-testing.yml (and any other workflow) when POSTing to
+	// /cleanup_e2e to request instance teardown. Empty value disables the endpoint.
+	CleanupSecret string
 }
 
 func findConfigFile(fileName string) string {
