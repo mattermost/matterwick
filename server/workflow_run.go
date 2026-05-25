@@ -106,26 +106,17 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	}
 
 	// --- Test workflow completion: clean up provisioned instances ---
+	//
+	// Cleanup is keyed by head_sha against tracking-key suffixes ({repo}-...-{sha}).
+	// We do not attempt to read mw_tracking_key from payload.WorkflowRun.Inputs:
+	// GitHub's workflow_run webhook payload does not include workflow_dispatch
+	// inputs (the "inputs" field is not in the workflow_run schema), so that field
+	// is always empty in production. SHA-based scanning is the canonical mechanism.
+	// The mw_tracking_key value is still set when dispatching the test workflow so
+	// it remains queryable via the GitHub REST API if a future code path wants it,
+	// but the webhook-driven cleanup intentionally does not depend on it.
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		logger.Info("Test workflow completed, checking for instance cleanup")
-
-		// Primary: look up by mw_tracking_key embedded at dispatch time (immune to SHA races).
-		if trackingKey := payload.WorkflowRun.Inputs["mw_tracking_key"]; trackingKey != "" {
-			s.e2eInstancesLock.Lock()
-			instances := s.e2eInstances[trackingKey]
-			delete(s.e2eInstances, trackingKey)
-			s.e2eInstancesLock.Unlock()
-			if len(instances) > 0 {
-				logger.WithField("tracking_key", trackingKey).Info("Destroying instances by tracking key")
-				s.destroyE2EInstances(instances, logger)
-			} else {
-				logger.WithField("tracking_key", trackingKey).Debug("No in-memory instances for tracking key (matterwick restarted or already cleaned)")
-			}
-			return
-		}
-
-		// Fallback: SHA-based scan (runs dispatched before mw_tracking_key was introduced).
-		logger.Debug("No mw_tracking_key in workflow inputs, falling back to SHA-based instance cleanup")
+		logger.Info("Test workflow completed, cleaning up instances by SHA suffix match")
 		s.findAndDestroyInstancesBySHA(repoName, headSHA, logger)
 		return
 	}
