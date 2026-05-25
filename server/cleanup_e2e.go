@@ -25,11 +25,11 @@ type CleanupE2ERequest struct {
 // handleCleanupE2E destroys CMT instances tracked under "{repo}-cmt-{run_id}-*".
 // The run_id passed by the workflow is the CMT provisioner's run_id (cmt_run_id),
 // which matterwick embeds as the middle component of every CMT tracking key.
+//
+// NOTE: this handler does not call CheckLimitRateAndAbortRequest. Cleanup hits
+// the cloud provisioner API, not GitHub, so GitHub rate limits are not the
+// constraint. See handleCMTDispatch for the broader rationale.
 func (s *Server) handleCleanupE2E(w http.ResponseWriter, r *http.Request) {
-	if overLimit := s.CheckLimitRateAndAbortRequest(); overLimit {
-		return
-	}
-
 	logger := s.Logger.WithField("endpoint", "/cleanup_e2e")
 
 	if s.Config.CleanupSecret == "" {

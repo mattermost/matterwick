@@ -32,11 +32,15 @@ type CMTDispatchRequest struct {
 // handleCMTDispatch processes a CMT dispatch request from cmt-provisioner.yml.
 // It validates the auth token, parses the JSON body, and starts provisioning
 // asynchronously so the workflow step returns immediately.
+//
+// NOTE: this handler does not call CheckLimitRateAndAbortRequest as the
+// /github_event handler does. Rate-limit checking made sense for synchronous
+// GitHub webhook responses where matterwick might need to make API calls
+// before answering. Here, all GitHub API calls happen later in the goroutine,
+// so checking now would block the request on a network round-trip to GitHub
+// for no benefit, and (more importantly) makes this endpoint untestable in
+// the unit-test environment, which has no live token.
 func (s *Server) handleCMTDispatch(w http.ResponseWriter, r *http.Request) {
-	if overLimit := s.CheckLimitRateAndAbortRequest(); overLimit {
-		return
-	}
-
 	logger := s.Logger.WithField("endpoint", "/cmt_dispatch")
 
 	// Reject the request if no token is configured rather than running unauthenticated.
