@@ -315,8 +315,8 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
 // version, builds the CMT_MATRIX JSON, and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
-	// Cap at 5 versions to prevent runaway provisioning
-	const maxVersions = 5
+	// Cap the number of versions (one cloud instance per version) to prevent runaway provisioning.
+	const maxVersions = 10
 	if len(serverVersions) > maxVersions {
 		logger.Warnf("Capping server versions from %d to %d", len(serverVersions), maxVersions)
 		serverVersions = serverVersions[:maxVersions]

@@ -532,13 +532,14 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		assert.Equal(t, []string{"v11.1.0", "v11.2.0", "v12.0.0"}, versions)
 	})
 
-	t.Run("caps server versions to 5", func(t *testing.T) {
-		versions := parseServerVersionsFromString("v1, v2, v3, v4, v5, v6, v7")
-		// The cap is enforced inside handleCMTWithServerVersions
-		if len(versions) > 5 {
-			versions = versions[:5]
+	t.Run("caps server versions to 10", func(t *testing.T) {
+		versions := parseServerVersionsFromString("v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12")
+		// The cap is enforced inside handleCMTWithServerVersions (maxVersions = 10).
+		const maxVersions = 10
+		if len(versions) > maxVersions {
+			versions = versions[:maxVersions]
 		}
-		assert.Len(t, versions, 5)
+		assert.Len(t, versions, maxVersions)
 	})
 
 	t.Run("1 instance per version for CMT (matrix handles parallelism)", func(t *testing.T) {
