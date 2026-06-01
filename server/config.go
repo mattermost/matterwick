@@ -140,7 +140,7 @@ type MatterwickConfig struct {
 // defaultCMTServerVersions is the fallback CMT version set used when Config.CMTServerVersions
 // is empty. Mattermost actively supports v11.x feature releases and the v10.11 ESR, so the
 // default covers the current ESR line plus a v11 release. Update as ESR/feature lines change.
-var defaultCMTServerVersions = []string{"10.11.0", "11.7.0"}
+var defaultCMTServerVersions = []string{"10.11.18", "11.7.1"}
 
 // CMTVersions returns the configured CMT server versions, or the hardcoded default set when
 // none are configured.
