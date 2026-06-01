@@ -140,7 +140,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
-	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, key, instances)
+	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, instances)
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.e2eInstancesLock.Lock()
@@ -249,8 +249,8 @@ func getRunnerForPlatform(platform string) string {
 }
 
 // triggerE2EWorkflowForPushEvent routes to the desktop or mobile dispatch function.
-// trackingKey is embedded in workflow inputs as mw_tracking_key for cleanup on completion.
-func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, trackingKey string, instances []*E2EInstance) error {
+// Cleanup is driven by the workflow_run completed event matched on the commit SHA.
+func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":         repoName,
 		"instanceType": instanceType,
@@ -265,14 +265,14 @@ func (s *Server) triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, 
 	}
 
 	if instanceType == "desktop" {
-		return s.triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey, instances)
+		return s.triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, instances)
 	}
 
-	return s.triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey, instances)
+	return s.triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, instances)
 }
 
 // triggerDesktopE2EWorkflowForPushEvent dispatches the desktop E2E workflow.
-func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
+func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"branch": branch,
@@ -291,11 +291,11 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 		runType = "RELEASE"
 	}
 
-	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, runType, trackingKey, false)
+	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, runType, false)
 }
 
 // triggerMobileE2EWorkflowForPushEvent dispatches the mobile E2E workflow (e2e-detox-pr.yml).
-func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha, trackingKey string, instances []*E2EInstance) error {
+func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branch, sha string, instances []*E2EInstance) error {
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo":   repoName,
 		"branch": branch,
@@ -321,6 +321,6 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		repoOwner, repoName, branch, sha,
 		instances[0].URL, instances[1].URL, instances[2].URL,
 		"both", // push events always test both iOS and Android
-		runType, trackingKey,
+		runType,
 	)
 }

@@ -78,20 +78,17 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		"head_sha": headSHA,
 	})
 
-	// CMT: "CMT Provisioner" workflow_run events are no longer used to start provisioning.
-	// GitHub's workflow_run webhook payload does not carry workflow_dispatch inputs (the
-	// "inputs" field is not in the workflow_run schema), so server_versions cannot be
-	// read from this event. cmt-provisioner.yml now POSTs directly to /cmt_dispatch with
-	// the full context, handled by handleCMTDispatch.
-	//
-	// We still listen for workflow_run.completed on CMT as a defensive fallback to clean
-	// up any instances that somehow got tracked but were never reaped via /cleanup_e2e.
-	if strings.Contains(workflowName, "cmt") || strings.Contains(workflowName, "CMT") {
-		if payload.Action == "completed" {
-			logger.Debug("CMT trigger workflow completed; sha-based cleanup is a fallback for stuck instances")
-			s.handleCMTRunCleanup(repoName, headSHA, logger)
-		} else {
-			logger.WithField("action", payload.Action).Debug("Ignoring CMT workflow_run event; provisioning is driven by /cmt_dispatch")
+	// CMT: a lightweight, scheduled trigger workflow (Config.CMTTriggerWorkflowName, e.g.
+	// "CMT Provisioner") fires in the desktop/mobile repo. matterwick provisions one instance
+	// per version in Config.CMTVersions() and dispatches compatibility-matrix-testing.yml.
+	// No inputs are read from the event — the version set is hardcoded in matterwick config —
+	// so this works despite GitHub's workflow_run payload not carrying workflow_dispatch inputs.
+	// Cleanup happens when the test workflow ("Compatibility Matrix Testing") completes, handled
+	// by the isE2ETestWorkflow branch below.
+	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
+		if payload.Action == "requested" {
+			logger.Info("CMT trigger workflow started, provisioning E2E servers for configured versions")
+			go s.handleCMTTrigger(owner, repoName, headBranch, headSHA, runID, logger)
 		}
 		return
 	}
@@ -108,13 +105,9 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	// --- Test workflow completion: clean up provisioned instances ---
 	//
 	// Cleanup is keyed by head_sha against tracking-key suffixes ({repo}-...-{sha}).
-	// We do not attempt to read mw_tracking_key from payload.WorkflowRun.Inputs:
-	// GitHub's workflow_run webhook payload does not include workflow_dispatch
-	// inputs (the "inputs" field is not in the workflow_run schema), so that field
-	// is always empty in production. SHA-based scanning is the canonical mechanism.
-	// The mw_tracking_key value is still set when dispatching the test workflow so
-	// it remains queryable via the GitHub REST API if a future code path wants it,
-	// but the webhook-driven cleanup intentionally does not depend on it.
+	// GitHub's workflow_run webhook payload does not include workflow_dispatch inputs,
+	// so SHA-based scanning is the canonical mechanism for matching provisioned instances
+	// (push, scheduled, and CMT tracking keys all end with "-{sha}").
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
 		logger.Info("Test workflow completed, cleaning up instances by SHA suffix match")
 		s.findAndDestroyInstancesBySHA(repoName, headSHA, logger)
@@ -189,10 +182,7 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 			s.destroyE2EInstances(instances, logger)
 			return
 		}
-		// Pass the tracking key so the workflow_run completed handler can clean up by
-		// direct key lookup rather than SHA suffix matching (immune to new commits during
-		// the ~30 min instance-creation window).
-		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType, key, nightly)
+		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType, nightly)
 	} else {
 		if len(instances) < 3 {
 			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
@@ -203,7 +193,7 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 			return
 		}
 		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, branch, sha,
-			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType, key)
+			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
 	}
 
 	if dispatchErr != nil {
@@ -269,6 +259,28 @@ func parseServerVersionsFromString(input string) []string {
 		return []string{}
 	}
 	return versions
+}
+
+// handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the
+// instance type from the repo, reads the hardcoded server-version set from config, and hands
+// off to handleCMTWithServerVersions. The version list lives in matterwick (Config.CMTVersions),
+// so nothing needs to be read from the workflow_run event.
+func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
+	instanceType := "desktop"
+	if strings.Contains(repoName, "mobile") {
+		instanceType = "mobile"
+	} else if !strings.Contains(repoName, "desktop") {
+		logger.Warn("Repository is neither desktop nor mobile, skipping CMT trigger")
+		return
+	}
+
+	versions := s.Config.CMTVersions()
+	logger.WithFields(logrus.Fields{
+		"instanceType": instanceType,
+		"versions":     versions,
+	}).Info("Provisioning CMT instances for configured server versions")
+
+	s.handleCMTWithServerVersions(owner, repoName, instanceType, branch, sha, versions, runID, logger)
 }
 
 // handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
@@ -346,9 +358,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		return
 	}
 
-	// Pass the tracking key so the workflow_run completed handler can clean up by
-	// direct key lookup rather than SHA suffix matching.
-	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, key, runID, logger); err != nil {
+	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, runID, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
@@ -461,19 +471,19 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
-// CMT_MATRIX JSON. trackingKey is the s.e2eInstances map key for this run; it is
-// embedded as "mw_tracking_key" in the workflow inputs so the workflow_run completed
-// handler can do a direct key lookup instead of fragile SHA suffix matching.
-// runID is the CMT provisioner workflow run ID, passed as cmt_run_id so the test workflow
-// can call back to Matterwick for instance cleanup.
-func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, trackingKey string, runID int64, logger logrus.FieldLogger) error {
+// CMT_MATRIX JSON. runID is the CMT trigger workflow run ID, passed as cmt_run_id purely
+// for traceability/logging on the test workflow side.
+//
+// We intentionally do NOT pass a "mw_tracking_key" input: compatibility-matrix-testing.yml
+// does not declare it, and GitHub rejects a workflow_dispatch carrying an undeclared input
+// with a 422. Cleanup is driven by SHA-suffix matching when the test workflow completes.
+func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	workflowInputs := map[string]interface{}{
-		"CMT_MATRIX":      cmtMatrixJSON,
-		"cmt_run_id":      fmt.Sprintf("%d", runID),
-		"mw_tracking_key": trackingKey,
+		"CMT_MATRIX": cmtMatrixJSON,
+		"cmt_run_id": fmt.Sprintf("%d", runID),
 	}
 	if instanceType == "desktop" {
 		workflowInputs["DESKTOP_VERSION"] = branch
@@ -588,19 +598,4 @@ func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, p
 
 	logger.WithField("instanceCount", len(instances)).Info("Instances created for version")
 	return instances, nil
-}
-
-// handleCMTRunCleanup is a best-effort fallback for CMT cleanup when the trigger workflow
-// completes. Because the CMT trigger is a lightweight workflow that completes in seconds —
-// well before the 30-minute provisioning goroutine stores instances — this function will
-// most often find nothing. The primary cleanup path is findAndDestroyInstancesBySHA,
-// triggered when compatibility-matrix-testing.yml completes.
-func (s *Server) handleCMTRunCleanup(repoName, sha string, logger logrus.FieldLogger) {
-	logger = logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"sha":  sha,
-		"type": "cmt_cleanup_fallback",
-	})
-	logger.Debug("CMT trigger completed — sha-based cleanup is the primary path")
-	s.findAndDestroyInstancesBySHA(repoName, sha, logger)
 }

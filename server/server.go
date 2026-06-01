@@ -182,16 +182,6 @@ func (s *Server) initializeRouter() {
 	s.Router.HandleFunc("/github_event", s.githubEvent).Methods(http.MethodPost)
 	s.Router.HandleFunc("/cloud_webhooks", s.handleCloudWebhook).Methods(http.MethodPost)
 	s.Router.HandleFunc("/shrug_wick", s.serveShrugWick).Methods(http.MethodGet)
-
-	// /cmt_dispatch is called directly by cmt-provisioner.yml in desktop/mobile,
-	// because GitHub's workflow_run webhook payload does not carry workflow_dispatch
-	// inputs (the inputs field is not in GitHub's workflow_run schema), so we cannot
-	// extract server_versions from the webhook alone.
-	s.Router.HandleFunc("/cmt_dispatch", s.handleCMTDispatch).Methods(http.MethodPost)
-
-	// /cleanup_e2e is called by compatibility-matrix-testing.yml after the test
-	// matrix finishes, so matterwick can destroy the provisioned instances.
-	s.Router.HandleFunc("/cleanup_e2e", s.handleCleanupE2E).Methods(http.MethodPost)
 }
 
 func (s *Server) ping(w http.ResponseWriter, r *http.Request) {

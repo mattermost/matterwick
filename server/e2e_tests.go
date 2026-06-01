@@ -1048,11 +1048,11 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow via GitHub Actions API.
-// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
-// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
-// a direct key lookup instead of fragile SHA suffix matching.
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType, trackingKey string, nightly bool) error {
+// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow (e2e-functional.yml) via the
+// GitHub Actions API. Cleanup is driven by the workflow_run completed event matched on the
+// commit SHA, so no tracking key is passed as an input (e2e-functional.yml does not declare
+// one, and GitHub rejects a workflow_dispatch carrying an undeclared input with a 422).
+func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string, nightly bool) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1085,9 +1085,6 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"run_type":          runType,
 		"nightly":           fmt.Sprintf("%t", nightly),
 	}
-	if trackingKey != "" {
-		workflowInputs["mw_tracking_key"] = trackingKey
-	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
 	req, err := client.NewRequest("POST",
@@ -1116,11 +1113,11 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	return nil
 }
 
-// dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API.
-// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
-// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
-// a direct key lookup instead of fragile SHA suffix matching.
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType, trackingKey string) error {
+// dispatchMobileE2EWorkflow triggers the mobile E2E workflow (e2e-detox-pr.yml) via the
+// GitHub Actions API. Cleanup is driven by the workflow_run completed event matched on the
+// commit SHA, so no tracking key is passed as an input (e2e-detox-pr.yml does not declare
+// one, and GitHub rejects a workflow_dispatch carrying an undeclared input with a 422).
+func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1137,9 +1134,6 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 		"MOBILE_VERSION": sha,
 		"PLATFORM":       platform,
 		"run_type":       runType,
-	}
-	if trackingKey != "" {
-		workflowInputs["mw_tracking_key"] = trackingKey
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)

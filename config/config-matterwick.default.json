@@ -83,5 +83,7 @@
   "E2EReleasePatternPrefix": "release-",
   "E2ENightlyTriggerWorkflowName": "E2E Nightly Trigger",
   "E2ETestWorkflowNames": ["Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"],
-  "E2EInstanceMaxAge": 6
+  "E2EInstanceMaxAge": 6,
+  "CMTTriggerWorkflowName": "CMT Provisioner",
+  "CMTServerVersions": ["10.11.0", "11.7.0"]
 }

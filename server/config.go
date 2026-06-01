@@ -124,17 +124,31 @@ type MatterwickConfig struct {
 	// Default (0): 3 hours.
 	E2EInstanceMaxAge int
 
-	// CMTTriggerSecret is the shared secret presented in the X-Trigger-Token header by
-	// cmt-provisioner.yml when POSTing to /cmt_dispatch. The webhook payload from
-	// GitHub does not carry workflow_dispatch inputs (verified against the
-	// workflow_run schema), so cmt-provisioner calls matterwick directly with the
-	// server_versions input. Empty value disables the endpoint.
-	CMTTriggerSecret string
+	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight,
+	// scheduled CMT trigger workflow in the desktop/mobile repos. When matterwick receives
+	// a workflow_run "requested" event for this workflow it provisions one instance per
+	// version in CMTServerVersions and dispatches compatibility-matrix-testing.yml.
+	CMTTriggerWorkflowName string
 
-	// CleanupSecret is the shared secret presented in the X-Cleanup-Token header by
-	// compatibility-matrix-testing.yml (and any other workflow) when POSTing to
-	// /cleanup_e2e to request instance teardown. Empty value disables the endpoint.
-	CleanupSecret string
+	// CMTServerVersions is the hardcoded set of Mattermost server versions CMT runs
+	// against (e.g. the active ESR plus the current feature release). Values must be valid
+	// Mattermost image tags (full semver, no "v" prefix, e.g. "10.11.0"). Overridable via
+	// the gitops config; when empty matterwick falls back to defaultCMTServerVersions.
+	CMTServerVersions []string
+}
+
+// defaultCMTServerVersions is the fallback CMT version set used when Config.CMTServerVersions
+// is empty. Mattermost actively supports v11.x feature releases and the v10.11 ESR, so the
+// default covers the current ESR line plus a v11 release. Update as ESR/feature lines change.
+var defaultCMTServerVersions = []string{"10.11.0", "11.7.0"}
+
+// CMTVersions returns the configured CMT server versions, or the hardcoded default set when
+// none are configured.
+func (c *MatterwickConfig) CMTVersions() []string {
+	if len(c.CMTServerVersions) > 0 {
+		return c.CMTServerVersions
+	}
+	return defaultCMTServerVersions
 }
 
 func findConfigFile(fileName string) string {
