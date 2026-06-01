@@ -104,13 +104,23 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	// --- Test workflow completion: clean up provisioned instances ---
 	//
-	// Cleanup is keyed by head_sha against tracking-key suffixes ({repo}-...-{sha}).
-	// GitHub's workflow_run webhook payload does not include workflow_dispatch inputs,
-	// so SHA-based scanning is the canonical mechanism for matching provisioned instances
-	// (push, scheduled, and CMT tracking keys all end with "-{sha}").
+	// Cleanup is correlated on head_sha. GitHub's workflow_run webhook payload does not
+	// include workflow_dispatch inputs, and its run id is the *test* run's id (not the
+	// trigger run id embedded in our tracking key), so head_sha is the only field we can
+	// match on (push, scheduled, and CMT tracking keys all end with "-{sha}").
+	//
+	// Two flows can legitimately share a head SHA — e.g. the monthly CMT trigger and the
+	// nightly trigger both fire on the same master commit. They run different test
+	// workflows, so we scope cleanup to the completing workflow's flow (CMT vs. non-CMT) to
+	// avoid tearing down the other run's still-active servers.
+	//
+	// If the branch advances during provisioning, the dispatched run's head_sha can differ
+	// from the tracked SHA and no key will match here; such orphans are reaped by the
+	// periodic cleanupStaleNonPRE2EInstances scan (bounded by E2EInstanceMaxAge).
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		logger.Info("Test workflow completed, cleaning up instances by SHA suffix match")
-		s.findAndDestroyInstancesBySHA(repoName, headSHA, logger)
+		cmtOnly := workflowName == cmtTestWorkflowName
+		logger.WithField("cmt_only", cmtOnly).Info("Test workflow completed, cleaning up matching instances by SHA")
+		s.findAndDestroyInstancesBySHA(repoName, headSHA, cmtOnly, logger)
 		return
 	}
 
@@ -219,23 +229,42 @@ func (s *Server) isE2ETestWorkflow(name string) bool {
 	return false
 }
 
-// findAndDestroyInstancesBySHA scans the instance map for entries belonging to repoName
-// whose tracking key ends with "-{headSHA}" (push-event, scheduled, and cmt keys) and destroys them.
-func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, logger logrus.FieldLogger) {
+// cmtTestWorkflowName is the workflow "name:" of compatibility-matrix-testing.yml in the
+// desktop and mobile repos. It identifies CMT test-workflow completions so SHA-based cleanup
+// only reaps CMT instances (keys "{repo}-cmt-…-{sha}") and leaves a concurrent nightly/push
+// run on the same SHA untouched (and vice versa).
+const cmtTestWorkflowName = "Compatibility Matrix Testing"
+
+// instanceKeyMatchesSHA reports whether a tracking key belongs to repoName, ends with the given
+// head SHA, and matches the requested flow: CMT keys ("{repo}-cmt-…") when cmtOnly is true,
+// non-CMT keys (push/scheduled) when false. This scoping prevents a completing workflow from
+// reaping a different flow's run that happens to share the same commit SHA (e.g. the monthly CMT
+// trigger and the nightly trigger firing on the same master commit).
+func instanceKeyMatchesSHA(key, repoName, headSHA string, cmtOnly bool) bool {
+	if !strings.HasPrefix(key, repoName+"-") || !strings.HasSuffix(key, "-"+headSHA) {
+		return false
+	}
+	return strings.HasPrefix(key, repoName+"-cmt-") == cmtOnly
+}
+
+// findAndDestroyInstancesBySHA scans the instance map for entries belonging to repoName whose
+// tracking key ends with "-{headSHA}" and destroys them. When cmtOnly is true only CMT keys
+// ("{repo}-cmt-…") match; when false only non-CMT keys (push/scheduled) match — so a completing
+// workflow never tears down a different flow's run that happens to share the same SHA.
+func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, cmtOnly bool, logger logrus.FieldLogger) {
 	if headSHA == "" {
 		return
 	}
-	prefix := repoName + "-"
-	suffix := "-" + headSHA
 
 	s.e2eInstancesLock.Lock()
 	var found []*E2EInstance
 	var keysToDelete []string
 	for key, instances := range s.e2eInstances {
-		if strings.HasPrefix(key, prefix) && strings.HasSuffix(key, suffix) {
-			found = append(found, instances...)
-			keysToDelete = append(keysToDelete, key)
+		if !instanceKeyMatchesSHA(key, repoName, headSHA, cmtOnly) {
+			continue
 		}
+		found = append(found, instances...)
+		keysToDelete = append(keysToDelete, key)
 	}
 	for _, k := range keysToDelete {
 		delete(s.e2eInstances, k)

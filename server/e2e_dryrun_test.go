@@ -810,6 +810,39 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 }
 
 // ------------------------------------------------------------
+// 9b. SHA-scoped cleanup must not reap a concurrent flow on the same SHA
+// ------------------------------------------------------------
+
+func TestInstanceKeyMatchesSHA(t *testing.T) {
+	repo := "mattermost-mobile"
+	sha := "deadbeef"
+	cmtKey := fmt.Sprintf("%s-cmt-100-%s", repo, sha)             // CMT flow
+	nightlyKey := fmt.Sprintf("%s-scheduled-200-%s", repo, sha)   // nightly flow, same SHA
+	pushKey := fmt.Sprintf("%s-push-release-9.0-%s", repo, sha)   // push flow, same SHA
+	prKey := fmt.Sprintf("%s-pr-42", repo)                        // PR flow, no -sha suffix
+	otherSHAKey := fmt.Sprintf("%s-cmt-100-%s", repo, "feedface") // CMT, different SHA
+
+	t.Run("CMT completion matches only the CMT key", func(t *testing.T) {
+		assert.True(t, instanceKeyMatchesSHA(cmtKey, repo, sha, true))
+		assert.False(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, true), "nightly key must survive a CMT completion")
+		assert.False(t, instanceKeyMatchesSHA(pushKey, repo, sha, true))
+		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, true))
+		assert.False(t, instanceKeyMatchesSHA(otherSHAKey, repo, sha, true), "different SHA must not match")
+	})
+
+	t.Run("non-CMT completion matches push/scheduled but not CMT", func(t *testing.T) {
+		assert.False(t, instanceKeyMatchesSHA(cmtKey, repo, sha, false), "CMT key must survive a nightly/push completion")
+		assert.True(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, false))
+		assert.True(t, instanceKeyMatchesSHA(pushKey, repo, sha, false))
+		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, false), "PR keys have no -sha suffix")
+	})
+
+	t.Run("other repo is never matched", func(t *testing.T) {
+		assert.False(t, instanceKeyMatchesSHA("mattermost-desktop-cmt-100-"+sha, repo, sha, true))
+	})
+}
+
+// ------------------------------------------------------------
 // 10. Instance name length safety
 // ------------------------------------------------------------
 
