@@ -80,9 +80,10 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	// CMT: a lightweight, scheduled trigger workflow (Config.CMTTriggerWorkflowName, e.g.
 	// "CMT Provisioner") fires in the desktop/mobile repo. matterwick provisions one instance
-	// per version in Config.CMTVersions() and dispatches compatibility-matrix-testing.yml.
-	// No inputs are read from the event — the version set is hardcoded in matterwick config —
-	// so this works despite GitHub's workflow_run payload not carrying workflow_dispatch inputs.
+	// per version in the resolved CMT set (s.cmtServerVersions) and dispatches
+	// compatibility-matrix-testing.yml. No inputs are read from the event — the version set is
+	// resolved by matterwick — so this works despite GitHub's workflow_run payload not carrying
+	// workflow_dispatch inputs.
 	// Cleanup happens when the test workflow ("Compatibility Matrix Testing") completes, handled
 	// by the isE2ETestWorkflow branch below.
 	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
@@ -291,9 +292,9 @@ func parseServerVersionsFromString(input string) []string {
 }
 
 // handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the
-// instance type from the repo, reads the hardcoded server-version set from config, and hands
-// off to handleCMTWithServerVersions. The version list lives in matterwick (Config.CMTVersions),
-// so nothing needs to be read from the workflow_run event.
+// instance type from the repo, resolves the server-version set (auto-derived from Mattermost
+// releases, or the manual Config.CMTServerVersions override), and hands off to
+// handleCMTWithServerVersions. Nothing needs to be read from the workflow_run event.
 func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
 	instanceType := "desktop"
 	if strings.Contains(repoName, "mobile") {
@@ -303,11 +304,11 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 		return
 	}
 
-	versions := s.Config.CMTVersions()
+	versions := s.cmtServerVersions()
 	logger.WithFields(logrus.Fields{
 		"instanceType": instanceType,
 		"versions":     versions,
-	}).Info("Provisioning CMT instances for configured server versions")
+	}).Info("Provisioning CMT instances for resolved server versions")
 
 	s.handleCMTWithServerVersions(owner, repoName, instanceType, branch, sha, versions, runID, logger)
 }

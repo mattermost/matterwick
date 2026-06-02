@@ -130,26 +130,17 @@ type MatterwickConfig struct {
 	// version in CMTServerVersions and dispatches compatibility-matrix-testing.yml.
 	CMTTriggerWorkflowName string
 
-	// CMTServerVersions is the hardcoded set of Mattermost server versions CMT runs
-	// against (e.g. the active ESR plus the current feature release). Values must be valid
-	// Mattermost image tags (full semver, no "v" prefix, e.g. "10.11.0"). Overridable via
-	// the gitops config; when empty matterwick falls back to defaultCMTServerVersions.
+	// CMTServerVersions is an OPTIONAL manual override for the CMT version set. When non-empty
+	// it is used verbatim (values must be valid Mattermost image tags: full semver, no "v"
+	// prefix, e.g. "10.11.0"). When empty (the normal case) matterwick auto-derives the set
+	// from Mattermost's GitHub releases via Server.resolveCMTServerVersions.
 	CMTServerVersions []string
 }
 
-// defaultCMTServerVersions is the fallback CMT version set used when Config.CMTServerVersions
-// is empty. Mattermost actively supports v11.x feature releases and the v10.11 ESR, so the
-// default covers the current ESR line plus a v11 release. Update as ESR/feature lines change.
+// defaultCMTServerVersions is the fallback CMT version set used only when auto-resolution
+// fails (GitHub API error) and no manual override is configured. Kept reasonably current:
+// the active v10.11 ESR plus a recent v11 release.
 var defaultCMTServerVersions = []string{"10.11.18", "11.7.1"}
-
-// CMTVersions returns the configured CMT server versions, or the hardcoded default set when
-// none are configured.
-func (c *MatterwickConfig) CMTVersions() []string {
-	if len(c.CMTServerVersions) > 0 {
-		return c.CMTServerVersions
-	}
-	return defaultCMTServerVersions
-}
 
 func findConfigFile(fileName string) string {
 	if _, err := os.Stat("/tmp/" + fileName); err == nil {

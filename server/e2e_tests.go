@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -845,6 +847,185 @@ func (s *Server) resolveE2EServerVersion() string {
 
 	s.Logger.Warn("[resolveE2EServerVersion] No stable release found, falling back to master")
 	return "master"
+}
+
+// cmtVersion is a parsed Mattermost release version: major.minor.patch with an optional
+// release-candidate number. raw is the bare-semver string passed to the cloud provisioner
+// (e.g. "11.7.1" or "11.8.0-rc3").
+type cmtVersion struct {
+	major, minor, patch int
+	rc                  int // 0 = stable, >0 = -rcN
+	raw                 string
+}
+
+// parseCMTVersion parses "vX.Y.Z" or "vX.Y.Z-rcN" (the leading "v" is optional). It returns
+// ok=false for anything else (other prerelease suffixes like -beta/-alpha are ignored for CMT).
+func parseCMTVersion(tag string) (cmtVersion, bool) {
+	raw := strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	base := raw
+	rc := 0
+	if i := strings.Index(base, "-rc"); i != -1 {
+		n, err := strconv.Atoi(base[i+len("-rc"):])
+		if err != nil {
+			return cmtVersion{}, false
+		}
+		rc = n
+		base = base[:i]
+	} else if strings.Contains(base, "-") {
+		return cmtVersion{}, false
+	}
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return cmtVersion{}, false
+	}
+	maj, err1 := strconv.Atoi(parts[0])
+	min, err2 := strconv.Atoi(parts[1])
+	pat, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return cmtVersion{}, false
+	}
+	return cmtVersion{major: maj, minor: min, patch: pat, rc: rc, raw: raw}, true
+}
+
+// less reports whether a sorts before b by (major, minor, patch, rc). For the same X.Y.Z, a
+// stable release (rc==0) sorts above its release candidates (e.g. 11.8.0-rc3 < 11.8.0).
+func (a cmtVersion) less(b cmtVersion) bool {
+	if a.major != b.major {
+		return a.major < b.major
+	}
+	if a.minor != b.minor {
+		return a.minor < b.minor
+	}
+	if a.patch != b.patch {
+		return a.patch < b.patch
+	}
+	ar, br := a.rc, b.rc
+	if ar == 0 {
+		ar = int(^uint(0) >> 1) // treat stable as the highest "rc" for the same patch
+	}
+	if br == 0 {
+		br = int(^uint(0) >> 1)
+	}
+	return ar < br
+}
+
+// cmtServerVersions returns the version set CMT runs against. An explicit, non-empty
+// Config.CMTServerVersions is used verbatim (manual override / pin); otherwise the set is
+// auto-derived from the Mattermost GitHub releases.
+func (s *Server) cmtServerVersions() []string {
+	if len(s.Config.CMTServerVersions) > 0 {
+		return s.Config.CMTServerVersions
+	}
+	return s.resolveCMTServerVersions()
+}
+
+// resolveCMTServerVersions auto-derives the CMT version set from the mattermost/mattermost
+// GitHub releases: the active ESR line(s) + the latest 3 stable minor lines + the current
+// release candidate, each as the latest patch of its line. ESR lines are detected from the
+// release notes ("Extended Support Release"). It is called once per CMT trigger (rare:
+// monthly schedule + occasional manual dispatch), so it fetches fresh with no caching.
+// Falls back to defaultCMTServerVersions on error or if nothing parses.
+func (s *Server) resolveCMTServerVersions() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	// githubAPIBase is only set in tests to redirect to a mock server.
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Body       string `json:"body"`
+	}
+	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=100", nil)
+	if err != nil {
+		s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to build request; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+	if _, err = client.Do(ctx, req, &releases); err != nil {
+		s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to fetch releases; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+
+	type minorKey struct{ major, minor int }
+	latestStable := map[minorKey]cmtVersion{}
+	esrMinors := map[minorKey]bool{}
+	var bestRC cmtVersion
+	haveRC := false
+
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		v, ok := parseCMTVersion(r.TagName)
+		if !ok {
+			continue
+		}
+		key := minorKey{v.major, v.minor}
+		if v.rc > 0 {
+			if !haveRC || bestRC.less(v) {
+				bestRC = v
+				haveRC = true
+			}
+			continue
+		}
+		if cur, exists := latestStable[key]; !exists || cur.less(v) {
+			latestStable[key] = v
+		}
+		if strings.Contains(strings.ToLower(r.Body), "extended support release") {
+			esrMinors[key] = true
+		}
+	}
+
+	if len(latestStable) == 0 {
+		s.Logger.Warn("[resolveCMTServerVersions] No stable releases parsed; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+
+	// All stable minor lines, sorted descending (newest first).
+	minors := make([]cmtVersion, 0, len(latestStable))
+	for _, v := range latestStable {
+		minors = append(minors, v)
+	}
+	sort.Slice(minors, func(i, j int) bool { return minors[j].less(minors[i]) })
+
+	selected := map[minorKey]cmtVersion{}
+	for i := 0; i < len(minors) && i < 3; i++ { // latest 3 stable minor lines
+		selected[minorKey{minors[i].major, minors[i].minor}] = minors[i]
+	}
+	for k := range esrMinors { // active ESR line(s)
+		if v, ok := latestStable[k]; ok {
+			selected[k] = v
+		}
+	}
+
+	chosen := make([]cmtVersion, 0, len(selected)+1)
+	for _, v := range selected {
+		chosen = append(chosen, v)
+	}
+	// Include the current RC only when it's newer than the newest stable (an upcoming release).
+	if haveRC && minors[0].less(bestRC) {
+		chosen = append(chosen, bestRC)
+	}
+	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) }) // ascending
+
+	const maxVersions = 10
+	if len(chosen) > maxVersions {
+		chosen = chosen[len(chosen)-maxVersions:] // keep the newest if somehow over the cap
+	}
+
+	versions := make([]string, 0, len(chosen))
+	for _, v := range chosen {
+		versions = append(versions, v.raw)
+	}
+	s.Logger.WithField("versions", versions).Info("[resolveCMTServerVersions] Auto-derived CMT server version set")
+	return versions
 }
 
 // destroyE2EInstances destroys all given E2E instances

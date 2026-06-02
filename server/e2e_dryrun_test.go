@@ -1408,13 +1408,100 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 		assert.Equal(t, "11.1.0", s1["version"])
 	})
 
-	t.Run("CMT versions capped at 5", func(t *testing.T) {
-		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0"
+	t.Run("CMT versions capped at 10", func(t *testing.T) {
+		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0, v8.0.0, v9.0.0, v10.0.0, v11.0.0, v12.0.0"
 		parsed := parseServerVersionsFromString(input)
-		const maxVersions = 5
+		const maxVersions = 10
 		if len(parsed) > maxVersions {
 			parsed = parsed[:maxVersions]
 		}
-		assert.Len(t, parsed, 5, "CMT versions must be capped at 5")
+		assert.Len(t, parsed, 10, "CMT versions must be capped at 10")
+	})
+}
+
+// ------------------------------------------------------------
+// 15. resolveCMTServerVersions() — auto-derived CMT version set
+// ------------------------------------------------------------
+
+func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
+	// A realistic releases payload (newest first): an upcoming RC, recent stable minors,
+	// and ESR lines flagged in the body. Includes multiple patches per line and a draft.
+	releasesBody := `[
+		{"tag_name":"v11.8.0-rc3","draft":false,"prerelease":true,"body":"Mattermost Platform Release 11.8.0-rc3"},
+		{"tag_name":"v11.8.0-rc2","draft":false,"prerelease":true,"body":"rc"},
+		{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2 contains fixes."},
+		{"tag_name":"v11.7.1","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.1"},
+		{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+		{"tag_name":"v11.6.3","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.3"},
+		{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"},
+		{"tag_name":"v11.99.0","draft":true,"prerelease":false,"body":"draft should be ignored"},
+		{"tag_name":"v10.11.19","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.19 contains security fixes."},
+		{"tag_name":"v10.11.18","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.18"}
+	]`
+
+	t.Run("auto-derives ESR + latest 3 minors + current RC, latest patch each", func(t *testing.T) {
+		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveCMTServerVersions()
+		// 10.11.19 (ESR) + 11.5.7/11.6.4/11.7.2 (latest 3 minors; 11.7 also ESR) + 11.8.0-rc3 (RC),
+		// latest patch per line, v-stripped, ascending.
+		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, got)
+	})
+
+	t.Run("explicit config override is returned verbatim, no API call", func(t *testing.T) {
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+		s.Config.CMTServerVersions = []string{"9.11.0", "10.5.0"}
+
+		assert.Equal(t, []string{"9.11.0", "10.5.0"}, s.cmtServerVersions())
+		assert.False(t, called, "manual override must not hit the GitHub API")
+	})
+
+	t.Run("API error falls back to defaultCMTServerVersions", func(t *testing.T) {
+		srv := mockReleasesServer(t, "boom", http.StatusInternalServerError)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, defaultCMTServerVersions, s.resolveCMTServerVersions())
+	})
+
+	t.Run("RC omitted when not newer than latest stable", func(t *testing.T) {
+		// Only stable releases here; an old RC for an already-released line must not appear.
+		body := `[
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"},
+			{"tag_name":"v11.7.0-rc1","draft":false,"prerelease":true,"body":"rc"},
+			{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+			{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveCMTServerVersions()
+		assert.Equal(t, []string{"11.5.7", "11.6.4", "11.7.2"}, got, "stale RC must be excluded")
+	})
+
+	t.Run("parseCMTVersion handles stable, rc, and v-prefix; rejects junk", func(t *testing.T) {
+		v, ok := parseCMTVersion("v11.8.0-rc3")
+		assert.True(t, ok)
+		assert.Equal(t, "11.8.0-rc3", v.raw)
+		assert.Equal(t, 3, v.rc)
+		v2, ok2 := parseCMTVersion("10.11.19")
+		assert.True(t, ok2)
+		assert.Equal(t, 0, v2.rc)
+		_, ok3 := parseCMTVersion("v11.7.0-beta.1")
+		assert.False(t, ok3, "non-rc prerelease suffixes are not CMT versions")
+		_, ok4 := parseCMTVersion("not-a-version")
+		assert.False(t, ok4)
+		// stable sorts above its rc for the same X.Y.Z
+		assert.True(t, v.less(v2) == false)
 	})
 }
