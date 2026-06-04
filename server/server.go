@@ -134,12 +134,13 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
-	// Destroy stale non-PR E2E instances left from a previous run immediately on startup,
-	// then continue scanning periodically so a mid-run restart doesn't leave orphaned
-	// instances alive until the *next* matterwick restart.
-	// The scan interval is half the configured max-age so the worst-case orphan lifetime
-	// is maxAge + interval ≈ 1.5× maxAge.
-	s.cleanupStaleNonPRE2EInstances()
+	// Destroy stale E2E instances (non-PR backstop + aged-out PR instances) left from a
+	// previous run immediately on startup, then continue scanning periodically so a mid-run
+	// restart doesn't leave orphaned instances alive until the *next* matterwick restart.
+	// The scan interval is half the (shorter) non-PR max-age so the worst-case non-PR orphan
+	// lifetime is maxAge + interval ≈ 1.5× maxAge; PR instances use a longer max-age but the
+	// same frequent scan, which is harmless.
+	s.cleanupStaleE2EInstances()
 	go func() {
 		interval := s.e2eInstanceMaxAge() / 2
 		if interval < 30*time.Minute {
@@ -150,7 +151,7 @@ func (s *Server) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				s.cleanupStaleNonPRE2EInstances()
+				s.cleanupStaleE2EInstances()
 			case <-s.stopCh:
 				return
 			}

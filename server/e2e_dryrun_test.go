@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gogithub "github.com/google/go-github/v32/github"
 	"github.com/mattermost/matterwick/model"
@@ -1554,5 +1555,62 @@ func TestResolveBranchHeadSHA(t *testing.T) {
 
 		_, err := s.resolveBranchHeadSHA("mattermost", "desktop", "main")
 		assert.Error(t, err)
+	})
+}
+
+// TestE2EPRInstanceMaxAge verifies the PR max-age knob: configured value wins, else 24h default.
+func TestE2EPRInstanceMaxAge(t *testing.T) {
+	s := newDryRunServer(t, "", "mattermost")
+
+	s.Config.E2EPRInstanceMaxAge = 0
+	assert.Equal(t, 24*time.Hour, s.e2ePRInstanceMaxAge(), "0 should fall back to 24h default")
+
+	s.Config.E2EPRInstanceMaxAge = 48
+	assert.Equal(t, 48*time.Hour, s.e2ePRInstanceMaxAge(), "configured value should win")
+}
+
+// TestEvictReapedPRInstances verifies that when the periodic scan reaps a PR's servers, the
+// in-memory tracking entry is removed so the next E2E/Run provisions a fresh set rather than
+// reusing now-deleted servers. Non-PR (SHA-keyed) entries must be left untouched.
+func TestEvictReapedPRInstances(t *testing.T) {
+	t.Run("evicts the PR key when any of its instances was reaped", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{
+			{InstallationID: "inst-a", Platform: "linux"},
+			{InstallationID: "inst-b", Platform: "macos"},
+			{InstallationID: "inst-c", Platform: "windows"},
+		}
+
+		// Only one member reaped, but the whole set ages out together, so the key goes.
+		s.evictReapedPRInstances([]string{"inst-b"}, s.Logger)
+
+		_, ok := s.e2eInstances["desktop-pr-42"]
+		assert.False(t, ok, "PR key must be evicted so re-applying E2E/Run creates a fresh set")
+	})
+
+	t.Run("leaves unrelated PR keys and non-PR (SHA-keyed) entries intact", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{{InstallationID: "inst-a"}}
+		s.e2eInstances["mattermost-mobile-pr-9"] = []*E2EInstance{{InstallationID: "inst-x"}}
+		s.e2eInstances["desktop-cmt-555-deadbeef"] = []*E2EInstance{{InstallationID: "inst-cmt"}}
+
+		s.evictReapedPRInstances([]string{"inst-a"}, s.Logger)
+
+		_, gone := s.e2eInstances["desktop-pr-42"]
+		assert.False(t, gone, "the matching PR key is evicted")
+		_, otherPR := s.e2eInstances["mattermost-mobile-pr-9"]
+		assert.True(t, otherPR, "an unrelated PR key must remain")
+		_, cmt := s.e2eInstances["desktop-cmt-555-deadbeef"]
+		assert.True(t, cmt, "a non-PR (SHA-keyed) entry must remain")
+	})
+
+	t.Run("no reaped IDs is a no-op", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{{InstallationID: "inst-a"}}
+
+		s.evictReapedPRInstances(nil, s.Logger)
+
+		_, ok := s.e2eInstances["desktop-pr-42"]
+		assert.True(t, ok, "nothing reaped means nothing evicted")
 	})
 }

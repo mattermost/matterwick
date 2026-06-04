@@ -117,7 +117,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	//
 	// If the branch advances during provisioning, the dispatched run's head_sha can differ
 	// from the tracked SHA and no key will match here; such orphans are reaped by the
-	// periodic cleanupStaleNonPRE2EInstances scan (bounded by E2EInstanceMaxAge).
+	// periodic cleanupStaleE2EInstances scan (bounded by E2EInstanceMaxAge).
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
 		cmtOnly := workflowName == cmtTestWorkflowName
 		logger.WithField("cmt_only", cmtOnly).Info("Test workflow completed, cleaning up matching instances by SHA")

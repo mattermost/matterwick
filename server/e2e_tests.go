@@ -703,14 +703,38 @@ func (s *Server) e2eInstanceMaxAge() time.Duration {
 	return 3 * time.Hour
 }
 
-// PR instances (identified by "-pr-" in their OwnerID) are always skipped — handleE2ECleanup
-// on PR close manages their lifecycle via cloud-API orphan scan.
-func (s *Server) cleanupStaleNonPRE2EInstances() {
-	maxAge := s.e2eInstanceMaxAge()
-	logger := s.Logger.WithField("type", "periodic_e2e_cleanup")
-	logger.WithField("max_age_hours", maxAge.Hours()).Info("Scanning for stale non-PR E2E instances")
+// e2ePRInstanceMaxAge returns the maximum age a PR E2E instance may reach before the periodic
+// scan deletes it. PR instances are reused across label toggles and commits, so this is much
+// longer than e2eInstanceMaxAge. Falls back to 24 hours when the config value is 0 (unset).
+func (s *Server) e2ePRInstanceMaxAge() time.Duration {
+	if s.Config.E2EPRInstanceMaxAge > 0 {
+		return time.Duration(s.Config.E2EPRInstanceMaxAge) * time.Hour
+	}
+	return 24 * time.Hour
+}
 
-	cutoffMs := time.Now().Add(-maxAge).UnixMilli()
+// cleanupStaleE2EInstances destroys aged-out E2E instances of both kinds:
+//   - non-PR instances (CMT/nightly/push) past e2eInstanceMaxAge — backstop for the primary
+//     SHA-matched completion cleanup.
+//   - PR instances past e2ePRInstanceMaxAge — PR instances have no completion-based teardown
+//     (they are deliberately kept alive for reuse), so this age cap stops long-open PRs from
+//     accumulating servers indefinitely. When a PR instance is reaped, its in-memory tracking
+//     entry is also evicted so re-applying E2E/Run provisions a fresh set instead of dispatching
+//     against a now-deleted server.
+func (s *Server) cleanupStaleE2EInstances() {
+	nonPRMaxAge := s.e2eInstanceMaxAge()
+	prMaxAge := s.e2ePRInstanceMaxAge()
+	logger := s.Logger.WithField("type", "periodic_e2e_cleanup")
+	logger.WithFields(logrus.Fields{
+		"non_pr_max_age_hours": nonPRMaxAge.Hours(),
+		"pr_max_age_hours":     prMaxAge.Hours(),
+	}).Info("Scanning for stale E2E instances")
+
+	now := time.Now()
+	nonPRCutoffMs := now.Add(-nonPRMaxAge).UnixMilli()
+	prCutoffMs := now.Add(-prMaxAge).UnixMilli()
+
+	var reapedPRInstallationIDs []string
 
 	for _, instanceType := range []string{"desktop", "mobile"} {
 		pattern := instanceType + "-%"
@@ -731,18 +755,22 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 				continue
 			}
 
-			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...").
-			// Skip them — handleE2ECleanup on PR close manages their lifecycle.
-			if strings.Contains(inst.OwnerID, "-pr-") {
-				continue
+			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...")
+			// and use the longer PR max-age; everything else uses the non-PR max-age.
+			isPR := strings.Contains(inst.OwnerID, "-pr-")
+			cutoffMs := nonPRCutoffMs
+			if isPR {
+				cutoffMs = prCutoffMs
 			}
 
-			// Skip instances younger than maxAge — a test may still be using them.
+			// Skip instances younger than their max age — a test may still be using them,
+			// or (for PRs) the servers are being kept alive for reuse.
 			if inst.CreateAt > cutoffMs {
 				logger.WithFields(logrus.Fields{
 					"installation_id": inst.ID,
 					"owner_id":        inst.OwnerID,
-				}).Debug("Skipping non-PR instance younger than max age (may still be in use)")
+					"is_pr":           isPR,
+				}).Debug("Skipping instance younger than its max age")
 				continue
 			}
 
@@ -760,15 +788,54 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 				"installation_id": inst.ID,
 				"owner_id":        inst.OwnerID,
 				"state":           inst.State,
+				"is_pr":           isPR,
 			})
-			instLogger.Warn("Destroying stale non-PR E2E instance")
+			instLogger.Warn("Destroying stale E2E instance")
 			if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
-				instLogger.WithError(err).Error("Failed to destroy stale non-PR E2E instance")
+				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
+				continue
+			}
+			if isPR {
+				reapedPRInstallationIDs = append(reapedPRInstallationIDs, inst.ID)
 			}
 		}
 	}
 
-	logger.Info("Non-PR E2E instance cleanup scan complete")
+	// Evict in-memory PR tracking entries whose servers were just reaped so the reuse path
+	// in handleE2ETestRequest sees no live instances and creates a fresh set on the next
+	// E2E/Run, instead of dispatching a workflow against deleted servers.
+	if len(reapedPRInstallationIDs) > 0 {
+		s.evictReapedPRInstances(reapedPRInstallationIDs, logger)
+	}
+
+	logger.Info("E2E instance cleanup scan complete")
+}
+
+// evictReapedPRInstances removes PR tracking entries from the in-memory map when any of their
+// servers were deleted by the periodic age scan. A PR's instances share a creation time, so the
+// whole set ages out together; removing the entry when any member is reaped ensures the reuse
+// path never hands back a partially-deleted set.
+func (s *Server) evictReapedPRInstances(reapedInstallationIDs []string, logger logrus.FieldLogger) {
+	reaped := make(map[string]bool, len(reapedInstallationIDs))
+	for _, id := range reapedInstallationIDs {
+		reaped[id] = true
+	}
+
+	s.e2eInstancesLock.Lock()
+	defer s.e2eInstancesLock.Unlock()
+	for key, instances := range s.e2eInstances {
+		// PR tracking keys are "{repo}-pr-{number}"; non-PR keys are keyed by SHA elsewhere.
+		if !strings.Contains(key, "-pr-") {
+			continue
+		}
+		for _, inst := range instances {
+			if inst != nil && reaped[inst.InstallationID] {
+				delete(s.e2eInstances, key)
+				logger.WithField("key", key).Info("Evicted expired PR E2E instances from tracking map")
+				break
+			}
+		}
+	}
 }
 
 // resolveE2EServerVersion returns the server version for E2E provisioning.

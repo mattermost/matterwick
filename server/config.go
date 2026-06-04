@@ -124,6 +124,14 @@ type MatterwickConfig struct {
 	// Default (0): 3 hours.
 	E2EInstanceMaxAge int
 
+	// E2EPRInstanceMaxAge is the maximum age (in hours) a PR E2E instance may reach before
+	// the periodic cleanup scan deletes it. PR instances are intentionally kept alive between
+	// label toggles and across commits so the same servers can be reused for re-runs, so this
+	// is much longer than E2EInstanceMaxAge. When such an instance is reaped its in-memory
+	// tracking entry is also evicted, so re-applying E2E/Run provisions a fresh set.
+	// Default (0): 24 hours.
+	E2EPRInstanceMaxAge int
+
 	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight,
 	// scheduled CMT trigger workflow in the desktop/mobile repos. When matterwick receives
 	// a workflow_run "requested" event for this workflow it provisions one instance per
