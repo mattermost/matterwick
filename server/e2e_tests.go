@@ -849,6 +849,42 @@ func (s *Server) resolveE2EServerVersion() string {
 	return "master"
 }
 
+// resolveBranchHeadSHA returns the current HEAD commit SHA of branch via the GitHub API.
+//
+// Non-PR E2E flows (push, nightly, CMT) provision instances and then dispatch the test
+// workflow with `ref: <branch>` (workflow_dispatch cannot take a commit SHA). GitHub records
+// the dispatched run's head_sha as the branch HEAD at dispatch time, which can differ from the
+// SHA that triggered provisioning if the branch advanced during the (often long) provisioning
+// window. Cleanup keys instances by SHA and matches on the completed run's head_sha, so we key
+// on the branch HEAD resolved at dispatch time to keep them aligned. Callers fall back to the
+// trigger SHA on error (the periodic age-based scan remains the backstop either way).
+func (s *Server) resolveBranchHeadSHA(owner, repoName, branch string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+	req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repoName, branch), nil)
+	if err != nil {
+		return "", err
+	}
+	if _, err := client.Do(ctx, req, &commit); err != nil {
+		return "", err
+	}
+	if commit.SHA == "" {
+		return "", fmt.Errorf("empty SHA for %s/%s@%s", owner, repoName, branch)
+	}
+	return commit.SHA, nil
+}
+
 // cmtVersion is a parsed Mattermost release version: major.minor.patch with an optional
 // release-candidate number. raw is the bare-semver string passed to the cloud provisioner
 // (e.g. "11.7.1" or "11.8.0-rc3").

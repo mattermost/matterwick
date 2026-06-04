@@ -1505,3 +1505,54 @@ func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 		assert.True(t, v.less(v2) == false)
 	})
 }
+
+// TestResolveBranchHeadSHA verifies the dispatch-time HEAD resolution used to key non-PR
+// cleanup. Non-PR flows dispatch the test workflow with ref=branch, so the run's head_sha is
+// the branch HEAD at dispatch time. We key cleanup on that resolved SHA (not the trigger SHA)
+// so findAndDestroyInstancesBySHA matches when the run completes.
+func TestResolveBranchHeadSHA(t *testing.T) {
+	t.Run("returns the branch HEAD sha from the commits API", func(t *testing.T) {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"sha":"abc123def456"}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		sha, err := s.resolveBranchHeadSHA("mattermost", "desktop", "release-12.0")
+		assert.NoError(t, err)
+		assert.Equal(t, "abc123def456", sha)
+		assert.Equal(t, "/repos/mattermost/desktop/commits/release-12.0", gotPath)
+	})
+
+	t.Run("errors on non-2xx so caller can fall back to trigger sha", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		_, err := s.resolveBranchHeadSHA("mattermost", "desktop", "no-such-branch")
+		assert.Error(t, err)
+	})
+
+	t.Run("errors on empty sha so caller can fall back to trigger sha", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"sha":""}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		_, err := s.resolveBranchHeadSHA("mattermost", "desktop", "main")
+		assert.Error(t, err)
+	})
+}

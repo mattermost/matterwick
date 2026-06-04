@@ -133,9 +133,21 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 	logger.WithField("instanceCount", len(instances)).Info("E2E instances created successfully")
 
+	// Key on the branch HEAD resolved now (just before dispatch), not the push SHA: the
+	// dispatched (ref=branch) run reports its head_sha as the branch HEAD at dispatch time,
+	// which can differ from the push SHA if the branch advanced during provisioning. The key
+	// still ends with "-{sha}" so findAndDestroyInstancesBySHA matches it by suffix on
+	// completion. Fall back to the push SHA on error (the periodic scan remains the backstop).
+	cleanupSHA := sha
+	if resolved, resErr := s.resolveBranchHeadSHA(s.Config.Org, repoName, branch); resErr == nil && resolved != "" {
+		cleanupSHA = resolved
+	} else if resErr != nil {
+		logger.WithError(resErr).Warn("Failed to resolve branch HEAD SHA; keying cleanup on push SHA (periodic scan remains the backstop)")
+	}
+
 	// Store instances before dispatching so a fast-completing workflow_run event
 	// doesn't race ahead and find nothing to clean up.
-	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, sha)
+	key := fmt.Sprintf("%s-push-%s-%s", repoName, branch, cleanupSHA)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()

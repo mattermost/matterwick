@@ -157,10 +157,17 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 		return
 	}
 
-	// Include runID so two trigger runs against the same SHA (e.g. manual re-trigger)
-	// get separate tracking keys. The key still ends with "-{sha}" so
-	// findAndDestroyInstancesBySHA continues to match it by suffix.
-	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, sha)
+	// Key on the branch HEAD resolved now (just before dispatch), not the trigger SHA: the
+	// dispatched (ref=branch) run reports its head_sha as the branch HEAD at dispatch time,
+	// which can differ from the trigger SHA after provisioning. runID keeps the key unique;
+	// it still ends with "-{sha}" so findAndDestroyInstancesBySHA matches it by suffix.
+	cleanupSHA := sha
+	if resolved, resErr := s.resolveBranchHeadSHA(owner, repoName, branch); resErr == nil && resolved != "" {
+		cleanupSHA = resolved
+	} else if resErr != nil {
+		logger.WithError(resErr).Warn("Failed to resolve branch HEAD SHA; keying cleanup on trigger SHA (periodic scan remains the backstop)")
+	}
+	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, cleanupSHA)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
@@ -363,10 +370,18 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 
 	logger.WithField("totalInstances", len(allInstances)).Info("CMT instances created, tracking for cleanup")
 
-	// Track by runID+sha: runID prevents collision when two dispatches share the same
-	// branch HEAD SHA; the key still ends with "-{sha}" so findAndDestroyInstancesBySHA
-	// can locate it when compatibility-matrix-testing.yml completes (hours later).
-	key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
+	// Key on the branch HEAD resolved now (just before dispatch), not the trigger SHA: the
+	// dispatched (ref=branch) run reports its head_sha as the branch HEAD at dispatch time,
+	// which can differ from the trigger SHA after the long provisioning window. runID keeps
+	// the key unique; it still ends with "-{sha}" so findAndDestroyInstancesBySHA matches it
+	// when compatibility-matrix-testing.yml completes.
+	cleanupSHA := sha
+	if resolved, resErr := s.resolveBranchHeadSHA(repoOwner, repoName, branch); resErr == nil && resolved != "" {
+		cleanupSHA = resolved
+	} else if resErr != nil {
+		logger.WithError(resErr).Warn("Failed to resolve branch HEAD SHA; keying cleanup on trigger SHA (periodic scan remains the backstop)")
+	}
+	key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, cleanupSHA)
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = allInstances
 	s.e2eInstancesLock.Unlock()
