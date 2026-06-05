@@ -428,7 +428,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		return
 	}
 
-	if err := s.dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType, runID, logger); err != nil {
+	if err := s.dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON, instanceType, logger); err != nil {
 		logger.WithError(err).Error("Failed to dispatch compatibility-matrix-testing.yml")
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
@@ -541,19 +541,18 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
-// CMT_MATRIX JSON. runID is the CMT trigger workflow run ID, passed as cmt_run_id purely
-// for traceability/logging on the test workflow side.
+// CMT_MATRIX JSON, targeting the branch ref (workflow_dispatch requires a branch/tag, not a SHA).
 //
-// We intentionally do NOT pass a "mw_tracking_key" input: compatibility-matrix-testing.yml
-// does not declare it, and GitHub rejects a workflow_dispatch carrying an undeclared input
-// with a 422. Cleanup is driven by SHA-suffix matching when the test workflow completes.
-func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, sha, branch, cmtMatrixJSON, instanceType string, runID int64, logger logrus.FieldLogger) error {
+// We pass only the inputs the workflow declares (CMT_MATRIX + the per-platform version input).
+// Passing an undeclared input (the old "mw_tracking_key" or "cmt_run_id") makes GitHub reject the
+// dispatch with a 422. Cleanup is driven by SHA-suffix matching when the test workflow completes,
+// so no run-id needs to be threaded through the workflow.
+func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON, instanceType string, logger logrus.FieldLogger) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
 	workflowInputs := map[string]interface{}{
 		"CMT_MATRIX": cmtMatrixJSON,
-		"cmt_run_id": fmt.Sprintf("%d", runID),
 	}
 	if instanceType == "desktop" {
 		workflowInputs["DESKTOP_VERSION"] = branch
