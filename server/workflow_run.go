@@ -88,8 +88,24 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	// by the isE2ETestWorkflow branch below.
 	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
 		if payload.Action == "requested" {
-			logger.Info("CMT trigger workflow started, provisioning E2E servers for configured versions")
-			go s.handleCMTTrigger(owner, repoName, headBranch, headSHA, runID, logger)
+			// Gate CMT to the cases we actually want. The trigger workflow fires on events we
+			// must not always act on: desktop uses `on: push` filtered to release-v*, while
+			// mobile uses `on: create`, which fires for EVERY branch and tag creation (the
+			// workflow_run webhook reaches us even when the workflow's job `if` skips it). Run
+			// CMT only when:
+			//   - the run was started manually (workflow_dispatch), against any branch, or
+			//   - it ran on a release branch (desktop release-v* push, or mobile release-v*
+			//     branch cut) — matched via isReleaseBranch on the run's head_branch.
+			triggerEvent := payload.WorkflowRun.Event
+			if s.shouldTriggerCMT(triggerEvent, headBranch) {
+				logger.WithField("trigger_event", triggerEvent).Info("CMT trigger workflow started, provisioning E2E servers for configured versions")
+				go s.handleCMTTrigger(owner, repoName, headBranch, headSHA, runID, logger)
+			} else {
+				logger.WithFields(logrus.Fields{
+					"trigger_event": triggerEvent,
+					"head_branch":   headBranch,
+				}).Info("CMT trigger fired on a non-release branch and not via manual dispatch; skipping")
+			}
 		}
 		return
 	}
@@ -296,6 +312,15 @@ func parseServerVersionsFromString(input string) []string {
 		return []string{}
 	}
 	return versions
+}
+
+// shouldTriggerCMT decides whether a CMT-trigger workflow_run should actually provision CMT.
+// CMT runs only when the run was started manually (workflow_dispatch, any branch) or it ran on
+// a release branch (desktop release-v* push, mobile release-v* branch cut). This filters out
+// mobile's `on: create` firings for non-release branch/tag creations, which still deliver a
+// workflow_run webhook even when the trigger workflow's job is skipped.
+func (s *Server) shouldTriggerCMT(triggerEvent, headBranch string) bool {
+	return triggerEvent == "workflow_dispatch" || s.isReleaseBranch(headBranch)
 }
 
 // handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the

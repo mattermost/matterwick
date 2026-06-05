@@ -1614,3 +1614,25 @@ func TestEvictReapedPRInstances(t *testing.T) {
 		assert.True(t, ok, "nothing reaped means nothing evicted")
 	})
 }
+
+// TestShouldTriggerCMT verifies CMT gating: manual dispatch (any branch) or a release branch
+// run proceeds; non-release create/push events are skipped. E2EReleasePatternPrefix is
+// "release-" in newDryRunServer, so "release-v*" branches match.
+func TestShouldTriggerCMT(t *testing.T) {
+	s := newDryRunServer(t, "", "mattermost")
+
+	// Manual dispatch always runs, regardless of branch (e.g. ad-hoc CMT on main).
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "main"))
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "release-v11.9"))
+
+	// Desktop release push / mobile release-v* branch cut: head_branch is a release branch.
+	assert.True(t, s.shouldTriggerCMT("push", "release-v11.9"))
+	assert.True(t, s.shouldTriggerCMT("create", "release-v12.0"))
+
+	// Mobile `create` noise: non-release branch/tag creations must be skipped.
+	assert.False(t, s.shouldTriggerCMT("create", "feature/cool-thing"))
+	assert.False(t, s.shouldTriggerCMT("create", "v11.9.0")) // tag-like, not a release branch
+	assert.False(t, s.shouldTriggerCMT("push", "main"))
+	// A stray scheduled run on the default branch should no longer trigger CMT.
+	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
+}
