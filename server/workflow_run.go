@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -88,23 +89,24 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 	// by the isE2ETestWorkflow branch below.
 	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
 		if payload.Action == "requested" {
-			// Gate CMT to the cases we actually want. The trigger workflow fires on events we
-			// must not always act on: desktop uses `on: push` filtered to release-v*, while
-			// mobile uses `on: create`, which fires for EVERY branch and tag creation (the
-			// workflow_run webhook reaches us even when the workflow's job `if` skips it). Run
-			// CMT only when:
-			//   - the run was started manually (workflow_dispatch), against any branch, or
-			//   - it ran on a release branch (desktop release-v* push, or mobile release-v*
-			//     branch cut) — matched via isReleaseBranch on the run's head_branch.
+			// Gate CMT to the cases we actually want. The trigger workflow fires on RC tag pushes
+			// (e.g. `v6.2.0-rc.1`) and on manual dispatch. For tag pushes the workflow_run
+			// payload's head_branch carries the *tag name*, not a branch. Provision CMT when:
+			//   - the run was started manually (workflow_dispatch, any ref), OR
+			//   - head_branch is an RC tag (isRCTag), OR
+			//   - head_branch is a release branch (defense-in-depth for legacy/manual triggers).
 			triggerEvent := payload.WorkflowRun.Event
 			if s.shouldTriggerCMT(triggerEvent, headBranch) {
-				logger.WithField("trigger_event", triggerEvent).Info("CMT trigger workflow started, provisioning E2E servers for configured versions")
+				logger.WithFields(logrus.Fields{
+					"trigger_event": triggerEvent,
+					"head_branch":   headBranch,
+				}).Info("CMT trigger workflow started, provisioning E2E servers for configured versions")
 				go s.handleCMTTrigger(owner, repoName, headBranch, headSHA, runID, logger)
 			} else {
 				logger.WithFields(logrus.Fields{
 					"trigger_event": triggerEvent,
 					"head_branch":   headBranch,
-				}).Info("CMT trigger fired on a non-release branch and not via manual dispatch; skipping")
+				}).Info("CMT trigger fired on non-RC-tag, non-release ref and not via manual dispatch; skipping")
 			}
 		}
 		return
@@ -315,12 +317,29 @@ func parseServerVersionsFromString(input string) []string {
 }
 
 // shouldTriggerCMT decides whether a CMT-trigger workflow_run should actually provision CMT.
-// CMT runs only when the run was started manually (workflow_dispatch, any branch) or it ran on
-// a release branch (desktop release-v* push, mobile release-v* branch cut). This filters out
-// mobile's `on: create` firings for non-release branch/tag creations, which still deliver a
-// workflow_run webhook even when the trigger workflow's job is skipped.
+// CMT runs only when:
+//   - the run was started manually (workflow_dispatch, any ref), OR
+//   - head_branch is an RC tag (e.g. v6.2.0-rc.1, the new primary trigger), OR
+//   - head_branch is a release branch (defense-in-depth — legacy & for any manual ref).
+//
+// For tag-push events GitHub sets workflow_run.head_branch to the tag name (no refs/tags/
+// prefix), so an RC tag like "v6.2.0-rc.1" arrives in headBranch.
 func (s *Server) shouldTriggerCMT(triggerEvent, headBranch string) bool {
-	return triggerEvent == "workflow_dispatch" || s.isReleaseBranch(headBranch)
+	return triggerEvent == "workflow_dispatch" ||
+		isRCTag(headBranch) ||
+		s.isReleaseBranch(headBranch)
+}
+
+// rcTagPattern matches RC tags like "v6.2.0-rc.1", "v2.41.0-rc.10", "6.2.0-rc.1". The leading
+// "v" is optional, and the rc suffix can be "-rc.N", "-rcN", or "-rc-N" (we keep it permissive
+// but require the literal "-rc" and a trailing number). Compiled once at package init.
+var rcTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+-rc[.\-]?\d+$`)
+
+// isRCTag reports whether ref looks like a release-candidate tag we want to trigger CMT on.
+// Excludes GA tags (v6.2.0), beta/alpha pre-releases (v1.0.22-beta), and nightly tags
+// (6.3.0-nightly.20260601).
+func isRCTag(ref string) bool {
+	return rcTagPattern.MatchString(ref)
 }
 
 // handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the

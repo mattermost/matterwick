@@ -1615,24 +1615,53 @@ func TestEvictReapedPRInstances(t *testing.T) {
 	})
 }
 
-// TestShouldTriggerCMT verifies CMT gating: manual dispatch (any branch) or a release branch
-// run proceeds; non-release create/push events are skipped. E2EReleasePatternPrefix is
-// "release-" in newDryRunServer, so "release-v*" branches match.
+// TestShouldTriggerCMT verifies CMT gating across all sources: manual dispatch (any ref), RC
+// tag cut (the new primary trigger), and release branch (defense-in-depth). Anything else —
+// feature branches, GA tags, nightly tags, beta tags, default branch — must be rejected so
+// that mobile's `on: push tags` glob slips and stray runs don't burn the multi-version matrix.
 func TestShouldTriggerCMT(t *testing.T) {
 	s := newDryRunServer(t, "", "mattermost")
 
-	// Manual dispatch always runs, regardless of branch (e.g. ad-hoc CMT on main).
+	// Manual dispatch always runs, regardless of ref.
 	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "main"))
-	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "release-v11.9"))
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "v6.2.0-rc.1"))
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "release-6.2"))
 
-	// Desktop release push / mobile release-v* branch cut: head_branch is a release branch.
-	assert.True(t, s.shouldTriggerCMT("push", "release-v11.9"))
-	assert.True(t, s.shouldTriggerCMT("create", "release-v12.0"))
+	// RC tag cut (primary trigger). For tag pushes head_branch is the tag name.
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.1"))    // desktop convention
+	assert.True(t, s.shouldTriggerCMT("push", "v2.41.0-rc.1"))   // future mobile
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.10"))   // multi-digit rc
+	assert.True(t, s.shouldTriggerCMT("push", "6.2.0-rc.1"))     // missing 'v' prefix is permitted
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc1"))     // no separator before number
 
-	// Mobile `create` noise: non-release branch/tag creations must be skipped.
+	// Release branch (defense-in-depth — kept for backwards compat / manual triggers).
+	assert.True(t, s.shouldTriggerCMT("push", "release-6.2"))
+
+	// Must NOT trigger: GA tags, betas, nightly tags, feature branches, default branch.
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0"))                  // GA tag — no -rc
+	assert.False(t, s.shouldTriggerCMT("push", "v1.0.22-beta"))            // pre-release but not RC
+	assert.False(t, s.shouldTriggerCMT("push", "6.3.0-nightly.20260601"))  // nightly tag
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0-rcabc"))            // -rc but no number
 	assert.False(t, s.shouldTriggerCMT("create", "feature/cool-thing"))
-	assert.False(t, s.shouldTriggerCMT("create", "v11.9.0")) // tag-like, not a release branch
 	assert.False(t, s.shouldTriggerCMT("push", "main"))
-	// A stray scheduled run on the default branch should no longer trigger CMT.
 	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
+}
+
+// TestIsRCTag covers the RC-tag regex in isolation so the boundary cases stay locked in.
+func TestIsRCTag(t *testing.T) {
+	for _, ref := range []string{"v6.2.0-rc.1", "v6.2.0-rc.10", "v2.41.0-rc.2", "6.2.0-rc.1", "v6.2.0-rc1", "v6.2.0-rc-1"} {
+		assert.True(t, isRCTag(ref), "expected RC tag: %q", ref)
+	}
+	for _, ref := range []string{
+		"v6.2.0",                  // GA
+		"v6.2.0-rc",               // missing number
+		"v6.2.0-rcabc",            // letters after -rc
+		"v1.0.22-beta",            // not RC
+		"6.3.0-nightly.20260601",  // nightly
+		"release-6.2",             // branch
+		"main",
+		"",
+	} {
+		assert.False(t, isRCTag(ref), "must not match: %q", ref)
+	}
 }
