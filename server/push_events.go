@@ -40,6 +40,15 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	logger.Info("Push event received")
 
 	if s.Config.E2EAutoTriggerOnRelease && s.isReleaseBranch(branch) {
+		// Desktop release-branch E2E is replaced by CMT (RC-tag trigger): the release team
+		// treats RCs as the go/no-go gate, so the per-push release E2E is redundant for
+		// desktop. Skip it here to avoid double-testing the same commit. Mobile still uses
+		// release-branch push (its CMT runs smoke-only, so the whole-suite release E2E
+		// remains the per-push signal there).
+		if strings.Contains(repoName, "desktop") {
+			logger.Info("Desktop release-branch push: skipping release E2E (handled by CMT)")
+			return
+		}
 		logger.WithField("type", "release_branch").Info("Release branch detected, triggering E2E tests")
 		go s.handlePushEventE2E(event, branch)
 		return
