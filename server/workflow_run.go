@@ -319,7 +319,8 @@ func parseServerVersionsFromString(input string) []string {
 // shouldTriggerCMT decides whether a CMT-trigger workflow_run should actually provision CMT.
 // CMT runs only when:
 //   - the run was started manually (workflow_dispatch, any ref), OR
-//   - head_branch is an RC tag (e.g. v6.2.0-rc.1, the new primary trigger), OR
+//   - head_branch is an RC tag (desktop convention: v6.2.0-rc.1), OR
+//   - head_branch is a mobile release-build branch (build-release-NNN, 3+ digits), OR
 //   - head_branch is a release branch (defense-in-depth — legacy & for any manual ref).
 //
 // For tag-push events GitHub sets workflow_run.head_branch to the tag name (no refs/tags/
@@ -327,6 +328,7 @@ func parseServerVersionsFromString(input string) []string {
 func (s *Server) shouldTriggerCMT(triggerEvent, headBranch string) bool {
 	return triggerEvent == "workflow_dispatch" ||
 		isRCTag(headBranch) ||
+		isBuildReleaseBranch(headBranch) ||
 		s.isReleaseBranch(headBranch)
 }
 
@@ -340,6 +342,24 @@ var rcTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+-rc[.\-]?\d+$`)
 // (6.3.0-nightly.20260601).
 func isRCTag(ref string) bool {
 	return rcTagPattern.MatchString(ref)
+}
+
+// buildReleaseBranchPattern matches mobile's release-build branches: "build-release-" followed
+// by 3 or more digits (current convention is 3- or 4-digit build numbers like 786 / 1100).
+// 3+ digits is intentional — rejects accidental test branches like "build-release-1" without
+// locking an upper bound, so a future move to 5-digit build numbers needs no code change.
+// Platform-specific variants (build-release-ios-NNN, build-release-sim-NNN,
+// build-release-android-NNN) don't start with a digit after the "build-release-" prefix and
+// are excluded.
+var buildReleaseBranchPattern = regexp.MustCompile(`^build-release-\d{3,}$`)
+
+// isBuildReleaseBranch reports whether ref matches mobile's build-release-NNN convention.
+// The branch is created by the "Mattermost Mobile Release" external workflow when an RC
+// build is dispatched to TestFlight / Play Store, so it's mobile's equivalent of an RC tag
+// cut. Used as a separate gate from isReleaseBranch because release-* fires on every
+// cherry-pick / version-bump push, which would be far too noisy for CMT.
+func isBuildReleaseBranch(ref string) bool {
+	return buildReleaseBranchPattern.MatchString(ref)
 }
 
 // handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the

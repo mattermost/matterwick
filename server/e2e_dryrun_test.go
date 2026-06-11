@@ -1645,6 +1645,13 @@ func TestShouldTriggerCMT(t *testing.T) {
 	assert.False(t, s.shouldTriggerCMT("create", "feature/cool-thing"))
 	assert.False(t, s.shouldTriggerCMT("push", "main"))
 	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
+
+	// Mobile build-release-NNN branch push (mobile's RC-cut equivalent).
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-786"))   // 3-digit
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-1100"))  // 4-digit
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-12345")) // future 5-digit
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-1"))    // < 3 digits, likely a test
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-ios-707")) // platform variant
 }
 
 // TestIsRCTag covers the RC-tag regex in isolation so the boundary cases stay locked in.
@@ -1663,5 +1670,34 @@ func TestIsRCTag(t *testing.T) {
 		"",
 	} {
 		assert.False(t, isRCTag(ref), "must not match: %q", ref)
+	}
+}
+
+// TestIsBuildReleaseBranch locks in the boundaries for mobile's build-release-NNN gate:
+// 3+ digits required (rejects test artifacts like build-release-1); platform-specific
+// variants (build-release-ios-NNN etc.) are rejected; no overlap with the RC-tag or
+// release-* gates.
+func TestIsBuildReleaseBranch(t *testing.T) {
+	for _, ref := range []string{
+		"build-release-786",   // real 3-digit
+		"build-release-1100",  // real 4-digit
+		"build-release-12345", // future 5-digit
+	} {
+		assert.True(t, isBuildReleaseBranch(ref), "expected build-release branch: %q", ref)
+	}
+	for _, ref := range []string{
+		"build-release-1",           // 1 digit — test artifact / typo
+		"build-release-99",          // 2 digit — below convention
+		"build-release-ios-707",     // platform-specific
+		"build-release-sim-707",     // simulator-only
+		"build-release-android-1100", // android-specific
+		"build-release-786-rc1",     // stray suffix
+		"build-release-",            // no number
+		"build-release-abc",         // non-numeric
+		"release-2.41",              // handled by isReleaseBranch
+		"v2.41.0-rc.1",              // handled by isRCTag
+		"",
+	} {
+		assert.False(t, isBuildReleaseBranch(ref), "must not match: %q", ref)
 	}
 }
