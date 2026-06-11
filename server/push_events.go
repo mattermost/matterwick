@@ -39,20 +39,17 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	})
 	logger.Info("Push event received")
 
-	if s.Config.E2EAutoTriggerOnRelease && s.isReleaseBranch(branch) {
-		// Desktop release-branch E2E is replaced by CMT (RC-tag trigger): the release team
-		// treats RCs as the go/no-go gate, so the per-push release E2E is redundant for
-		// desktop. Skip it here to avoid double-testing the same commit. Mobile still uses
-		// release-branch push (its CMT runs smoke-only, so the whole-suite release E2E
-		// remains the per-push signal there).
-		if strings.Contains(repoName, "desktop") {
-			logger.Info("Desktop release-branch push: skipping release E2E (handled by CMT)")
-			return
-		}
-		logger.WithField("type", "release_branch").Info("Release branch detected, triggering E2E tests")
-		go s.handlePushEventE2E(event, branch)
-		return
-	}
+	// NOTE: release-branch push (release-X.Y) used to fire full PR-style E2E for both
+	// desktop and mobile. Removed because:
+	//   - Desktop: CMT on RC tag cut is the go/no-go gate; per-cherry-pick E2E was redundant.
+	//   - Mobile: every cherry-pick to release-2.X fired a ~$27 / ~60-90 min full-suite run
+	//     (~190 commits/branch × ~$27 = ~$5K per release branch in GitHub Actions alone),
+	//     and the release team treats RC builds as the test gate. CMT (smoke × N versions)
+	//     fires at the build-release-NNN cut; full-suite-on-build-release-NNN can be wired
+	//     separately if desired (it isn't today).
+	// `E2EAutoTriggerOnRelease` and `E2EReleasePatternPrefix` remain in config but are now
+	// only read by isReleaseBranch (used as defense-in-depth in shouldTriggerCMT for the
+	// CMT workflow_run gate).
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
@@ -61,7 +58,6 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	}
 
 	logger.WithFields(logrus.Fields{
-		"auto_release":           s.Config.E2EAutoTriggerOnRelease,
 		"auto_master":            s.Config.E2EAutoTriggerOnMaster,
 		"release_pattern_prefix": s.Config.E2EReleasePatternPrefix,
 		"is_release_branch":      s.isReleaseBranch(branch),
