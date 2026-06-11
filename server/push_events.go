@@ -52,6 +52,15 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	// CMT workflow_run gate).
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
+		// Mobile `main` push E2E is skipped: every PR merge to main = one full PR-style E2E
+		// run (~$27 / ~60-90 min). At mobile's main-merge cadence that's tens of thousands of
+		// dollars per year for a post-merge regression signal already covered by PR-label E2E
+		// pre-merge. Coverage that remains for mobile main: PR-label E2E pre-merge, CMT smoke
+		// on build-release-NNN cut, manual workflow_dispatch. Desktop master push still fires.
+		if strings.Contains(repoName, "mobile") {
+			logger.Info("Mobile main push: skipping E2E (per-commit cost too high; PR-label covers pre-merge, CMT covers RC builds)")
+			return
+		}
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
 		go s.handlePushEventE2E(event, branch)
 		return
