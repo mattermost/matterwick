@@ -39,24 +39,18 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	})
 	logger.Info("Push event received")
 
-	// NOTE: release-branch push (release-X.Y) used to fire full PR-style E2E for both
-	// desktop and mobile. Removed because:
-	//   - Desktop: CMT on RC tag cut is the go/no-go gate; per-cherry-pick E2E was redundant.
-	//   - Mobile: every cherry-pick to release-2.X fired a ~$27 / ~60-90 min full-suite run
-	//     (~190 commits/branch × ~$27 = ~$5K per release branch in GitHub Actions alone),
-	//     and the release team treats RC builds as the test gate. CMT (smoke × N versions)
-	//     fires at the build-release-NNN cut; full-suite-on-build-release-NNN can be wired
-	//     separately if desired (it isn't today).
-	// `E2EAutoTriggerOnRelease` and `E2EReleasePatternPrefix` remain in config but are now
-	// only read by isReleaseBranch (used as defense-in-depth in shouldTriggerCMT for the
-	// CMT workflow_run gate).
+	// Push-event auto-trigger reduced to desktop `master` only.
+	//   - release-X.Y push: previously fired full PR-style E2E for both repos. Removed —
+	//     desktop is gated by CMT-on-RC-tag (release team's go/no-go); mobile's per-cherry-
+	//     pick E2E during stabilization ran into tens of thousands of $ per release cycle
+	//     for a signal already covered by PR-label E2E pre-merge and CMT smoke at the RC
+	//     build moment.
+	//   - mobile `main` push: same cost calculus, every PR merge to main was one ~$27 run.
+	//     Skipped here; PR-label E2E covers pre-merge.
+	//   - desktop `master` push: still fires (lower merge cadence than mobile main; the
+	//     per-commit regression signal earns its keep here).
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
-		// Mobile `main` push E2E is skipped: every PR merge to main = one full PR-style E2E
-		// run (~$27 / ~60-90 min). At mobile's main-merge cadence that's tens of thousands of
-		// dollars per year for a post-merge regression signal already covered by PR-label E2E
-		// pre-merge. Coverage that remains for mobile main: PR-label E2E pre-merge, CMT smoke
-		// on build-release-NNN cut, manual workflow_dispatch. Desktop master push still fires.
 		if strings.Contains(repoName, "mobile") {
 			logger.Info("Mobile main push: skipping E2E (per-commit cost too high; PR-label covers pre-merge, CMT covers RC builds)")
 			return
@@ -66,11 +60,8 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 		return
 	}
 
-	logger.WithFields(logrus.Fields{
-		"auto_master":            s.Config.E2EAutoTriggerOnMaster,
-		"release_pattern_prefix": s.Config.E2EReleasePatternPrefix,
-		"is_release_branch":      s.isReleaseBranch(branch),
-	}).Info("Push event does not match E2E trigger conditions")
+	logger.WithField("auto_master", s.Config.E2EAutoTriggerOnMaster).
+		Info("Push event does not match E2E trigger conditions")
 }
 
 // isReleaseBranch returns true if branch matches E2EReleasePatternPrefix.
@@ -312,12 +303,9 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 
 	logger.WithField("instanceDetails", instanceDetailsJSON).Debug("Triggering desktop E2E workflow")
 
-	runType := "MASTER"
-	if s.isReleaseBranch(branch) {
-		runType = "RELEASE"
-	}
-
-	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, runType, false)
+	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
+	// removed), so runType is always MASTER for desktop push events.
+	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, "MASTER", false)
 }
 
 // triggerMobileE2EWorkflowForPushEvent dispatches the mobile E2E workflow (e2e-detox-pr.yml).
@@ -338,15 +326,14 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"site_3_url": instances[2].URL,
 	}).Debug("Triggering mobile E2E workflow for push event")
 
-	runType := "MASTER"
-	if s.isReleaseBranch(branch) {
-		runType = "RELEASE"
-	}
-
+	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
+	// removed and mobile main push is explicitly skipped, so in practice mobile never
+	// reaches this code today; keeping the function intact in case mobile main push is
+	// re-enabled). runType is always MASTER for the events that would route here.
 	return s.dispatchMobileE2EWorkflow(
 		repoOwner, repoName, branch, sha,
 		instances[0].URL, instances[1].URL, instances[2].URL,
 		"both", // push events always test both iOS and Android
-		runType,
+		"MASTER",
 	)
 }

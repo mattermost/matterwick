@@ -572,9 +572,15 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		s0 := servers[0].(map[string]interface{})
 		assert.Equal(t, "v11.1.0", s0["version"])
 		assert.Equal(t, "https://v1.example.com", s0["url"])
+		// Desktop ignores the `latest` field; cmtServer.Latest is shared with mobile but is
+		// never set on the desktop path, and `omitempty` keeps it out of the JSON entirely.
+		_, has0 := s0["latest"]
+		assert.False(t, has0, "desktop matrix must not carry the `latest` field")
 		s1 := servers[1].(map[string]interface{})
 		assert.Equal(t, "v11.2.0", s1["version"])
 		assert.Equal(t, "https://v2.example.com", s1["url"])
+		_, has1 := s1["latest"]
+		assert.False(t, has1, "desktop matrix must not carry the `latest` field")
 	})
 
 	t.Run("CMT dispatches compatibility-matrix-testing.yml once", func(t *testing.T) {
@@ -631,9 +637,16 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		s0 := servers[0].(map[string]interface{})
 		assert.Equal(t, "v11.1.0", s0["version"])
 		assert.Equal(t, "https://v1.example.com", s0["url"])
+		// Older version: `latest` is omitted entirely (cmtServer.Latest is false, omitempty).
+		_, has0 := s0["latest"]
+		assert.False(t, has0, "older mobile entries must not carry the `latest` field")
 		s1 := servers[1].(map[string]interface{})
 		assert.Equal(t, "v11.2.0", s1["version"])
 		assert.Equal(t, "https://v2.example.com", s1["url"])
+		// Highest semver gets `latest: true`. The mobile workflow uses this to decide whether
+		// to run the whole suite (latest) or just smoke (older) — that policy lives there,
+		// not in matterwick.
+		assert.Equal(t, true, s1["latest"])
 	})
 
 	t.Run("mobile CMT dispatches once not once per version", func(t *testing.T) {
@@ -669,6 +682,86 @@ func TestDryRun_MobileCMT(t *testing.T) {
 			{URL: "https://v3.example.com"},
 		}
 		assert.Equal(t, len(versions), len(instances), "one instance per version")
+	})
+
+	t.Run("mobile CMT marks the highest-semver entry as latest", func(t *testing.T) {
+		// 5-element resolved set (today's typical shape): ESR + 3 minors + current RC.
+		// Across the boundary cases that matter: ESR is older despite high patch numbers;
+		// RC vs stable for the same X.Y.Z should treat stable as higher; multi-digit RC
+		// numbers (rc.10 > rc.2). Locking these in so the workflow's latest gate doesn't
+		// silently shift if someone tweaks the comparator.
+		cases := []struct {
+			name     string
+			versions []string
+			wantLatestIdx int
+		}{
+			{
+				name:          "ESR + 3 minors + RC: RC's base is newest so RC is latest",
+				versions:      []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"},
+				wantLatestIdx: 4,
+			},
+			{
+				name:          "ESR with high patch loses to lower-patch newer minor",
+				versions:      []string{"10.11.19", "11.0.0"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "stable beats same-X.Y.Z RC",
+				versions:      []string{"11.7.0-rc3", "11.7.0"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "rc.10 > rc.2 (no string compare)",
+				versions:      []string{"11.8.0-rc2", "11.8.0-rc10"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "single version is latest",
+				versions:      []string{"11.7.2"},
+				wantLatestIdx: 0,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				instances := make([]*E2EInstance, len(tc.versions))
+				for i := range tc.versions {
+					instances[i] = &E2EInstance{URL: fmt.Sprintf("https://v%d.example.com", i)}
+				}
+				jsonStr, err := buildMobileCMTMatrixJSON(tc.versions, instances)
+				require.NoError(t, err)
+				var matrix map[string]interface{}
+				require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+				servers := matrix["server"].([]interface{})
+				require.Len(t, servers, len(tc.versions))
+				for i, raw := range servers {
+					s := raw.(map[string]interface{})
+					_, has := s["latest"]
+					if i == tc.wantLatestIdx {
+						assert.Equal(t, true, s["latest"], "index %d (%q) should be latest", i, tc.versions[i])
+					} else {
+						assert.False(t, has, "index %d (%q) must not carry latest", i, tc.versions[i])
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("mobile CMT: all unparseable versions => no latest marker", func(t *testing.T) {
+		// Defensive: if the resolved set somehow contains no parseable versions, leave the
+		// matrix unmarked. The workflow falls back to its default (smoke for all).
+		versions := []string{"junk", "also-junk"}
+		instances := []*E2EInstance{
+			{URL: "https://a.example.com"},
+			{URL: "https://b.example.com"},
+		}
+		jsonStr, err := buildMobileCMTMatrixJSON(versions, instances)
+		require.NoError(t, err)
+		var matrix map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+		for _, raw := range matrix["server"].([]interface{}) {
+			_, has := raw.(map[string]interface{})["latest"]
+			assert.False(t, has, "no entry should be latest when all versions are unparseable")
+		}
 	})
 }
 

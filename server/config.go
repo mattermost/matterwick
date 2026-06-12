@@ -112,11 +112,9 @@ type MatterwickConfig struct {
 	E2EUsername                   string
 	E2EPassword                   string
 	E2EServerVersion              string
-	E2EAutoTriggerOnRelease       bool
-	E2EAutoTriggerOnMaster        bool
-	E2EReleasePatternPrefix       string
-	E2ENightlyTriggerWorkflowName string   // workflow name (name: field) of the nightly trigger workflow
-	E2ETestWorkflowNames          []string // workflow names of the actual test workflows (for completion-based cleanup)
+	E2EAutoTriggerOnMaster  bool
+	E2EReleasePatternPrefix string
+	E2ETestWorkflowNames    []string // workflow names of the actual test workflows (for completion-based cleanup)
 	// E2EInstanceMaxAge is the minimum age (in hours) a non-PR E2E instance must reach
 	// before the periodic orphan-cleanup scan will delete it. This prevents the scan
 	// from destroying instances that are still being used by a currently-running test.

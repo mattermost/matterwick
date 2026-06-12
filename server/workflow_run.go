@@ -112,26 +112,16 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// Nightly: lightweight trigger workflow fires first; matterwick provisions instances and dispatches the real test workflow.
-	if s.Config.E2ENightlyTriggerWorkflowName != "" && workflowName == s.Config.E2ENightlyTriggerWorkflowName {
-		if payload.Action == "requested" {
-			logger.Info("Nightly trigger workflow started, provisioning E2E servers")
-			go s.handleNightlyE2ETrigger(owner, repoName, headBranch, headSHA, payload.WorkflowRun.Event, runID, logger)
-		}
-		return
-	}
-
 	// --- Test workflow completion: clean up provisioned instances ---
 	//
 	// Cleanup is correlated on head_sha. GitHub's workflow_run webhook payload does not
 	// include workflow_dispatch inputs, and its run id is the *test* run's id (not the
 	// trigger run id embedded in our tracking key), so head_sha is the only field we can
-	// match on (push, scheduled, and CMT tracking keys all end with "-{sha}").
+	// match on (push and CMT tracking keys all end with "-{sha}").
 	//
-	// Two flows can legitimately share a head SHA — e.g. the monthly CMT trigger and the
-	// nightly trigger both fire on the same master commit. They run different test
-	// workflows, so we scope cleanup to the completing workflow's flow (CMT vs. non-CMT) to
-	// avoid tearing down the other run's still-active servers.
+	// `cmtOnly` scopes cleanup to the completing workflow's flow (CMT vs. non-CMT). It's
+	// kept as defense-in-depth so a future case where two flows share a SHA (e.g. a manual
+	// CMT dispatch coinciding with a master push) can't tear down each other's servers.
 	//
 	// If the branch advances during provisioning, the dispatched run's head_sha can differ
 	// from the tracked SHA and no key will match here; such orphans are reaped by the
@@ -143,105 +133,8 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	logger.WithFields(logrus.Fields{
-		"configured_nightly_name":   s.Config.E2ENightlyTriggerWorkflowName,
-		"configured_test_workflows": s.Config.E2ETestWorkflowNames,
-	}).Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
-}
-
-// handleNightlyE2ETrigger provisions instances and dispatches the test workflow.
-// Called when the E2E trigger workflow starts, whether from schedule, push to master/main,
-// or push to a release branch. The triggerEvent parameter ("schedule", "push", etc.) is
-// used to set runType correctly — scheduled runs always get "NIGHTLY" regardless of branch.
-func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, runID int64, logger logrus.FieldLogger) {
-	logger = logger.WithFields(logrus.Fields{
-		"branch": branch,
-		"sha":    sha,
-		"run_id": runID,
-	})
-	logger.Info("Provisioning nightly E2E instances")
-
-	instanceType := "desktop"
-	if strings.Contains(repoName, "mobile") {
-		instanceType = "mobile"
-	} else if !strings.Contains(repoName, "desktop") {
-		logger.Warn("Repository is neither desktop nor mobile, skipping nightly E2E trigger")
-		return
-	}
-
-	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveE2EServerVersion(), "nightly")
-	if err != nil {
-		logger.WithError(err).Error("Failed to create nightly E2E instances")
-		return
-	}
-
-	// Key on the branch HEAD resolved now (just before dispatch), not the trigger SHA: the
-	// dispatched (ref=branch) run reports its head_sha as the branch HEAD at dispatch time,
-	// which can differ from the trigger SHA after provisioning. runID keeps the key unique;
-	// it still ends with "-{sha}" so findAndDestroyInstancesBySHA matches it by suffix.
-	cleanupSHA := sha
-	if resolved, resErr := s.resolveBranchHeadSHA(owner, repoName, branch); resErr == nil && resolved != "" {
-		cleanupSHA = resolved
-	} else if resErr != nil {
-		logger.WithError(resErr).Warn("Failed to resolve branch HEAD SHA; keying cleanup on trigger SHA (periodic scan remains the backstop)")
-	}
-	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, cleanupSHA)
-	s.e2eInstancesLock.Lock()
-	s.e2eInstances[key] = instances
-	s.e2eInstancesLock.Unlock()
-
-	logger.WithField("tracking_key", key).Info("Nightly instances tracked, dispatching test workflow")
-
-	// Determine run classification. Scheduled runs are always NIGHTLY regardless of branch
-	// (a scheduled run on master must not be classified as MASTER). Push-triggered runs
-	// derive their type from the branch name.
-	runType := "NIGHTLY"
-	nightly := true
-	if triggerEvent != "schedule" {
-		if branch == "master" || branch == "main" {
-			runType = "MASTER"
-			nightly = false
-		} else if s.isReleaseBranch(branch) {
-			runType = "RELEASE"
-			nightly = false
-		}
-	}
-
-	var dispatchErr error
-	if instanceType == "desktop" {
-		instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
-		if err != nil {
-			logger.WithError(err).Error("Failed to build instance details JSON for nightly desktop run")
-			s.e2eInstancesLock.Lock()
-			delete(s.e2eInstances, key)
-			s.e2eInstancesLock.Unlock()
-			s.destroyE2EInstances(instances, logger)
-			return
-		}
-		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType, nightly)
-	} else {
-		if len(instances) < 3 {
-			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
-			s.e2eInstancesLock.Lock()
-			delete(s.e2eInstances, key)
-			s.e2eInstancesLock.Unlock()
-			s.destroyE2EInstances(instances, logger)
-			return
-		}
-		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, branch, sha,
-			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
-	}
-
-	if dispatchErr != nil {
-		logger.WithError(dispatchErr).Error("Failed to dispatch test workflow for nightly run; cleaning up instances")
-		s.e2eInstancesLock.Lock()
-		delete(s.e2eInstances, key)
-		s.e2eInstancesLock.Unlock()
-		s.destroyE2EInstances(instances, logger)
-		return
-	}
-
-	logger.Info("Nightly E2E workflow dispatched successfully")
+	logger.WithField("configured_test_workflows", s.Config.E2ETestWorkflowNames).
+		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
 // isE2ETestWorkflow returns true if the workflow name is a configured E2E test workflow
@@ -494,10 +387,19 @@ func (s *Server) createSingleCMTInstance(repoName, instanceType, version string,
 	return s.createCloudInstallation(context.Background(), name, version, username, password, instanceType, logger)
 }
 
-// cmtServer is the server entry in CMT_MATRIX JSON.
+// cmtServer is the server entry in CMT_MATRIX JSON. Mobile uses the optional `latest` flag
+// to mark the highest-semver entry, so the mobile workflow can decide to run the whole suite
+// against the latest server and smoke-only against older ones. Desktop ignores it and the
+// `omitempty` keeps desktop's matrix JSON unchanged (the field is just absent there).
+//
+// IMPORTANT — layering: matterwick only signals which server is "latest". It does NOT decide
+// what tests run for latest vs non-latest — that policy (smoke path vs whole suite path,
+// parallelism, etc.) lives in the mobile workflow, where the test-directory structure is
+// known.
 type cmtServer struct {
 	Version string `json:"version"`
 	URL     string `json:"url"`
+	Latest  bool   `json:"latest,omitempty"`
 }
 
 // buildDesktopCMTMatrixJSON builds the CMT_MATRIX JSON for compatibility-matrix-testing.yml
@@ -549,14 +451,17 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 }
 
 // buildMobileCMTMatrixJSON builds the CMT_MATRIX JSON for compatibility-matrix-testing.yml
-// in the mobile repo. One iOS test job is created per server version.
+// in the mobile repo. One iOS test job is created per server version. The highest-semver
+// entry is marked `latest: true` so the mobile workflow can branch on it (e.g. whole suite
+// for latest, smoke for older). What "latest" implies test-wise is the workflow's policy,
+// not matterwick's — see the cmtServer doc comment.
 //
 // Schema:
 //
 //	{
 //	  "server": [
-//	    {"version": "v11.1.0", "url": "https://..."},
-//	    ...
+//	    {"version": "10.11.18", "url": "https://..."},
+//	    {"version": "11.7.1",   "url": "https://...", "latest": true}
 //	  ]
 //	}
 func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (string, error) {
@@ -564,12 +469,36 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 		Server []cmtServer `json:"server"`
 	}
 
+	// Find the highest-semver entry across versions that parse successfully. parseCMTVersion
+	// handles vX.Y.Z and vX.Y.Z-rcN (with or without the "v"). Unparseable versions are
+	// silently skipped — they just don't compete for "latest". If none parse, no entry is
+	// marked, and the workflow can fall back to its default (smoke for all).
+	latestIdx := -1
+	var latestVer cmtVersion
+	for i, version := range versions {
+		if i >= len(instances) {
+			break
+		}
+		v, ok := parseCMTVersion(version)
+		if !ok {
+			continue
+		}
+		if latestIdx == -1 || latestVer.less(v) {
+			latestVer = v
+			latestIdx = i
+		}
+	}
+
 	var matrix mobileCMTMatrix
 	for i, version := range versions {
 		if i >= len(instances) {
 			break
 		}
-		matrix.Server = append(matrix.Server, cmtServer{Version: version, URL: instances[i].URL})
+		entry := cmtServer{Version: version, URL: instances[i].URL}
+		if i == latestIdx {
+			entry.Latest = true
+		}
+		matrix.Server = append(matrix.Server, entry)
 	}
 
 	b, err := json.Marshal(matrix)
