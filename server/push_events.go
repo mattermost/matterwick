@@ -305,7 +305,7 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 
 	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
 	// removed), so runType is always MASTER for desktop push events.
-	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, "MASTER", false)
+	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, "MASTER")
 }
 
 // triggerMobileE2EWorkflowForPushEvent dispatches the mobile E2E workflow (e2e-detox-pr.yml).

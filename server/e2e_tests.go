@@ -1336,7 +1336,11 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 // GitHub Actions API. Cleanup is driven by the workflow_run completed event matched on the
 // commit SHA, so no tracking key is passed as an input (e2e-functional.yml does not declare
 // one, and GitHub rejects a workflow_dispatch carrying an undeclared input with a 422).
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string, nightly bool) error {
+//
+// `nightly` was previously sent on this dispatch when matterwick's nightly handler fired the
+// desktop workflow. That handler is gone; matterwick never has reason to set nightly=true any
+// more, and the downstream `nightly` input was removed from e2e-functional.yml. Don't send it.
+func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1367,7 +1371,6 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"MM_SERVER_VERSION": serverVersion,
 		"run_type":          runType,
-		"nightly":           fmt.Sprintf("%t", nightly),
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
