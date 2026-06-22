@@ -18,11 +18,10 @@ import (
 )
 
 const (
-	defaultPluginImage   = "mattermostdevelopment/mattermost-enterprise-edition"
-	defaultPluginVersion = "master"
-	pluginRepoPrefix     = "mattermost-plugin-"
-	pluginS3Bucket       = "mattermost-plugin-pr-builds"
-	pluginS3Region       = "us-east-1" // Adjust if needed
+	defaultPluginImage = "mattermostdevelopment/mattermost-enterprise-edition"
+	pluginRepoPrefix   = "mattermost-plugin-"
+	pluginS3Bucket     = "mattermost-plugin-pr-builds"
+	pluginS3Region     = "us-east-1"
 )
 
 // isPluginRepository checks if the repository is a plugin repository
@@ -60,11 +59,13 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("No plugin SpinWick found for this PR. Creating a new one.")
 
-	// Create the Mattermost installation
+	// Create the Mattermost installation using the latest stable server version
 	cloudClient := s.CloudClient
+	serverVersion := s.resolveE2EServerVersion()
+	logger.WithField("server_version", serverVersion).Info("Resolved Mattermost server version for plugin SpinWick")
 	installationRequest := s.createInstallationRequest(
 		ownerID,
-		defaultPluginVersion,
+		serverVersion,
 		defaultPluginImage,
 		spinwick.DNS(s.Config.DNSNameTestServer),
 		"miniSingleton",

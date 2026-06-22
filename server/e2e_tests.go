@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/blang/semver"
 	"github.com/google/go-github/v32/github"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
@@ -770,9 +772,9 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 }
 
 // resolveE2EServerVersion returns the server version for E2E provisioning.
-// "latest" (or empty) fetches the newest stable mattermost/mattermost release — skips
-// drafts, prereleases, and RC/beta/alpha tags — strips the "v" prefix, and caches the
-// result for 1 hour. Falls back to "master" on API error or if no stable release is found.
+// "latest" (or empty) fetches all non-draft mattermost/mattermost releases, picks the
+// highest semver (including RCs), strips the "v" prefix, and caches the result for 1 hour.
+// On API error or empty results, returns the last cached version if one exists.
 func (s *Server) resolveE2EServerVersion() string {
 	cfg := strings.TrimSpace(s.Config.E2EServerVersion)
 	if cfg == "" {
@@ -787,11 +789,11 @@ func (s *Server) resolveE2EServerVersion() string {
 
 	// Return cached value if still fresh.
 	s.e2eVersionCacheLock.Lock()
-	if s.e2eVersionCache != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
-		cached := s.e2eVersionCache
+	stale := s.e2eVersionCache
+	if stale != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
 		s.e2eVersionCacheLock.Unlock()
-		s.Logger.WithField("version", cached).Debug("[resolveE2EServerVersion] Returning cached version")
-		return cached
+		s.Logger.WithField("version", stale).Debug("[resolveE2EServerVersion] Returning cached version")
+		return stale
 	}
 	s.e2eVersionCacheLock.Unlock()
 
@@ -808,43 +810,69 @@ func (s *Server) resolveE2EServerVersion() string {
 	}
 
 	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
+		TagName string `json:"tag_name"`
+		Draft   bool   `json:"draft"`
 	}
 
 	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=20", nil)
 	if err != nil {
-		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to build request, falling back to master")
+		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to build request")
+		if stale != "" {
+			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
+			return stale
+		}
 		return "master"
 	}
 	if _, err = client.Do(ctx, req, &releases); err != nil {
-		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to fetch releases, falling back to master")
+		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to fetch releases")
+		if stale != "" {
+			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
+			return stale
+		}
 		return "master"
 	}
 
+	// Collect all parseable non-draft releases and sort by semver descending
+	// so the highest version wins regardless of GitHub's publish-date ordering.
+	type candidate struct {
+		tag string
+		ver semver.Version
+	}
+	var candidates []candidate
 	for _, r := range releases {
-		if r.Draft || r.Prerelease {
+		if r.Draft {
 			continue
 		}
-		// Secondary guard: some RC tags don't have the prerelease flag set correctly.
-		lower := strings.ToLower(r.TagName)
-		if strings.Contains(lower, "-rc") || strings.Contains(lower, "-beta") || strings.Contains(lower, "-alpha") {
+		raw := strings.TrimPrefix(r.TagName, "v")
+		v, parseErr := semver.ParseTolerant(raw)
+		if parseErr != nil {
 			continue
 		}
-		version := strings.TrimPrefix(r.TagName, "v") // Docker Hub uses "11.6.0" not "v11.6.0"
-		s.Logger.WithField("version", version).Info("[resolveE2EServerVersion] Resolved latest Mattermost server version")
-
-		s.e2eVersionCacheLock.Lock()
-		s.e2eVersionCache = version
-		s.e2eVersionCacheTime = time.Now()
-		s.e2eVersionCacheLock.Unlock()
-
-		return version
+		candidates = append(candidates, candidate{tag: raw, ver: v})
 	}
 
-	s.Logger.Warn("[resolveE2EServerVersion] No stable release found, falling back to master")
-	return "master"
+	if len(candidates) == 0 {
+		s.Logger.Warn("[resolveE2EServerVersion] No release found")
+		if stale != "" {
+			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
+			return stale
+		}
+		return "master"
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].ver.GT(candidates[j].ver)
+	})
+
+	version := candidates[0].tag
+	s.Logger.WithField("version", version).Info("[resolveE2EServerVersion] Resolved latest Mattermost server version")
+
+	s.e2eVersionCacheLock.Lock()
+	s.e2eVersionCache = version
+	s.e2eVersionCacheTime = time.Now()
+	s.e2eVersionCacheLock.Unlock()
+
+	return version
 }
 
 // destroyE2EInstances destroys all given E2E instances
