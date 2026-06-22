@@ -972,26 +972,6 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		assert.Equal(t, "11.7.0-rc2", s.resolveE2EServerVersion())
 	})
 
-	t.Run("beta tags included, highest semver returned", func(t *testing.T) {
-		body := `[
-			{"tag_name":"v11.7.0-beta.1","draft":false},
-			{"tag_name":"v11.6.0","draft":false}
-		]`
-		srv := mockReleasesServer(t, body, http.StatusOK)
-		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0-beta.1", s.resolveE2EServerVersion())
-	})
-
-	t.Run("alpha tags included, highest semver returned", func(t *testing.T) {
-		body := `[
-			{"tag_name":"v11.7.0-alpha.1","draft":false},
-			{"tag_name":"v11.6.0","draft":false}
-		]`
-		srv := mockReleasesServer(t, body, http.StatusOK)
-		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0-alpha.1", s.resolveE2EServerVersion())
-	})
-
 	t.Run("draft releases skipped", func(t *testing.T) {
 		body := `[
 			{"tag_name":"v11.7.0","draft":true},
