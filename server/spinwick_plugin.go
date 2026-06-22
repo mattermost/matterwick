@@ -59,7 +59,7 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("No plugin SpinWick found for this PR. Creating a new one.")
 
-	// Create the Mattermost installation using the latest stable server version
+	// Create the Mattermost installation using the highest available server version (including RCs)
 	cloudClient := s.CloudClient
 	serverVersion := s.resolveE2EServerVersion()
 	logger.WithField("server_version", serverVersion).Info("Resolved Mattermost server version for plugin SpinWick")

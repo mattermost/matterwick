@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gogithub "github.com/google/go-github/v32/github"
 	"github.com/mattermost/matterwick/model"
@@ -1083,6 +1084,39 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		assert.Equal(t, "11.6.0", v2)
 		assert.Equal(t, "11.6.0", v3)
 		assert.Equal(t, 1, callCount, "GitHub API must be called exactly once; subsequent calls use the cache")
+	})
+
+	t.Run("stale cache returned when API fails on refresh", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/releases") {
+				callCount++
+				if callCount == 1 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`[{"tag_name":"v11.6.0","draft":false}]`))
+					return
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServerLatest(t, srv)
+
+		v1 := s.resolveE2EServerVersion() // populates cache with "11.6.0"
+		assert.Equal(t, "11.6.0", v1)
+
+		// Expire the cache so the next call hits the API again.
+		s.e2eVersionCacheLock.Lock()
+		s.e2eVersionCacheTime = s.e2eVersionCacheTime.Add(-2 * time.Hour)
+		s.e2eVersionCacheLock.Unlock()
+
+		v2 := s.resolveE2EServerVersion() // API fails → stale cache returned
+		assert.Equal(t, "11.6.0", v2, "should return last known version when API fails on cache refresh")
+		assert.Equal(t, 2, callCount)
 	})
 
 	t.Run("fallback master is not cached — retried on next call", func(t *testing.T) {
