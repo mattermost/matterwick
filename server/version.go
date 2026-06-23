@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -49,19 +50,27 @@ func (s *Server) resolveMattermostServerVersion() string {
 		}
 	}
 
-	var releases []struct {
+	type releaseEntry struct {
 		TagName string `json:"tag_name"`
 		Draft   bool   `json:"draft"`
 	}
-
-	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=100", nil)
-	if err != nil {
-		s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to build request")
-		return s.cachedVersionOrMaster()
-	}
-	if _, err = client.Do(ctx, req, &releases); err != nil {
-		s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to fetch releases")
-		return s.cachedVersionOrMaster()
+	const perPage = 100
+	var releases []releaseEntry
+	for page := 1; ; page++ {
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
+		if err != nil {
+			s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to build request")
+			return s.cachedVersionOrMaster()
+		}
+		var pageReleases []releaseEntry
+		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
+			s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to fetch releases")
+			return s.cachedVersionOrMaster()
+		}
+		releases = append(releases, pageReleases...)
+		if len(pageReleases) < perPage {
+			break
+		}
 	}
 
 	// Sort by semver descending; GitHub's publish-date order can put backport patches ahead of newer minors.
