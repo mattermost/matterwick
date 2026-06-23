@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/blang/semver"
 	"github.com/google/go-github/v32/github"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
@@ -231,7 +229,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		"platforms": len(platforms),
 	})
 
-	version := s.resolveE2EServerVersion()
+	version := s.resolveMattermostServerVersion()
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 	// Name format: {type}-pr-{pr}-{platform}-{hex6}
@@ -771,110 +769,6 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 	logger.Info("Non-PR E2E instance cleanup scan complete")
 }
 
-// resolveE2EServerVersion returns the server version for E2E provisioning.
-// "latest" (or empty) fetches all non-draft mattermost/mattermost releases, picks the
-// highest semver (including RCs), strips the "v" prefix, and caches the result for 1 hour.
-// On API error or empty results, returns the last cached version if one exists.
-func (s *Server) resolveE2EServerVersion() string {
-	cfg := strings.TrimSpace(s.Config.E2EServerVersion)
-	if cfg == "" {
-		s.Logger.Warn("[resolveE2EServerVersion] E2EServerVersion is empty in config; defaulting to 'latest'")
-		cfg = "latest"
-	}
-	if cfg != "latest" {
-		return cfg
-	}
-
-	const cacheTTL = 1 * time.Hour
-
-	// Return cached value if still fresh.
-	s.e2eVersionCacheLock.Lock()
-	stale := s.e2eVersionCache
-	if stale != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
-		s.e2eVersionCacheLock.Unlock()
-		s.Logger.WithField("version", stale).Debug("[resolveE2EServerVersion] Returning cached version")
-		return stale
-	}
-	s.e2eVersionCacheLock.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	// githubAPIBase is only set in tests to redirect to a mock server.
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
-	}
-
-	var releases []struct {
-		TagName string `json:"tag_name"`
-		Draft   bool   `json:"draft"`
-	}
-
-	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=20", nil)
-	if err != nil {
-		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to build request")
-		if stale != "" {
-			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
-			return stale
-		}
-		return "master"
-	}
-	if _, err = client.Do(ctx, req, &releases); err != nil {
-		s.Logger.WithError(err).Warn("[resolveE2EServerVersion] Failed to fetch releases")
-		if stale != "" {
-			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
-			return stale
-		}
-		return "master"
-	}
-
-	// Collect all parseable non-draft releases and sort by semver descending
-	// so the highest version wins regardless of GitHub's publish-date ordering.
-	type candidate struct {
-		tag string
-		ver semver.Version
-	}
-	var candidates []candidate
-	for _, r := range releases {
-		if r.Draft {
-			continue
-		}
-		raw := strings.TrimPrefix(r.TagName, "v")
-		v, parseErr := semver.ParseTolerant(raw)
-		if parseErr != nil {
-			continue
-		}
-		candidates = append(candidates, candidate{tag: raw, ver: v})
-	}
-
-	if len(candidates) == 0 {
-		s.Logger.Warn("[resolveE2EServerVersion] No release found")
-		if stale != "" {
-			s.Logger.WithField("version", stale).Warn("[resolveE2EServerVersion] Using last known version")
-			return stale
-		}
-		return "master"
-	}
-
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].ver.GT(candidates[j].ver)
-	})
-
-	version := candidates[0].tag
-	s.Logger.WithField("version", version).Info("[resolveE2EServerVersion] Resolved latest Mattermost server version")
-
-	s.e2eVersionCacheLock.Lock()
-	s.e2eVersionCache = version
-	s.e2eVersionCacheTime = time.Now()
-	s.e2eVersionCacheLock.Unlock()
-
-	return version
-}
-
 // destroyE2EInstances destroys all given E2E instances
 func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
 	for _, instance := range instances {
@@ -1092,7 +986,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	// Determine the server version to use for the workflow.
 	// Default to the configured E2E server version, but prefer the actual
 	// provisioned version from the instance details when available.
-	serverVersion := s.resolveE2EServerVersion()
+	serverVersion := s.resolveMattermostServerVersion()
 	if instanceDetailsJSON != "" {
 		var instances []struct {
 			ServerVersion string `json:"server_version"`

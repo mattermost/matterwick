@@ -174,7 +174,7 @@ func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEv
 		return
 	}
 
-	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveE2EServerVersion(), "nightly")
+	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveMattermostServerVersion(), "nightly")
 	if err != nil {
 		logger.WithError(err).Error("Failed to create nightly E2E instances")
 		return

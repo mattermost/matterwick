@@ -884,10 +884,6 @@ func TestDryRun_ConcurrentInstanceAccess(t *testing.T) {
 	// No race detected → concurrent access is safe
 }
 
-// ------------------------------------------------------------
-// 12. resolveE2EServerVersion() — GitHub releases API logic
-// ------------------------------------------------------------
-
 // mockReleasesServer returns an httptest.Server that serves the given body/status
 // for any GET request whose path contains "/releases".
 func mockReleasesServer(t *testing.T, body string, status int) *httptest.Server {
@@ -929,7 +925,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 			s := newDryRunServer(t, "", "mattermost")
 			s.Config.E2EServerVersion = cfg
 			s.githubAPIBase = srv.URL + "/"
-			assert.Equal(t, cfg, s.resolveE2EServerVersion(), "config=%q should be returned unchanged", cfg)
+			assert.Equal(t, cfg, s.resolveMattermostServerVersion(), "config=%q should be returned unchanged", cfg)
 		}
 		assert.False(t, called, "GitHub API must not be called when E2EServerVersion is not 'latest'")
 	})
@@ -945,7 +941,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		s.Config.E2EServerVersion = ""
 		s.githubAPIBase = srv.URL + "/"
 
-		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion(),
+		assert.Equal(t, "12.0.0", s.resolveMattermostServerVersion(),
 			"empty E2EServerVersion must fall back to latest resolution, not return empty")
 	})
 
@@ -958,7 +954,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		s.Config.E2EServerVersion = "   "
 		s.githubAPIBase = srv.URL + "/"
 
-		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "12.0.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("RC tags included, highest semver returned", func(t *testing.T) {
@@ -970,7 +966,34 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0-rc2", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.7.0-rc2", s.resolveMattermostServerVersion())
+	})
+
+	t.Run("beta tags skipped, stable returned", func(t *testing.T) {
+		// 12.0.0-beta.1 would beat 11.9.0-rc1 in semver but must be excluded —
+		// beta builds are too early for E2E infra.
+		body := `[
+			{"tag_name":"v12.0.0-beta.1","draft":false},
+			{"tag_name":"v11.9.0-rc1","draft":false},
+			{"tag_name":"v11.8.1","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.9.0-rc1", s.resolveMattermostServerVersion())
+	})
+
+	t.Run("alpha tags skipped, RC of lower version returned", func(t *testing.T) {
+		// 12.0.0-alpha.1 would beat 11.9.0-rc1 in semver but must be excluded —
+		// alpha builds are too early for E2E infra. Mattermost published v11.0.0-alpha.1
+		// as a one-off for the major-version announcement; v12.0.0-alpha.1 is plausible.
+		body := `[
+			{"tag_name":"v12.0.0-alpha.1","draft":false},
+			{"tag_name":"v11.9.0-rc1","draft":false},
+			{"tag_name":"v11.8.1","draft":false}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServerLatest(t, srv)
+		assert.Equal(t, "11.9.0-rc1", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("draft releases skipped", func(t *testing.T) {
@@ -980,14 +1003,14 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.6.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("stable release at top of list returned immediately", func(t *testing.T) {
 		body := `[{"tag_name":"v12.0.0","draft":false},{"tag_name":"v11.6.0","draft":false}]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "12.0.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "12.0.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("tag without v prefix returned unchanged", func(t *testing.T) {
@@ -995,7 +1018,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		body := `[{"tag_name":"11.6.0","draft":false}]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.6.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("only RCs in list → returns highest RC", func(t *testing.T) {
@@ -1005,26 +1028,26 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0-rc1", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.7.0-rc1", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("only drafts in list → fallback to master", func(t *testing.T) {
 		body := `[{"tag_name":"v11.7.0","draft":true}]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "master", s.resolveE2EServerVersion())
+		assert.Equal(t, "master", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("empty releases list → fallback to master", func(t *testing.T) {
 		srv := mockReleasesServer(t, `[]`, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "master", s.resolveE2EServerVersion())
+		assert.Equal(t, "master", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("API returns 500 → fallback to master", func(t *testing.T) {
 		srv := mockReleasesServer(t, `{"message":"Internal Server Error"}`, http.StatusInternalServerError)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "master", s.resolveE2EServerVersion())
+		assert.Equal(t, "master", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("mixed: draft RC then non-draft RC and stable → returns highest non-draft", func(t *testing.T) {
@@ -1035,7 +1058,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0-rc1", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.7.0-rc1", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("prerelease flag no longer skipped — highest semver returned", func(t *testing.T) {
@@ -1046,7 +1069,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.6.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.6.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("prerelease flag and rc tag both included, highest semver returned", func(t *testing.T) {
@@ -1057,7 +1080,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
-		assert.Equal(t, "11.7.0", s.resolveE2EServerVersion())
+		assert.Equal(t, "11.7.0", s.resolveMattermostServerVersion())
 	})
 
 	t.Run("resolved version is cached — API called only once", func(t *testing.T) {
@@ -1076,9 +1099,9 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 
 		s := newDryRunServerLatest(t, srv)
 
-		v1 := s.resolveE2EServerVersion()
-		v2 := s.resolveE2EServerVersion()
-		v3 := s.resolveE2EServerVersion()
+		v1 := s.resolveMattermostServerVersion()
+		v2 := s.resolveMattermostServerVersion()
+		v3 := s.resolveMattermostServerVersion()
 
 		assert.Equal(t, "11.6.0", v1)
 		assert.Equal(t, "11.6.0", v2)
@@ -1106,7 +1129,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 
 		s := newDryRunServerLatest(t, srv)
 
-		v1 := s.resolveE2EServerVersion() // populates cache with "11.6.0"
+		v1 := s.resolveMattermostServerVersion() // populates cache with "11.6.0"
 		assert.Equal(t, "11.6.0", v1)
 
 		// Expire the cache so the next call hits the API again.
@@ -1114,7 +1137,7 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 		s.e2eVersionCacheTime = s.e2eVersionCacheTime.Add(-2 * time.Hour)
 		s.e2eVersionCacheLock.Unlock()
 
-		v2 := s.resolveE2EServerVersion() // API fails → stale cache returned
+		v2 := s.resolveMattermostServerVersion() // API fails → stale cache returned
 		assert.Equal(t, "11.6.0", v2, "should return last known version when API fails on cache refresh")
 		assert.Equal(t, 2, callCount)
 	})
@@ -1140,9 +1163,9 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 
 		s := newDryRunServerLatest(t, srv)
 
-		v1 := s.resolveE2EServerVersion() // API error → fallback "master" (not cached)
-		v2 := s.resolveE2EServerVersion() // retried → "11.6.0" (now cached)
-		v3 := s.resolveE2EServerVersion() // cache hit → "11.6.0"
+		v1 := s.resolveMattermostServerVersion() // API error → fallback "master" (not cached)
+		v2 := s.resolveMattermostServerVersion() // retried → "11.6.0" (now cached)
+		v3 := s.resolveMattermostServerVersion() // cache hit → "11.6.0"
 
 		assert.Equal(t, "master", v1, "first call: API error should fall back to master")
 		assert.Equal(t, "11.6.0", v2, "second call: should retry and resolve correctly")
@@ -1166,10 +1189,8 @@ func TestDryRun_PushEventServerVersion(t *testing.T) {
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
 
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("release-9.0"),
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent(),
 			"release-9.0 push must provision latest server (12.0.0), not branch-derived 9.0")
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("release-10.5"),
-			"release-10.5 push must provision latest server (12.0.0), not branch-derived 10.5")
 	})
 
 	t.Run("master push uses latest version", func(t *testing.T) {
@@ -1177,8 +1198,7 @@ func TestDryRun_PushEventServerVersion(t *testing.T) {
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
 
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("master"))
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent("main"))
+		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent())
 	})
 }
 
@@ -1267,7 +1287,7 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 	})
 
 	t.Run("all instances in a PR run share the same resolved version", func(t *testing.T) {
-		// createMultipleE2EInstances calls resolveE2EServerVersion() once and passes
+		// createMultipleE2EInstances calls resolveMattermostServerVersion() once and passes
 		// the same version to all createCloudInstallation calls.
 		resolvedVersion := "11.6.0"
 		platforms := []string{"linux", "macos", "windows"}
@@ -1284,14 +1304,14 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 		}
 	})
 
-	t.Run("resolveE2EServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
+	t.Run("resolveMattermostServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
 		// Docker Hub tags are bare semver (e.g. "11.6.0"), NOT "v11.6.0".
 		// Verify the v-stripping produces a Docker Hub compatible string.
 		body := `[{"tag_name":"v11.6.0","draft":false}]`
 		srv := mockReleasesServer(t, body, http.StatusOK)
 		s := newDryRunServerLatest(t, srv)
 
-		version := s.resolveE2EServerVersion()
+		version := s.resolveMattermostServerVersion()
 		assert.Equal(t, "11.6.0", version)
 		assert.False(t, strings.HasPrefix(version, "v"),
 			"resolved version must NOT have 'v' prefix — Docker Hub tags are bare semver")
