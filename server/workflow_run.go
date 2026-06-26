@@ -137,6 +137,91 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
+// handleNightlyE2ETrigger provisions instances and dispatches the test workflow.
+// Called when the E2E trigger workflow starts, whether from schedule, push to master/main,
+// or push to a release branch. The triggerEvent parameter ("schedule", "push", etc.) is
+// used to set runType correctly — scheduled runs always get "NIGHTLY" regardless of branch.
+func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, runID int64, logger logrus.FieldLogger) {
+	logger = logger.WithFields(logrus.Fields{
+		"branch": branch,
+		"sha":    sha,
+		"run_id": runID,
+	})
+	logger.Info("Provisioning nightly E2E instances")
+
+	instanceType := "desktop"
+	if strings.Contains(repoName, "mobile") {
+		instanceType = "mobile"
+	} else if !strings.Contains(repoName, "desktop") {
+		logger.Warn("Repository is neither desktop nor mobile, skipping nightly E2E trigger")
+		return
+	}
+
+	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveMattermostServerVersion(), "nightly")
+	if err != nil {
+		logger.WithError(err).Error("Failed to create nightly E2E instances")
+		return
+	}
+
+	// Include runID so two trigger runs against the same SHA (e.g. manual re-trigger)
+	// get separate tracking keys. The key still ends with "-{sha}" so
+	// findAndDestroyInstancesBySHA continues to match it by suffix.
+	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, sha)
+	s.e2eInstancesLock.Lock()
+	s.e2eInstances[key] = instances
+	s.e2eInstancesLock.Unlock()
+
+	logger.WithField("tracking_key", key).Info("Nightly instances tracked, dispatching test workflow")
+
+	// Determine run classification. Scheduled runs are always NIGHTLY regardless of branch
+	// (a scheduled run on master must not be classified as MASTER). Push-triggered runs
+	// derive their type from the branch name.
+	runType := "NIGHTLY"
+	if triggerEvent != "schedule" {
+		if branch == "master" || branch == "main" {
+			runType = "MASTER"
+		} else if s.isReleaseBranch(branch) {
+			runType = "RELEASE"
+		}
+	}
+
+	var dispatchErr error
+	if instanceType == "desktop" {
+		instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
+		if err != nil {
+			logger.WithError(err).Error("Failed to build instance details JSON for nightly desktop run")
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
+			s.destroyE2EInstances(instances, logger)
+			return
+		}
+		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType)
+	} else {
+		if len(instances) < 3 {
+			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
+			s.destroyE2EInstances(instances, logger)
+			return
+		}
+		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, branch, sha,
+			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
+	}
+
+	if dispatchErr != nil {
+		logger.WithError(dispatchErr).Error("Failed to dispatch test workflow for nightly run; cleaning up instances")
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
+
+	logger.Info("Nightly E2E workflow dispatched successfully")
+}
+
 // isE2ETestWorkflow returns true if the workflow name is a configured E2E test workflow
 // (as opposed to a trigger or CMT provisioner workflow).
 func (s *Server) isE2ETestWorkflow(name string) bool {

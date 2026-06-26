@@ -73,11 +73,8 @@ func (s *Server) isReleaseBranch(branch string) bool {
 	return strings.HasPrefix(branch, s.Config.E2EReleasePatternPrefix)
 }
 
-// serverVersionForPushEvent resolves the server version via resolveE2EServerVersion.
-// Branch name is ignored — derived names like "9.0" don't exist as Docker Hub tags ("9.0.0").
-func (s *Server) serverVersionForPushEvent(branch string) string {
-	_ = branch
-	return s.resolveE2EServerVersion()
+func (s *Server) serverVersionForPushEvent() string {
+	return s.resolveMattermostServerVersion()
 }
 
 // extractBranchName extracts the branch name from "refs/heads/branch-name".
@@ -186,7 +183,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		"platformCount": len(platforms),
 	})
 
-	serverVersion := s.serverVersionForPushEvent(branch)
+	serverVersion := s.serverVersionForPushEvent()
 	sanitizedVersion := sanitizeForDNS(serverVersion)
 	uid := e2eUniqueSuffix()
 
