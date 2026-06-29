@@ -105,6 +105,22 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	startGeneration := s.e2ePRCleanupGeneration[key]
 	s.e2ePRCleanupGenerationLock.Unlock()
 
+	// storeIfCurrent writes instances under both locks atomically and only if the
+	// cleanup generation hasn't advanced since startGeneration. Returns false if a
+	// concurrent handleE2ECleanup already invalidated this provisioning attempt;
+	// caller must destroy `instances` in that case to avoid leaks.
+	storeIfCurrent := func(toStore []*E2EInstance) bool {
+		s.e2ePRCleanupGenerationLock.Lock()
+		defer s.e2ePRCleanupGenerationLock.Unlock()
+		s.e2eInstancesLock.Lock()
+		defer s.e2eInstancesLock.Unlock()
+		if s.e2ePRCleanupGeneration[key] != startGeneration {
+			return false
+		}
+		s.e2eInstances[key] = toStore
+		return true
+	}
+
 	// Guard against duplicate webhook deliveries. The in-progress key includes
 	// the test platform so that a second mobile label with a *different* platform
 	// (e.g. E2E/Run-Android while E2E/Run-iOS is provisioning) is not incorrectly
@@ -146,9 +162,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
 		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(cloudInstances, logger)
-		s.e2eInstancesLock.Lock()
-		s.e2eInstances[key] = cloudInstances
-		s.e2eInstancesLock.Unlock()
+		if !storeIfCurrent(cloudInstances) {
+			logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
+			s.destroyE2EInstances(cloudInstances, logger)
+			return
+		}
 		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
 			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -183,22 +201,13 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Check whether E2EResetServersLabel was applied while provisioning was in flight.
-	// If the cleanup generation advanced, handleE2ECleanup already deleted the cloud
-	// installations; storing them here would put stale, deleted instances into the
-	// tracking map and dispatch a workflow against non-existent servers.
-	s.e2ePRCleanupGenerationLock.Lock()
-	resetDuringProvisioning := s.e2ePRCleanupGeneration[key] != startGeneration
-	s.e2ePRCleanupGenerationLock.Unlock()
-	if resetDuringProvisioning {
+	// Re-check cleanup generation and store instances atomically under both locks so a
+	// concurrent handleE2ECleanup cannot slip between the check and the map write.
+	if !storeIfCurrent(instances) {
 		logger.Warn("E2E reset was requested during provisioning; discarding freshly created instances")
 		s.destroyE2EInstances(instances, logger)
 		return
 	}
-
-	s.e2eInstancesLock.Lock()
-	s.e2eInstances[key] = instances
-	s.e2eInstancesLock.Unlock()
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
@@ -306,19 +315,19 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Create installation request
 	envVars := cloudModel.EnvVarMap{
-		"MM_SERVICESETTINGS_ENABLETUTORIAL":                cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":          cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":      cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":    cloudModel.EnvVar{Value: "5000"},
-		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":         cloudModel.EnvVar{Value: "180"},
-		"MM_SERVICEENVIRONMENT":                            cloudModel.EnvVar{Value: "test"},
-		"MM_RATELIMITSETTINGS_ENABLE":                         cloudModel.EnvVar{Value: "true"},
-		"MM_RATELIMITSETTINGS_PERSEC":                         cloudModel.EnvVar{Value: "3000"},
-		"MM_RATELIMITSETTINGS_MAXBURST":                       cloudModel.EnvVar{Value: "5000"},
-		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":                cloudModel.EnvVar{Value: "10000"},
-		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":               cloudModel.EnvVar{Value: "false"},
-		"MM_RATELIMITSETTINGS_VARYBYUSER":                     cloudModel.EnvVar{Value: "false"},
-		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES":  cloudModel.EnvVar{Value: "true"},
+		"MM_SERVICESETTINGS_ENABLETUTORIAL":                  cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":            cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":        cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":      cloudModel.EnvVar{Value: "5000"},
+		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":           cloudModel.EnvVar{Value: "180"},
+		"MM_SERVICEENVIRONMENT":                              cloudModel.EnvVar{Value: "test"},
+		"MM_RATELIMITSETTINGS_ENABLE":                        cloudModel.EnvVar{Value: "true"},
+		"MM_RATELIMITSETTINGS_PERSEC":                        cloudModel.EnvVar{Value: "3000"},
+		"MM_RATELIMITSETTINGS_MAXBURST":                      cloudModel.EnvVar{Value: "5000"},
+		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":               cloudModel.EnvVar{Value: "10000"},
+		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":              cloudModel.EnvVar{Value: "false"},
+		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
+		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
@@ -968,14 +977,27 @@ func (s *Server) resolveCMTServerVersions() []string {
 		Prerelease bool   `json:"prerelease"`
 		Body       string `json:"body"`
 	}
-	req, err := client.NewRequest("GET", "/repos/mattermost/mattermost/releases?per_page=100", nil)
-	if err != nil {
-		s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to build request; using default CMT versions")
-		return defaultCMTServerVersions
-	}
-	if _, err = client.Do(ctx, req, &releases); err != nil {
-		s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to fetch releases; using default CMT versions")
-		return defaultCMTServerVersions
+	const perPage = 100
+	for page := 1; ; page++ {
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
+		if err != nil {
+			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to build request; using default CMT versions")
+			return defaultCMTServerVersions
+		}
+		var pageReleases []struct {
+			TagName    string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+			Body       string `json:"body"`
+		}
+		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
+			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to fetch releases; using default CMT versions")
+			return defaultCMTServerVersions
+		}
+		releases = append(releases, pageReleases...)
+		if len(pageReleases) < perPage {
+			break
+		}
 	}
 
 	type minorKey struct{ major, minor int }

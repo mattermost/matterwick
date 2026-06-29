@@ -589,15 +589,11 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		assert.Equal(t, 1, dispatchCount, "desktop CMT must dispatch exactly once")
 	})
 
-	t.Run("CMT tracking key includes runID for uniqueness and sha for cleanup", func(t *testing.T) {
+	t.Run("CMT tracking key is keyed by dispatched test run id", func(t *testing.T) {
 		repoName := "mattermost-desktop"
-		sha := "deadbeef"
-		var runID int64 = 999
-		// runID prevents collision when two dispatches share the same branch HEAD SHA;
-		// key still ends with "-{sha}" so findAndDestroyInstancesBySHA can match it.
-		key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
-		assert.Equal(t, "mattermost-desktop-cmt-999-deadbeef", key)
-		assert.True(t, strings.HasSuffix(key, "-"+sha), "key must end with sha for cleanup")
+		var testRunID int64 = 999
+		key := cmtInstanceKey(repoName, testRunID)
+		assert.Equal(t, "mattermost-desktop-cmt-999", key)
 	})
 
 	t.Run("CMT workflow name detection", func(t *testing.T) {
@@ -746,9 +742,7 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		}
 	})
 
-	t.Run("mobile CMT: all unparseable versions => no latest marker", func(t *testing.T) {
-		// Defensive: if the resolved set somehow contains no parseable versions, leave the
-		// matrix unmarked. The workflow falls back to its default (smoke for all).
+	t.Run("mobile CMT: all unparseable versions => last entry marked latest", func(t *testing.T) {
 		versions := []string{"junk", "also-junk"}
 		instances := []*E2EInstance{
 			{URL: "https://a.example.com"},
@@ -758,10 +752,10 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		require.NoError(t, err)
 		var matrix map[string]interface{}
 		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
-		for _, raw := range matrix["server"].([]interface{}) {
-			_, has := raw.(map[string]interface{})["latest"]
-			assert.False(t, has, "no entry should be latest when all versions are unparseable")
-		}
+		servers := matrix["server"].([]interface{})
+		_, has0 := servers[0].(map[string]interface{})["latest"]
+		assert.False(t, has0)
+		assert.Equal(t, true, servers[1].(map[string]interface{})["latest"])
 	})
 }
 
@@ -871,36 +865,78 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 		assert.Len(t, collected, 6, "should collect 3 instances from each of 2 push keys")
 	})
 
-	t.Run("CMT cleanup by sha via findAndDestroyInstancesBySHA", func(t *testing.T) {
+	t.Run("CMT cleanup by run id removes only the matching tracking key", func(t *testing.T) {
 		repoName := "mattermost-desktop"
-		sha := "abc123cmt"
-		var runID int64 = 42
-		key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
+		var testRunID int64 = 42
+		key := cmtInstanceKey(repoName, testRunID)
 
 		cmtInstances := makeDesktopInstances()
 		s.e2eInstancesLock.Lock()
 		s.e2eInstances[key] = cmtInstances
 		s.e2eInstancesLock.Unlock()
 
-		// Simulate findAndDestroyInstancesBySHA: scan for prefix+suffix match
-		prefix := repoName + "-"
-		suffix := "-" + sha
-		s.e2eInstancesLock.Lock()
-		var found []*E2EInstance
-		for k, v := range s.e2eInstances {
-			if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, suffix) {
-				found = append(found, v...)
-				delete(s.e2eInstances, k)
-			}
-		}
-		s.e2eInstancesLock.Unlock()
+		assert.True(t, instanceKeyMatchesRunID(key, repoName, testRunID))
 
-		assert.Len(t, found, 3)
+		// Exercise the live map-mutation helper, not a hand-rolled loop — so a future
+		// change to removeCMTInstancesByRunID's locking, key derivation, or return shape
+		// fails this test instead of silently passing.
+		removed := s.removeCMTInstancesByRunID(repoName, testRunID, s.Logger)
+		assert.Len(t, removed, 3, "must return the removed instances so the caller can destroy them")
 
 		s.e2eInstancesLock.Lock()
 		_, exists := s.e2eInstances[key]
 		s.e2eInstancesLock.Unlock()
-		assert.False(t, exists)
+		assert.False(t, exists, "matching key must be removed from the tracking map")
+	})
+
+	t.Run("concurrent CMT runs on same SHA only destroy the completing run", func(t *testing.T) {
+		repoName := "mattermost-mobile"
+		run1 := int64(100)
+		run2 := int64(200)
+		key1 := cmtInstanceKey(repoName, run1)
+		key2 := cmtInstanceKey(repoName, run2)
+
+		s.e2eInstancesLock.Lock()
+		s.e2eInstances[key1] = makeDesktopInstances()
+		s.e2eInstances[key2] = makeDesktopInstances()
+		s.e2eInstancesLock.Unlock()
+
+		// Use the live map-mutation helper so this regression-tests the real path.
+		removed := s.removeCMTInstancesByRunID(repoName, run1, s.Logger)
+		assert.Len(t, removed, 3, "run1's instances must be returned")
+
+		s.e2eInstancesLock.Lock()
+		_, exists1 := s.e2eInstances[key1]
+		_, exists2 := s.e2eInstances[key2]
+		s.e2eInstancesLock.Unlock()
+		assert.False(t, exists1, "removeCMTInstancesByRunID must remove run1's key")
+		assert.True(t, exists2, "other concurrent CMT run must survive cleanup of cancelled run")
+
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key2)
+		s.e2eInstancesLock.Unlock()
+	})
+
+	t.Run("CMT cleanup by run id is a no-op when run id is zero", func(t *testing.T) {
+		repoName := "mattermost-mobile"
+		key := cmtInstanceKey(repoName, 777)
+		s.e2eInstancesLock.Lock()
+		s.e2eInstances[key] = makeDesktopInstances()
+		s.e2eInstancesLock.Unlock()
+		defer func() {
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
+		}()
+
+		// runID 0 is the "could not resolve" sentinel from pollDispatchedWorkflowRun.
+		// The helper must NOT match any key in that case.
+		removed := s.removeCMTInstancesByRunID(repoName, 0, s.Logger)
+		assert.Nil(t, removed, "zero run id must return nil so no destroy fires")
+		s.e2eInstancesLock.Lock()
+		_, exists := s.e2eInstances[key]
+		s.e2eInstancesLock.Unlock()
+		assert.True(t, exists, "zero run id must leave all keys intact")
 	})
 }
 
@@ -908,28 +944,34 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 // 9b. SHA-scoped cleanup must not reap a concurrent flow on the same SHA
 // ------------------------------------------------------------
 
+func TestInstanceKeyMatchesRunID(t *testing.T) {
+	repo := "mattermost-mobile"
+	runID := int64(100)
+	cmtKey := cmtInstanceKey(repo, runID)
+	otherRunKey := cmtInstanceKey(repo, 200)
+
+	assert.True(t, instanceKeyMatchesRunID(cmtKey, repo, runID))
+	assert.False(t, instanceKeyMatchesRunID(otherRunKey, repo, runID))
+	assert.False(t, instanceKeyMatchesRunID(cmtKey, "mattermost-desktop", runID))
+}
+
 func TestInstanceKeyMatchesSHA(t *testing.T) {
 	repo := "mattermost-mobile"
 	sha := "deadbeef"
-	cmtKey := fmt.Sprintf("%s-cmt-100-%s", repo, sha)             // CMT flow
 	nightlyKey := fmt.Sprintf("%s-scheduled-200-%s", repo, sha)   // nightly flow, same SHA
 	pushKey := fmt.Sprintf("%s-push-release-9.0-%s", repo, sha)   // push flow, same SHA
 	prKey := fmt.Sprintf("%s-pr-42", repo)                        // PR flow, no -sha suffix
-	otherSHAKey := fmt.Sprintf("%s-cmt-100-%s", repo, "feedface") // CMT, different SHA
+	legacyCMTKey := fmt.Sprintf("%s-cmt-100-%s", repo, sha)       // legacy CMT key shape (runID + sha) — pre-refactor
+	liveCMTKey := cmtInstanceKey(repo, 100)                       // live CMT key shape ({repo}-cmt-{runID}, no sha)
+	otherSHAKey := fmt.Sprintf("%s-cmt-100-%s", repo, "feedface") // legacy CMT key with different sha
 
-	t.Run("CMT completion matches only the CMT key", func(t *testing.T) {
-		assert.True(t, instanceKeyMatchesSHA(cmtKey, repo, sha, true))
-		assert.False(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, true), "nightly key must survive a CMT completion")
-		assert.False(t, instanceKeyMatchesSHA(pushKey, repo, sha, true))
-		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, true))
-		assert.False(t, instanceKeyMatchesSHA(otherSHAKey, repo, sha, true), "different SHA must not match")
-	})
-
-	t.Run("non-CMT completion matches push/scheduled but not CMT", func(t *testing.T) {
-		assert.False(t, instanceKeyMatchesSHA(cmtKey, repo, sha, false), "CMT key must survive a nightly/push completion")
+	t.Run("non-CMT completion matches push/scheduled but NEVER any CMT shape", func(t *testing.T) {
 		assert.True(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, false))
 		assert.True(t, instanceKeyMatchesSHA(pushKey, repo, sha, false))
 		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, false), "PR keys have no -sha suffix")
+		assert.False(t, instanceKeyMatchesSHA(legacyCMTKey, repo, sha, false), "legacy CMT keys are CMT-prefixed and never SHA-cleaned by non-CMT completions")
+		assert.False(t, instanceKeyMatchesSHA(liveCMTKey, repo, sha, false), "live CMT keys have no -sha suffix so cannot match a non-CMT SHA cleanup")
+		assert.False(t, instanceKeyMatchesSHA(otherSHAKey, repo, sha, false), "legacy CMT key with different sha must not match")
 	})
 
 	t.Run("other repo is never matched", func(t *testing.T) {

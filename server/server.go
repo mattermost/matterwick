@@ -44,9 +44,15 @@ type Server struct {
 
 	// e2eInstances tracks E2E test instances for cleanup.
 	// Key formats: "%s-pr-%d" (PR), "%s-push-%s-%s" (push, ends with SHA),
-	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
+	// "%s-cmt-%d" (CMT test run id).
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
+
+	// cmtDispatchLocks serializes the dispatch+poll critical section per repository so
+	// two near-simultaneous CMT dispatches cannot resolve to the same test workflow run
+	// id when GitHub lists both in the poll window.
+	cmtDispatchLocks   map[string]*sync.Mutex
+	cmtDispatchLocksMu sync.Mutex
 
 	// e2eInProgress guards against concurrent handleE2ETestRequest executions for the
 	// same PR+platform key (e.g. duplicate webhook deliveries). Only one goroutine per
@@ -100,16 +106,17 @@ func New(config *MatterwickConfig) *Server {
 	cloudClient := model.NewCloudClient(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint, config.AWSAPIKey)
 
 	s := &Server{
-		Config:          config,
-		Router:          mux.NewRouter(),
-		webhookChannels: make(map[string]chan cloudModel.WebhookPayload),
-		StartTime:       time.Now(),
-		Logger:          logger.WithField("instance", cloudModel.NewID()),
-		CloudClient:     cloudClient,
+		Config:                 config,
+		Router:                 mux.NewRouter(),
+		webhookChannels:        make(map[string]chan cloudModel.WebhookPayload),
+		StartTime:              time.Now(),
+		Logger:                 logger.WithField("instance", cloudModel.NewID()),
+		CloudClient:            cloudClient,
 		envMaps:                make(map[string]cloudModel.EnvVarMap),
 		e2eInstances:           make(map[string][]*E2EInstance),
 		e2eInProgress:          make(map[string]bool),
 		e2ePRCleanupGeneration: make(map[string]int64),
+		cmtDispatchLocks:       make(map[string]*sync.Mutex),
 		stopCh:                 make(chan struct{}),
 	}
 
