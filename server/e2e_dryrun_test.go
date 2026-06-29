@@ -533,10 +533,10 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		assert.Equal(t, []string{"v11.1.0", "v11.2.0", "v12.0.0"}, versions)
 	})
 
-	t.Run("caps server versions to 10", func(t *testing.T) {
+	t.Run("caps server versions to 5", func(t *testing.T) {
 		versions := parseServerVersionsFromString("v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12")
-		// The cap is enforced inside handleCMTWithServerVersions (maxVersions = 10).
-		const maxVersions = 10
+		// The cap is enforced inside handleCMTWithServerVersions (maxVersions = 5).
+		const maxVersions = 5
 		if len(versions) > maxVersions {
 			versions = versions[:maxVersions]
 		}
@@ -1576,14 +1576,14 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 		assert.Equal(t, "11.1.0", s1["version"])
 	})
 
-	t.Run("CMT versions capped at 10", func(t *testing.T) {
+	t.Run("CMT versions capped at 5", func(t *testing.T) {
 		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0, v8.0.0, v9.0.0, v10.0.0, v11.0.0, v12.0.0"
 		parsed := parseServerVersionsFromString(input)
-		const maxVersions = 10
+		const maxVersions = 5
 		if len(parsed) > maxVersions {
 			parsed = parsed[:maxVersions]
 		}
-		assert.Len(t, parsed, 10, "CMT versions must be capped at 10")
+		assert.Len(t, parsed, 5, "CMT versions must be capped at 5")
 	})
 }
 
@@ -1814,10 +1814,10 @@ func TestShouldTriggerCMT(t *testing.T) {
 	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
 
 	// Mobile build-release-NNN branch push (mobile's RC-cut equivalent).
-	assert.True(t, s.shouldTriggerCMT("push", "build-release-786"))   // 3-digit
-	assert.True(t, s.shouldTriggerCMT("push", "build-release-1100"))  // 4-digit
-	assert.True(t, s.shouldTriggerCMT("push", "build-release-12345")) // future 5-digit
-	assert.False(t, s.shouldTriggerCMT("push", "build-release-1"))    // < 3 digits, likely a test
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-786"))      // 3-digit
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-1100"))     // 4-digit
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-12345"))   // 5+ digit rejected; bump regex when convention changes
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-1"))       // < 3 digits, likely a test
 	assert.False(t, s.shouldTriggerCMT("push", "build-release-ios-707")) // platform variant
 }
 
@@ -1841,28 +1841,30 @@ func TestIsRCTag(t *testing.T) {
 }
 
 // TestIsBuildReleaseBranch locks in the boundaries for mobile's build-release-NNN gate:
-// 3+ digits required (rejects test artifacts like build-release-1); platform-specific
-// variants (build-release-ios-NNN etc.) are rejected; no overlap with the RC-tag or
+// exactly 3-or-4 digits required (rejects test artifacts like build-release-1 AND
+// rejects unsanctioned 5+ digit values); platform-specific variants
+// (build-release-ios-NNN etc.) are rejected; no overlap with the RC-tag or
 // release-* gates.
 func TestIsBuildReleaseBranch(t *testing.T) {
 	for _, ref := range []string{
-		"build-release-786",   // real 3-digit
-		"build-release-1100",  // real 4-digit
-		"build-release-12345", // future 5-digit
+		"build-release-786",  // real 3-digit
+		"build-release-1100", // real 4-digit
+		"build-release-9999", // upper end of 4-digit window
 	} {
 		assert.True(t, isBuildReleaseBranch(ref), "expected build-release branch: %q", ref)
 	}
 	for _, ref := range []string{
-		"build-release-1",           // 1 digit — test artifact / typo
-		"build-release-99",          // 2 digit — below convention
-		"build-release-ios-707",     // platform-specific
-		"build-release-sim-707",     // simulator-only
+		"build-release-1",            // 1 digit — test artifact / typo
+		"build-release-99",           // 2 digit — below convention
+		"build-release-12345",        // 5 digit — above convention; bump regex when crossing this
+		"build-release-ios-707",      // platform-specific
+		"build-release-sim-707",      // simulator-only
 		"build-release-android-1100", // android-specific
-		"build-release-786-rc1",     // stray suffix
-		"build-release-",            // no number
-		"build-release-abc",         // non-numeric
-		"release-2.41",              // handled by isReleaseBranch
-		"v2.41.0-rc.1",              // handled by isRCTag
+		"build-release-786-rc1",      // stray suffix
+		"build-release-",             // no number
+		"build-release-abc",          // non-numeric
+		"release-2.41",               // handled by isReleaseBranch
+		"v2.41.0-rc.1",               // handled by isRCTag
 		"",
 	} {
 		assert.False(t, isBuildReleaseBranch(ref), "must not match: %q", ref)

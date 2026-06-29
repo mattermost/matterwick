@@ -1062,9 +1062,14 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) }) // ascending
 
-	const maxVersions = 10
+	// Cap at 5 versions to bound provisioning cost and matrix wall-clock: latest RC
+	// (when present) + up to 4 previous lines. ESR-aware selection above may pick
+	// more if a release window has multiple active ESRs; in that case we keep the
+	// newest 5 and drop the oldest entries (typically the older ESR line) — surfaces
+	// in the [resolveCMTServerVersions] log line for the operator.
+	const maxVersions = 5
 	if len(chosen) > maxVersions {
-		chosen = chosen[len(chosen)-maxVersions:] // keep the newest if somehow over the cap
+		chosen = chosen[len(chosen)-maxVersions:] // keep the newest if over the cap
 	}
 
 	versions := make([]string, 0, len(chosen))

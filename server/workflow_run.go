@@ -401,13 +401,16 @@ func isRCTag(ref string) bool {
 }
 
 // buildReleaseBranchPattern matches mobile's release-build branches: "build-release-" followed
-// by 3 or more digits (current convention is 3- or 4-digit build numbers like 786 / 1100).
-// 3+ digits is intentional — rejects accidental test branches like "build-release-1" without
-// locking an upper bound, so a future move to 5-digit build numbers needs no code change.
+// by exactly 3 or 4 digits (the current convention — e.g. build-release-786 / build-release-1100).
+// The 3-digit floor rejects accidental test branches like "build-release-1"; the 4-digit ceiling
+// rejects unexpectedly large values (typo or unsanctioned scheme change). If mobile ever
+// adopts a 5+ digit build number, bump this upper bound and the matching glob in
+// .github/workflows/cmt-provisioner.yml in lock-step.
+//
 // Platform-specific variants (build-release-ios-NNN, build-release-sim-NNN,
 // build-release-android-NNN) don't start with a digit after the "build-release-" prefix and
 // are excluded.
-var buildReleaseBranchPattern = regexp.MustCompile(`^build-release-\d{3,}$`)
+var buildReleaseBranchPattern = regexp.MustCompile(`^build-release-\d{3,4}$`)
 
 // isBuildReleaseBranch reports whether ref matches mobile's build-release-NNN convention.
 // The branch is created by the "Mattermost Mobile Release" external workflow when an RC
@@ -443,8 +446,10 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
 // version, builds the CMT_MATRIX JSON, and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
-	// Cap the number of versions (one cloud instance per version) to prevent runaway provisioning.
-	const maxVersions = 10
+	// Cap the number of versions (one cloud instance per version) to prevent runaway
+	// provisioning. Matches the cap inside resolveCMTServerVersions; this second guard
+	// catches operator overrides via Config.CMTServerVersions that exceed the limit.
+	const maxVersions = 5
 	if len(serverVersions) > maxVersions {
 		logger.Warnf("Capping server versions from %d to %d", len(serverVersions), maxVersions)
 		serverVersions = serverVersions[:maxVersions]
