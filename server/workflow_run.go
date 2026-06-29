@@ -135,91 +135,6 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
-// handleNightlyE2ETrigger provisions instances and dispatches the test workflow.
-// Called when the E2E trigger workflow starts, whether from schedule, push to master/main,
-// or push to a release branch. The triggerEvent parameter ("schedule", "push", etc.) is
-// used to set runType correctly — scheduled runs always get "NIGHTLY" regardless of branch.
-func (s *Server) handleNightlyE2ETrigger(owner, repoName, branch, sha, triggerEvent string, runID int64, logger logrus.FieldLogger) {
-	logger = logger.WithFields(logrus.Fields{
-		"branch": branch,
-		"sha":    sha,
-		"run_id": runID,
-	})
-	logger.Info("Provisioning nightly E2E instances")
-
-	instanceType := "desktop"
-	if strings.Contains(repoName, "mobile") {
-		instanceType = "mobile"
-	} else if !strings.Contains(repoName, "desktop") {
-		logger.Warn("Repository is neither desktop nor mobile, skipping nightly E2E trigger")
-		return
-	}
-
-	instances, err := s.createCMTInstancesForVersion(repoName, instanceType, s.resolveMattermostServerVersion(), "nightly")
-	if err != nil {
-		logger.WithError(err).Error("Failed to create nightly E2E instances")
-		return
-	}
-
-	// Include runID so two trigger runs against the same SHA (e.g. manual re-trigger)
-	// get separate tracking keys. The key still ends with "-{sha}" so
-	// findAndDestroyInstancesBySHA continues to match it by suffix.
-	key := fmt.Sprintf("%s-scheduled-%d-%s", repoName, runID, sha)
-	s.e2eInstancesLock.Lock()
-	s.e2eInstances[key] = instances
-	s.e2eInstancesLock.Unlock()
-
-	logger.WithField("tracking_key", key).Info("Nightly instances tracked, dispatching test workflow")
-
-	// Determine run classification. Scheduled runs are always NIGHTLY regardless of branch
-	// (a scheduled run on master must not be classified as MASTER). Push-triggered runs
-	// derive their type from the branch name.
-	runType := "NIGHTLY"
-	if triggerEvent != "schedule" {
-		if branch == "master" || branch == "main" {
-			runType = "MASTER"
-		} else if s.isReleaseBranch(branch) {
-			runType = "RELEASE"
-		}
-	}
-
-	var dispatchErr error
-	if instanceType == "desktop" {
-		instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
-		if err != nil {
-			logger.WithError(err).Error("Failed to build instance details JSON for nightly desktop run")
-			s.e2eInstancesLock.Lock()
-			delete(s.e2eInstances, key)
-			s.e2eInstancesLock.Unlock()
-			s.destroyE2EInstances(instances, logger)
-			return
-		}
-		dispatchErr = s.dispatchDesktopE2EWorkflow(owner, repoName, branch, sha, instanceDetailsJSON, runType)
-	} else {
-		if len(instances) < 3 {
-			logger.Errorf("Expected 3 mobile instances, got %d", len(instances))
-			s.e2eInstancesLock.Lock()
-			delete(s.e2eInstances, key)
-			s.e2eInstancesLock.Unlock()
-			s.destroyE2EInstances(instances, logger)
-			return
-		}
-		dispatchErr = s.dispatchMobileE2EWorkflow(owner, repoName, branch, sha,
-			instances[0].URL, instances[1].URL, instances[2].URL, "both", runType)
-	}
-
-	if dispatchErr != nil {
-		logger.WithError(dispatchErr).Error("Failed to dispatch test workflow for nightly run; cleaning up instances")
-		s.e2eInstancesLock.Lock()
-		delete(s.e2eInstances, key)
-		s.e2eInstancesLock.Unlock()
-		s.destroyE2EInstances(instances, logger)
-		return
-	}
-
-	logger.Info("Nightly E2E workflow dispatched successfully")
-}
-
 // isE2ETestWorkflow returns true if the workflow name is a configured E2E test workflow
 // (as opposed to a trigger or CMT provisioner workflow).
 func (s *Server) isE2ETestWorkflow(name string) bool {
@@ -549,8 +464,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 }
 
 // createSingleCMTInstance creates one Mattermost cloud instance for a CMT server version.
-// Unlike createCMTInstancesForVersion (which creates 3 platform-specific instances for
-// nightly runs), CMT only needs one server — the matrix handles parallelism.
+// CMT only needs one server per version — the test matrix handles platform parallelism.
 func (s *Server) createSingleCMTInstance(repoName, instanceType, version string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	// Name format: {type}-{version}-{hex6}
 	sanitizedVersion := sanitizeForDNS(version)
@@ -851,83 +765,3 @@ func (s *Server) pollDispatchedWorkflowRun(repoOwner, repoName, workflowFile, br
 	return 0, fmt.Errorf("timed out polling for dispatched workflow run on branch %s", branch)
 }
 
-// createCMTInstancesForVersion creates 3 instances (one per platform) in parallel for a
-// given server version. Used by nightly runs which dispatch the platform-aware
-// e2e-functional.yml / e2e-detox-pr.yml workflows (not the CMT matrix workflow).
-// Results are returned in platforms[] order so index-based assignment is stable.
-func (s *Server) createCMTInstancesForVersion(repoName, instanceType, version, purpose string) ([]*E2EInstance, error) {
-	var platforms []string
-	if instanceType == "desktop" {
-		platforms = []string{"linux", "macos", "windows"}
-	} else {
-		platforms = []string{"site-1", "site-2", "site-3"}
-	}
-
-	// Name format: {type}-{version}-{platform}-{hex6}
-	sanitizedVersion := sanitizeForDNS(version)
-	uid := e2eUniqueSuffix()
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":    repoName,
-		"type":    instanceType,
-		"version": version,
-	})
-
-	username := s.Config.E2EUsername
-	password := s.getE2EPassword(instanceType)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	type result struct {
-		instance *E2EInstance
-		err      error
-	}
-	results := make([]result, len(platforms))
-	var wg sync.WaitGroup
-
-	for i, platform := range platforms {
-		wg.Add(1)
-		go func(idx int, platform string) {
-			defer wg.Done()
-			name := e2eInstanceName(
-				s.Config.DNSNameTestServer,
-				instanceType, sanitizedVersion, platform, uid,
-			)
-			inst, err := s.createCloudInstallation(ctx, name, version, username, password, instanceType, logger)
-			if err != nil {
-				cancel()
-				results[idx] = result{err: err}
-				return
-			}
-			inst.Platform = platform
-			if instanceType == "desktop" {
-				inst.Runner = getRunnerForPlatform(platform)
-			}
-			results[idx] = result{instance: inst}
-		}(i, platform)
-	}
-
-	wg.Wait()
-
-	var instances []*E2EInstance
-	var firstErr error
-	for _, r := range results {
-		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
-		} else {
-			instances = append(instances, r.instance)
-		}
-	}
-
-	if firstErr != nil {
-		logger.WithError(firstErr).Error("Failed to create one or more instances; destroying all")
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
-	}
-
-	logger.WithField("instanceCount", len(instances)).Info("Instances created for version")
-	return instances, nil
-}
