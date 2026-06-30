@@ -42,41 +42,30 @@ type Server struct {
 	envMaps     map[string]cloudModel.EnvVarMap
 	envMapsLock sync.Mutex
 
-	// e2eInstances tracks E2E test instances for cleanup.
-	// Key formats: "%s-pr-%d" (PR), "%s-push-%s-%s" (push, ends with SHA),
-	// "%s-scheduled-%s" (nightly, ends with SHA), "%s-cmt-%d-%s" (CMT, ends with SHA).
+	// e2eInstances tracks E2E instances by key: "{repo}-pr-{n}" | "{repo}-push-{branch}-{sha}" | "{repo}-cmt-{runID}"
 	e2eInstances     map[string][]*E2EInstance
 	e2eInstancesLock sync.Mutex
 
-	// e2eInProgress guards against concurrent handleE2ETestRequest executions for the
-	// same PR+platform key (e.g. duplicate webhook deliveries). Only one goroutine per
-	// key may run the check-and-create flow at a time; a second arrival while the first
-	// is still running is silently dropped.
+	// cmtDispatchLocks serializes dispatch+poll+store per repo to prevent run-id collisions.
+	cmtDispatchLocks   map[string]*sync.Mutex
+	cmtDispatchLocksMu sync.Mutex
+
+	// e2eInProgress prevents duplicate provisioning for the same PR+platform (duplicate webhooks).
 	e2eInProgress     map[string]bool
 	e2eInProgressLock sync.Mutex
 
-	// e2ePRCleanupGeneration tracks how many times handleE2ECleanup has run for
-	// each PR key. handleE2ETestRequest captures the counter before provisioning
-	// and aborts if it has changed when provisioning completes, preventing stale
-	// instances from being stored after a concurrent reset.
+	// e2ePRCleanupGeneration is incremented on each cleanup; provisioning aborts if it advances during the ~30-min create window.
 	e2ePRCleanupGeneration     map[string]int64
 	e2ePRCleanupGenerationLock sync.Mutex
 
-	// stopCh is closed by Stop() to signal long-running background goroutines
-	// (e.g. the periodic E2E cleanup ticker) to exit cleanly.
+	// stopCh is closed by Stop() to terminate background goroutines.
 	stopCh   chan struct{}
 	stopOnce sync.Once
 
-	// githubAPIBase overrides the GitHub API base URL (e.g. "https://api.github.com/").
-	// When non-empty (tests only), GitHub clients created inside this server will be
-	// redirected to this URL instead of the real GitHub API.
+	// githubAPIBase redirects GitHub API calls to a mock URL in tests (empty = use real GitHub).
 	githubAPIBase string
 
-	// e2eVersionCache holds the last successfully resolved "latest" server version so
-	// that back-to-back E2E provisioning requests (e.g. three parallel platform
-	// instances) share one GitHub API round-trip instead of each making their own.
-	// The cache is intentionally short-lived: new stable releases ship at most once a
-	// month, so a 1-hour TTL gives a good hit rate without risking stale data.
+	// e2eVersionCache holds the resolved "latest" version (1-hour TTL) to avoid redundant GitHub API calls.
 	e2eVersionCache     string
 	e2eVersionCacheTime time.Time
 	e2eVersionCacheLock sync.Mutex
@@ -100,16 +89,17 @@ func New(config *MatterwickConfig) *Server {
 	cloudClient := model.NewCloudClient(config.ProvisionerServer, config.CloudAuth.ClientID, config.CloudAuth.ClientSecret, config.CloudAuth.TokenEndpoint, config.AWSAPIKey)
 
 	s := &Server{
-		Config:          config,
-		Router:          mux.NewRouter(),
-		webhookChannels: make(map[string]chan cloudModel.WebhookPayload),
-		StartTime:       time.Now(),
-		Logger:          logger.WithField("instance", cloudModel.NewID()),
-		CloudClient:     cloudClient,
+		Config:                 config,
+		Router:                 mux.NewRouter(),
+		webhookChannels:        make(map[string]chan cloudModel.WebhookPayload),
+		StartTime:              time.Now(),
+		Logger:                 logger.WithField("instance", cloudModel.NewID()),
+		CloudClient:            cloudClient,
 		envMaps:                make(map[string]cloudModel.EnvVarMap),
 		e2eInstances:           make(map[string][]*E2EInstance),
 		e2eInProgress:          make(map[string]bool),
 		e2ePRCleanupGeneration: make(map[string]int64),
+		cmtDispatchLocks:       make(map[string]*sync.Mutex),
 		stopCh:                 make(chan struct{}),
 	}
 
@@ -134,12 +124,8 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
-	// Destroy stale non-PR E2E instances left from a previous run immediately on startup,
-	// then continue scanning periodically so a mid-run restart doesn't leave orphaned
-	// instances alive until the *next* matterwick restart.
-	// The scan interval is half the configured max-age so the worst-case orphan lifetime
-	// is maxAge + interval ≈ 1.5× maxAge.
-	s.cleanupStaleNonPRE2EInstances()
+	// Clean up stale instances from any previous run immediately, then scan periodically.
+	s.cleanupStaleE2EInstances()
 	go func() {
 		interval := s.e2eInstanceMaxAge() / 2
 		if interval < 30*time.Minute {
@@ -150,7 +136,7 @@ func (s *Server) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				s.cleanupStaleNonPRE2EInstances()
+				s.cleanupStaleE2EInstances()
 			case <-s.stopCh:
 				return
 			}

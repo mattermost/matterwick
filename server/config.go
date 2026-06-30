@@ -112,18 +112,47 @@ type MatterwickConfig struct {
 	E2EUsername                   string
 	E2EPassword                   string
 	E2EServerVersion              string
-	E2EAutoTriggerOnRelease       bool
-	E2EAutoTriggerOnMaster        bool
-	E2EReleasePatternPrefix       string
-	E2ENightlyTriggerWorkflowName string   // workflow name (name: field) of the nightly trigger workflow
-	E2ETestWorkflowNames          []string // workflow names of the actual test workflows (for completion-based cleanup)
+	E2EAutoTriggerOnMaster  bool
+	E2EReleasePatternPrefix string
+	E2ETestWorkflowNames    []string // workflow names of the actual test workflows (for completion-based cleanup)
 	// E2EInstanceMaxAge is the minimum age (in hours) a non-PR E2E instance must reach
 	// before the periodic orphan-cleanup scan will delete it. This prevents the scan
 	// from destroying instances that are still being used by a currently-running test.
 	// Set to the longest expected E2E run duration plus a small buffer.
 	// Default (0): 3 hours.
 	E2EInstanceMaxAge int
+
+	// E2EPRInstanceMaxAge is the maximum age (in hours) a PR E2E instance may reach before
+	// the periodic cleanup scan deletes it. PR instances are intentionally kept alive between
+	// label toggles and across commits so the same servers can be reused for re-runs, so this
+	// is much longer than E2EInstanceMaxAge. When such an instance is reaped its in-memory
+	// tracking entry is also evicted, so re-applying E2E/Run provisions a fresh set.
+	// Default (0): 24 hours.
+	E2EPRInstanceMaxAge int
+
+	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight
+	// CMT trigger workflow in the desktop/mobile repos. Matterwick provisions instances and
+	// dispatches compatibility-matrix-testing.yml when it receives a workflow_run "requested"
+	// event for this workflow.
+	CMTTriggerWorkflowName string
+
+	// CMTTestWorkflowName is the workflow name of the actual CMT test workflow
+	// (compatibility-matrix-testing.yml). Used to distinguish CMT completions (cleanup by
+	// run ID) from regular E2E completions (cleanup by SHA).
+	CMTTestWorkflowName string
+
+	// CMTServerVersions is an OPTIONAL manual override for the CMT version set. When non-empty
+	// it is used verbatim (values must be valid Mattermost image tags: full semver, no "v"
+	// prefix, e.g. "10.11.0"). When empty (the normal case) matterwick auto-derives the set
+	// from Mattermost's GitHub releases via Server.resolveCMTServerVersions.
+	CMTServerVersions []string
+
 }
+
+// defaultCMTServerVersions is the fallback CMT version set used only when auto-resolution
+// fails (GitHub API error) and no manual override is configured. Kept reasonably current:
+// the active v10.11 ESR plus a recent v11 release.
+var defaultCMTServerVersions = []string{"10.11.18", "11.7.1"}
 
 func findConfigFile(fileName string) string {
 	if _, err := os.Stat("/tmp/" + fileName); err == nil {

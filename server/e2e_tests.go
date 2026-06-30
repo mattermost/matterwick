@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,9 +36,7 @@ type E2EInstance struct {
 	ServerVersion  string `json:"server_version"`
 }
 
-// e2eUniqueSuffix returns an 8-character random hex suffix for instance name uniqueness.
-// Uses cloudModel.NewID (crypto/rand-based UUID) truncated to 8 chars so that
-// concurrent calls always produce distinct values regardless of clock resolution.
+// e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
 func e2eUniqueSuffix() string {
 	return cloudModel.NewID()[:8]
 }
@@ -96,18 +96,25 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
-	// Snapshot the cleanup generation before provisioning begins. If handleE2ECleanup
-	// fires while the ~30 min creation is in flight, it increments this counter.
-	// We re-check below before storing instances so we never write stale entries.
+	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
 	s.e2ePRCleanupGenerationLock.Lock()
 	startGeneration := s.e2ePRCleanupGeneration[key]
 	s.e2ePRCleanupGenerationLock.Unlock()
 
-	// Guard against duplicate webhook deliveries. The in-progress key includes
-	// the test platform so that a second mobile label with a *different* platform
-	// (e.g. E2E/Run-Android while E2E/Run-iOS is provisioning) is not incorrectly
-	// dropped — it will reuse the in-flight instances once they are stored, or
-	// create its own if they are not yet available.
+	// storeIfCurrent atomically writes instances, but only if cleanup hasn't advanced since provisioning started.
+	storeIfCurrent := func(toStore []*E2EInstance) bool {
+		s.e2ePRCleanupGenerationLock.Lock()
+		defer s.e2ePRCleanupGenerationLock.Unlock()
+		s.e2eInstancesLock.Lock()
+		defer s.e2eInstancesLock.Unlock()
+		if s.e2ePRCleanupGeneration[key] != startGeneration {
+			return false
+		}
+		s.e2eInstances[key] = toStore
+		return true
+	}
+
+	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
 	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
 	s.e2eInProgressLock.Lock()
 	if s.e2eInProgress[inProgressKey] {
@@ -144,9 +151,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
 		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(cloudInstances, logger)
-		s.e2eInstancesLock.Lock()
-		s.e2eInstances[key] = cloudInstances
-		s.e2eInstancesLock.Unlock()
+		if !storeIfCurrent(cloudInstances) {
+			logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
+			s.destroyE2EInstances(cloudInstances, logger)
+			return
+		}
 		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
 			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -168,9 +177,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Instance creation takes ~30 min. Check if the PR was closed during that window.
-	// If so, destroy the freshly created instances — no further cleanup events will fire
-	// for a closed PR, so storing them would leak them permanently.
+	// Check if PR closed during provisioning (~30 min) — cleanup events don't fire for closed PRs.
 	prInfo, _, prErr := newGithubClient(s.Config.GithubAccessToken).PullRequests.Get(
 		context.Background(), pr.RepoOwner, pr.RepoName, pr.Number)
 	if prErr != nil {
@@ -181,22 +188,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Check whether E2EResetServersLabel was applied while provisioning was in flight.
-	// If the cleanup generation advanced, handleE2ECleanup already deleted the cloud
-	// installations; storing them here would put stale, deleted instances into the
-	// tracking map and dispatch a workflow against non-existent servers.
-	s.e2ePRCleanupGenerationLock.Lock()
-	resetDuringProvisioning := s.e2ePRCleanupGeneration[key] != startGeneration
-	s.e2ePRCleanupGenerationLock.Unlock()
-	if resetDuringProvisioning {
+	if !storeIfCurrent(instances) {
 		logger.Warn("E2E reset was requested during provisioning; discarding freshly created instances")
 		s.destroyE2EInstances(instances, logger)
 		return
 	}
-
-	s.e2eInstancesLock.Lock()
-	s.e2eInstances[key] = instances
-	s.e2eInstancesLock.Unlock()
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
@@ -214,9 +210,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.Info("Successfully triggered E2E workflow")
 }
 
-// createMultipleE2EInstances creates all platform instances in parallel.
-// Results are returned in the same order as platforms[] so that callers can rely on
-// index-based platform assignment (e.g. instances[0] = site-1 for mobile).
+// createMultipleE2EInstances creates instances in parallel; results are in platforms[] order for stable index assignment.
 func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
 	if len(platforms) == 0 {
 		return nil, fmt.Errorf("no platforms specified")
@@ -294,9 +288,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	return instances, nil
 }
 
-// createCloudInstallation creates a single installation via provisioner API.
-// ctx is used to cancel the polling wait so that parallel callers can abort early when a
-// sibling goroutine fails, instead of waiting up to 30 minutes per polling interval.
+// createCloudInstallation creates one installation and polls until stable. Cancelling ctx aborts the wait so parallel callers can fail fast.
 func (s *Server) createCloudInstallation(ctx context.Context, name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("installation creation cancelled before request: %w", err)
@@ -304,19 +296,19 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Create installation request
 	envVars := cloudModel.EnvVarMap{
-		"MM_SERVICESETTINGS_ENABLETUTORIAL":                cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":          cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":      cloudModel.EnvVar{Value: "false"},
-		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":    cloudModel.EnvVar{Value: "5000"},
-		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":         cloudModel.EnvVar{Value: "180"},
-		"MM_SERVICEENVIRONMENT":                            cloudModel.EnvVar{Value: "test"},
-		"MM_RATELIMITSETTINGS_ENABLE":                         cloudModel.EnvVar{Value: "true"},
-		"MM_RATELIMITSETTINGS_PERSEC":                         cloudModel.EnvVar{Value: "3000"},
-		"MM_RATELIMITSETTINGS_MAXBURST":                       cloudModel.EnvVar{Value: "5000"},
-		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":                cloudModel.EnvVar{Value: "10000"},
-		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":               cloudModel.EnvVar{Value: "false"},
-		"MM_RATELIMITSETTINGS_VARYBYUSER":                     cloudModel.EnvVar{Value: "false"},
-		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES":  cloudModel.EnvVar{Value: "true"},
+		"MM_SERVICESETTINGS_ENABLETUTORIAL":                  cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW":            cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_ENABLEUSERTYPINGMESSAGES":        cloudModel.EnvVar{Value: "false"},
+		"MM_SERVICESETTINGS_SESSIONLENGTHMOBILEINHOURS":      cloudModel.EnvVar{Value: "5000"},
+		"MM_SERVICESETTINGS_SESSIONCACHEINMINUTES":           cloudModel.EnvVar{Value: "180"},
+		"MM_SERVICEENVIRONMENT":                              cloudModel.EnvVar{Value: "test"},
+		"MM_RATELIMITSETTINGS_ENABLE":                        cloudModel.EnvVar{Value: "true"},
+		"MM_RATELIMITSETTINGS_PERSEC":                        cloudModel.EnvVar{Value: "3000"},
+		"MM_RATELIMITSETTINGS_MAXBURST":                      cloudModel.EnvVar{Value: "5000"},
+		"MM_RATELIMITSETTINGS_MEMORYSTORESIZE":               cloudModel.EnvVar{Value: "10000"},
+		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":              cloudModel.EnvVar{Value: "false"},
+		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
+		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
@@ -341,10 +333,6 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		return nil, fmt.Errorf("failed to create installation: %w", err)
 	}
 
-	// cleanupCreatedInstallation is a best-effort cleanup helper used on all failure paths after
-	// CreateInstallation succeeds. Without it, the cloud installation would be permanently
-	// orphaned because it has not yet been added to the in-memory tracking map.
-	// It deletes the installation, logs any deletion error, and returns cause unchanged.
 	cleanupCreatedInstallation := func(cause error) error {
 		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
 			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to clean up partially created installation")
@@ -701,14 +689,31 @@ func (s *Server) e2eInstanceMaxAge() time.Duration {
 	return 3 * time.Hour
 }
 
-// PR instances (identified by "-pr-" in their OwnerID) are always skipped — handleE2ECleanup
-// on PR close manages their lifecycle via cloud-API orphan scan.
-func (s *Server) cleanupStaleNonPRE2EInstances() {
-	maxAge := s.e2eInstanceMaxAge()
-	logger := s.Logger.WithField("type", "periodic_e2e_cleanup")
-	logger.WithField("max_age_hours", maxAge.Hours()).Info("Scanning for stale non-PR E2E instances")
+// e2ePRInstanceMaxAge returns the maximum age a PR E2E instance may reach before the periodic
+// scan deletes it. PR instances are reused across label toggles and commits, so this is much
+// longer than e2eInstanceMaxAge. Falls back to 24 hours when the config value is 0 (unset).
+func (s *Server) e2ePRInstanceMaxAge() time.Duration {
+	if s.Config.E2EPRInstanceMaxAge > 0 {
+		return time.Duration(s.Config.E2EPRInstanceMaxAge) * time.Hour
+	}
+	return 24 * time.Hour
+}
 
-	cutoffMs := time.Now().Add(-maxAge).UnixMilli()
+// cleanupStaleE2EInstances reaps aged-out E2E instances: non-PR flows use e2eInstanceMaxAge, PR instances use e2ePRInstanceMaxAge (PR servers are kept alive for reuse; the cap prevents indefinite accumulation).
+func (s *Server) cleanupStaleE2EInstances() {
+	nonPRMaxAge := s.e2eInstanceMaxAge()
+	prMaxAge := s.e2ePRInstanceMaxAge()
+	logger := s.Logger.WithField("type", "periodic_e2e_cleanup")
+	logger.WithFields(logrus.Fields{
+		"non_pr_max_age_hours": nonPRMaxAge.Hours(),
+		"pr_max_age_hours":     prMaxAge.Hours(),
+	}).Info("Scanning for stale E2E instances")
+
+	now := time.Now()
+	nonPRCutoffMs := now.Add(-nonPRMaxAge).UnixMilli()
+	prCutoffMs := now.Add(-prMaxAge).UnixMilli()
+
+	var reapedPRInstallationIDs []string
 
 	for _, instanceType := range []string{"desktop", "mobile"} {
 		pattern := instanceType + "-%"
@@ -729,18 +734,22 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 				continue
 			}
 
-			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...").
-			// Skip them — handleE2ECleanup on PR close manages their lifecycle.
-			if strings.Contains(inst.OwnerID, "-pr-") {
-				continue
+			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...")
+			// and use the longer PR max-age; everything else uses the non-PR max-age.
+			isPR := strings.Contains(inst.OwnerID, "-pr-")
+			cutoffMs := nonPRCutoffMs
+			if isPR {
+				cutoffMs = prCutoffMs
 			}
 
-			// Skip instances younger than maxAge — a test may still be using them.
+			// Skip instances younger than their max age — a test may still be using them,
+			// or (for PRs) the servers are being kept alive for reuse.
 			if inst.CreateAt > cutoffMs {
 				logger.WithFields(logrus.Fields{
 					"installation_id": inst.ID,
 					"owner_id":        inst.OwnerID,
-				}).Debug("Skipping non-PR instance younger than max age (may still be in use)")
+					"is_pr":           isPR,
+				}).Debug("Skipping instance younger than its max age")
 				continue
 			}
 
@@ -758,15 +767,271 @@ func (s *Server) cleanupStaleNonPRE2EInstances() {
 				"installation_id": inst.ID,
 				"owner_id":        inst.OwnerID,
 				"state":           inst.State,
+				"is_pr":           isPR,
 			})
-			instLogger.Warn("Destroying stale non-PR E2E instance")
+			instLogger.Warn("Destroying stale E2E instance")
 			if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
-				instLogger.WithError(err).Error("Failed to destroy stale non-PR E2E instance")
+				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
+				continue
+			}
+			if isPR {
+				reapedPRInstallationIDs = append(reapedPRInstallationIDs, inst.ID)
 			}
 		}
 	}
 
-	logger.Info("Non-PR E2E instance cleanup scan complete")
+	// Evict in-memory PR tracking entries whose servers were just reaped so the reuse path
+	// in handleE2ETestRequest sees no live instances and creates a fresh set on the next
+	// E2E/Run, instead of dispatching a workflow against deleted servers.
+	if len(reapedPRInstallationIDs) > 0 {
+		s.evictReapedPRInstances(reapedPRInstallationIDs, logger)
+	}
+
+	logger.Info("E2E instance cleanup scan complete")
+}
+
+// evictReapedPRInstances removes PR tracking entries when any member was reaped, so the reuse path never returns a partially-deleted set.
+func (s *Server) evictReapedPRInstances(reapedInstallationIDs []string, logger logrus.FieldLogger) {
+	reaped := make(map[string]bool, len(reapedInstallationIDs))
+	for _, id := range reapedInstallationIDs {
+		reaped[id] = true
+	}
+
+	s.e2eInstancesLock.Lock()
+	defer s.e2eInstancesLock.Unlock()
+	for key, instances := range s.e2eInstances {
+		// PR tracking keys are "{repo}-pr-{number}"; non-PR keys are keyed by SHA elsewhere.
+		if !strings.Contains(key, "-pr-") {
+			continue
+		}
+		for _, inst := range instances {
+			if inst != nil && reaped[inst.InstallationID] {
+				delete(s.e2eInstances, key)
+				logger.WithField("key", key).Info("Evicted expired PR E2E instances from tracking map")
+				break
+			}
+		}
+	}
+}
+
+// resolveBranchHeadSHA returns the branch HEAD SHA at dispatch time. Non-PR flows dispatch with ref=branch, so the run's head_sha may differ from the trigger SHA if the branch advanced during provisioning.
+func (s *Server) resolveBranchHeadSHA(owner, repoName, branch string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+	req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repoName, branch), nil)
+	if err != nil {
+		return "", err
+	}
+	if _, err := client.Do(ctx, req, &commit); err != nil {
+		return "", err
+	}
+	if commit.SHA == "" {
+		return "", fmt.Errorf("empty SHA for %s/%s@%s", owner, repoName, branch)
+	}
+	return commit.SHA, nil
+}
+
+// cmtVersion is a parsed Mattermost release version: major.minor.patch with an optional
+// release-candidate number. raw is the bare-semver string passed to the cloud provisioner
+// (e.g. "11.7.1" or "11.8.0-rc3").
+type cmtVersion struct {
+	major, minor, patch int
+	rc                  int // 0 = stable, >0 = -rcN
+	raw                 string
+}
+
+// parseCMTVersion parses "vX.Y.Z" or "vX.Y.Z-rcN" (the leading "v" is optional). It returns
+// ok=false for anything else (other prerelease suffixes like -beta/-alpha are ignored for CMT).
+func parseCMTVersion(tag string) (cmtVersion, bool) {
+	raw := strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	base := raw
+	rc := 0
+	if i := strings.Index(base, "-rc"); i != -1 {
+		n, err := strconv.Atoi(base[i+len("-rc"):])
+		if err != nil {
+			return cmtVersion{}, false
+		}
+		rc = n
+		base = base[:i]
+	} else if strings.Contains(base, "-") {
+		return cmtVersion{}, false
+	}
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return cmtVersion{}, false
+	}
+	maj, err1 := strconv.Atoi(parts[0])
+	min, err2 := strconv.Atoi(parts[1])
+	pat, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return cmtVersion{}, false
+	}
+	return cmtVersion{major: maj, minor: min, patch: pat, rc: rc, raw: raw}, true
+}
+
+// less reports whether a sorts before b by (major, minor, patch, rc). For the same X.Y.Z, a
+// stable release (rc==0) sorts above its release candidates (e.g. 11.8.0-rc3 < 11.8.0).
+func (a cmtVersion) less(b cmtVersion) bool {
+	if a.major != b.major {
+		return a.major < b.major
+	}
+	if a.minor != b.minor {
+		return a.minor < b.minor
+	}
+	if a.patch != b.patch {
+		return a.patch < b.patch
+	}
+	ar, br := a.rc, b.rc
+	if ar == 0 {
+		ar = int(^uint(0) >> 1) // treat stable as the highest "rc" for the same patch
+	}
+	if br == 0 {
+		br = int(^uint(0) >> 1)
+	}
+	return ar < br
+}
+
+// cmtServerVersions returns the version set CMT runs against. An explicit, non-empty
+// Config.CMTServerVersions is used verbatim (manual override / pin); otherwise the set is
+// auto-derived from the Mattermost GitHub releases.
+func (s *Server) cmtServerVersions() []string {
+	if len(s.Config.CMTServerVersions) > 0 {
+		return s.Config.CMTServerVersions
+	}
+	return s.resolveCMTServerVersions()
+}
+
+// resolveCMTServerVersions fetches Mattermost releases and picks: all active ESR lines + latest 3 stable minors + current RC, one patch per line. Falls back to defaultCMTServerVersions on error.
+func (s *Server) resolveCMTServerVersions() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	// githubAPIBase is only set in tests to redirect to a mock server.
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Body       string `json:"body"`
+	}
+	const perPage = 100
+	for page := 1; ; page++ {
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
+		if err != nil {
+			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to build request; using default CMT versions")
+			return defaultCMTServerVersions
+		}
+		var pageReleases []struct {
+			TagName    string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+			Body       string `json:"body"`
+		}
+		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
+			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to fetch releases; using default CMT versions")
+			return defaultCMTServerVersions
+		}
+		releases = append(releases, pageReleases...)
+		if len(pageReleases) < perPage {
+			break
+		}
+	}
+
+	type minorKey struct{ major, minor int }
+	latestStable := map[minorKey]cmtVersion{}
+	esrMinors := map[minorKey]bool{}
+	var bestRC cmtVersion
+	haveRC := false
+
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		v, ok := parseCMTVersion(r.TagName)
+		if !ok {
+			continue
+		}
+		key := minorKey{v.major, v.minor}
+		if v.rc > 0 {
+			if !haveRC || bestRC.less(v) {
+				bestRC = v
+				haveRC = true
+			}
+			continue
+		}
+		if cur, exists := latestStable[key]; !exists || cur.less(v) {
+			latestStable[key] = v
+		}
+		if strings.Contains(strings.ToLower(r.Body), "extended support release") {
+			esrMinors[key] = true
+		}
+	}
+
+	if len(latestStable) == 0 {
+		s.Logger.Warn("[resolveCMTServerVersions] No stable releases parsed; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+
+	// All stable minor lines, sorted descending (newest first).
+	minors := make([]cmtVersion, 0, len(latestStable))
+	for _, v := range latestStable {
+		minors = append(minors, v)
+	}
+	sort.Slice(minors, func(i, j int) bool { return minors[j].less(minors[i]) })
+
+	selected := map[minorKey]cmtVersion{}
+	for i := 0; i < len(minors) && i < 3; i++ { // latest 3 stable minor lines
+		selected[minorKey{minors[i].major, minors[i].minor}] = minors[i]
+	}
+	for k := range esrMinors { // active ESR line(s)
+		if v, ok := latestStable[k]; ok {
+			selected[k] = v
+		}
+	}
+
+	chosen := make([]cmtVersion, 0, len(selected)+1)
+	for _, v := range selected {
+		chosen = append(chosen, v)
+	}
+	// Include the current RC only when it's newer than the newest stable (an upcoming release).
+	if haveRC && minors[0].less(bestRC) {
+		chosen = append(chosen, bestRC)
+	}
+	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) }) // ascending
+
+	// Cap at 5 versions to bound provisioning cost and matrix wall-clock: latest RC
+	// (when present) + up to 4 previous lines. ESR-aware selection above may pick
+	// more if a release window has multiple active ESRs; in that case we keep the
+	// newest 5 and drop the oldest entries (typically the older ESR line) — surfaces
+	// in the [resolveCMTServerVersions] log line for the operator.
+	const maxVersions = 5
+	if len(chosen) > maxVersions {
+		chosen = chosen[len(chosen)-maxVersions:] // keep the newest if over the cap
+	}
+
+	versions := make([]string, 0, len(chosen))
+	for _, v := range chosen {
+		versions = append(versions, v.raw)
+	}
+	s.Logger.WithField("versions", versions).Info("[resolveCMTServerVersions] Auto-derived CMT server version set")
+	return versions
 }
 
 // destroyE2EInstances destroys all given E2E instances
@@ -970,11 +1235,8 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow via GitHub Actions API.
-// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
-// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
-// a direct key lookup instead of fragile SHA suffix matching.
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType, trackingKey string, nightly bool) error {
+// dispatchDesktopE2EWorkflow triggers e2e-functional.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
+func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1005,10 +1267,6 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 		"MM_TEST_USER_NAME": s.Config.E2EUsername,
 		"MM_SERVER_VERSION": serverVersion,
 		"run_type":          runType,
-		"nightly":           fmt.Sprintf("%t", nightly),
-	}
-	if trackingKey != "" {
-		workflowInputs["mw_tracking_key"] = trackingKey
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
@@ -1038,11 +1296,8 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	return nil
 }
 
-// dispatchMobileE2EWorkflow triggers the mobile E2E workflow via GitHub Actions API.
-// trackingKey is the s.e2eInstances map key for this run; when non-empty it is passed
-// as the "mw_tracking_key" workflow input so the workflow_run completed handler can do
-// a direct key lookup instead of fragile SHA suffix matching.
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType, trackingKey string) error {
+// dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
+func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
@@ -1059,9 +1314,6 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 		"MOBILE_VERSION": sha,
 		"PLATFORM":       platform,
 		"run_type":       runType,
-	}
-	if trackingKey != "" {
-		workflowInputs["mw_tracking_key"] = trackingKey
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)

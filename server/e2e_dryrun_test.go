@@ -187,18 +187,6 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("three platforms created for desktop", func(t *testing.T) {
-		assert.Len(t, instances, 3)
-		platforms := []string{instances[0].Platform, instances[1].Platform, instances[2].Platform}
-		assert.Equal(t, []string{"linux", "macos", "windows"}, platforms)
-	})
-
-	t.Run("runner assignment is correct", func(t *testing.T) {
-		assert.Equal(t, "ubuntu-latest", instances[0].Runner)
-		assert.Equal(t, "macos-latest", instances[1].Runner)
-		assert.Equal(t, "windows-2022", instances[2].Runner)
-	})
-
 	t.Run("workflow inputs built correctly", func(t *testing.T) {
 		// Drive the real triggerDesktopE2EWorkflow so assertions validate the
 		// actual payload produced by production code, not a hand-built map.
@@ -226,12 +214,6 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		assert.NotEmpty(t, c.Inputs["instance_details"])
 	})
 
-	t.Run("workflow path targets e2e-functional.yml", func(t *testing.T) {
-		path := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches",
-			"mattermost", "mattermost-desktop", "e2e-functional.yml")
-		assert.Contains(t, path, "e2e-functional.yml")
-		assert.Contains(t, path, "mattermost-desktop")
-	})
 }
 
 // ------------------------------------------------------------
@@ -288,30 +270,6 @@ func TestDryRun_MobileDispatch(t *testing.T) {
 		})
 	}
 
-	t.Run("mobile platforms are site-1/2/3 not linux/macos/windows", func(t *testing.T) {
-		platforms := []string{instances[0].Platform, instances[1].Platform, instances[2].Platform}
-		assert.Equal(t, []string{"site-1", "site-2", "site-3"}, platforms)
-	})
-
-	t.Run("mobile instances have no runner", func(t *testing.T) {
-		for _, inst := range instances {
-			assert.Empty(t, inst.Runner)
-		}
-	})
-
-	t.Run("triggerMobileE2EWorkflow requires exactly 3 instances", func(t *testing.T) {
-		// Verify the guard: only 2 instances → error path
-		twoInstances := instances[:2]
-		assert.NotEqual(t, 3, len(twoInstances),
-			"should fail the len(instances)!=3 check in triggerMobileE2EWorkflow")
-	})
-
-	t.Run("workflow path targets e2e-detox-pr.yml", func(t *testing.T) {
-		path := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches",
-			"mattermost", "mattermost-mobile", "e2e-detox-pr.yml")
-		assert.Contains(t, path, "e2e-detox-pr.yml")
-		assert.Contains(t, path, "mattermost-mobile")
-	})
 }
 
 // ------------------------------------------------------------
@@ -344,66 +302,6 @@ func TestDryRun_LabelDetection(t *testing.T) {
 				assert.Equal(t, tt.platform, s.extractPlatformFromLabel(tt.label))
 			})
 		}
-	}
-}
-
-// ------------------------------------------------------------
-// 4. Repo type → correct platforms and workflow
-// ------------------------------------------------------------
-
-func TestDryRun_RepoTypeDetection(t *testing.T) {
-	tests := []struct {
-		repoName      string
-		wantType      string
-		wantPlatforms []string
-		wantWorkflow  string
-	}{
-		{
-			repoName:      "mattermost-desktop",
-			wantType:      "desktop",
-			wantPlatforms: []string{"linux", "macos", "windows"},
-			wantWorkflow:  "e2e-functional.yml",
-		},
-		{
-			repoName:      "mattermost-desktop-releases",
-			wantType:      "desktop",
-			wantPlatforms: []string{"linux", "macos", "windows"},
-			wantWorkflow:  "e2e-functional.yml",
-		},
-		{
-			repoName:      "mattermost-mobile",
-			wantType:      "mobile",
-			wantPlatforms: []string{"site-1", "site-2", "site-3"},
-			wantWorkflow:  "e2e-detox-pr.yml",
-		},
-		{
-			repoName:      "mattermost-mobile-v2",
-			wantType:      "mobile",
-			wantPlatforms: []string{"site-1", "site-2", "site-3"},
-			wantWorkflow:  "e2e-detox-pr.yml",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.repoName, func(t *testing.T) {
-			var instanceType string
-			var platforms []string
-			var workflow string
-
-			if strings.Contains(tt.repoName, "desktop") {
-				instanceType = "desktop"
-				platforms = []string{"linux", "macos", "windows"}
-				workflow = "e2e-functional.yml"
-			} else if strings.Contains(tt.repoName, "mobile") {
-				instanceType = "mobile"
-				platforms = []string{"site-1", "site-2", "site-3"}
-				workflow = "e2e-detox-pr.yml"
-			}
-
-			assert.Equal(t, tt.wantType, instanceType)
-			assert.Equal(t, tt.wantPlatforms, platforms)
-			assert.Equal(t, tt.wantWorkflow, workflow)
-		})
 	}
 }
 
@@ -458,17 +356,6 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 			"extractBranchName is unaware of ref type; caller must pre-filter")
 	})
 
-	t.Run("desktop push always creates linux/macos/windows instances", func(t *testing.T) {
-		// createMultipleE2EInstancesForPushEvent uses desktop platforms for push events
-		expectedPlatforms := []string{"linux", "macos", "windows"}
-		instances := makeDesktopInstances()
-		var gotPlatforms []string
-		for _, inst := range instances {
-			gotPlatforms = append(gotPlatforms, inst.Platform)
-		}
-		assert.Equal(t, expectedPlatforms, gotPlatforms)
-	})
-
 	t.Run("desktop push instance_details carries server_version", func(t *testing.T) {
 		instances := makeDesktopInstances()
 		instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
@@ -483,47 +370,6 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 }
 
 // ------------------------------------------------------------
-// 6. Mobile push event logic
-// ------------------------------------------------------------
-
-func TestDryRun_MobilePushEvent(t *testing.T) {
-	t.Run("mobile push uses SITE_1/2/3_URL inputs not instance_details", func(t *testing.T) {
-		instances := makeMobileInstances()
-		sha := "sha999"
-		branch := "release-8.0"
-
-		// Simulate triggerMobileE2EWorkflowForPushEvent inputs
-		inputs := map[string]interface{}{
-			"SITE_1_URL":     instances[0].URL,
-			"SITE_2_URL":     instances[1].URL,
-			"SITE_3_URL":     instances[2].URL,
-			"MOBILE_VERSION": sha,
-			"PLATFORM":       "both",
-		}
-
-		assert.Equal(t, "https://site1.test.example.com", inputs["SITE_1_URL"])
-		assert.Equal(t, "https://site2.test.example.com", inputs["SITE_2_URL"])
-		assert.Equal(t, "https://site3.test.example.com", inputs["SITE_3_URL"])
-		assert.Equal(t, sha, inputs["MOBILE_VERSION"])
-		assert.Equal(t, "both", inputs["PLATFORM"])
-		assert.NotContains(t, inputs, "instance_details",
-			"mobile push must not use instance_details")
-		_ = branch
-	})
-
-	t.Run("mobile push always tests both platforms", func(t *testing.T) {
-		// Push events (release/master) always use PLATFORM=both (no label context)
-		platform := "both"
-		assert.Equal(t, "both", platform)
-	})
-
-	t.Run("mobile push requires 3 instances", func(t *testing.T) {
-		instances := makeMobileInstances()
-		assert.Len(t, instances, 3)
-	})
-}
-
-// ------------------------------------------------------------
 // 7. Desktop CMT logic
 // ------------------------------------------------------------
 
@@ -531,22 +377,6 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 	t.Run("parses server_versions input", func(t *testing.T) {
 		versions := parseServerVersionsFromString("v11.1.0, v11.2.0, v12.0.0")
 		assert.Equal(t, []string{"v11.1.0", "v11.2.0", "v12.0.0"}, versions)
-	})
-
-	t.Run("caps server versions to 5", func(t *testing.T) {
-		versions := parseServerVersionsFromString("v1, v2, v3, v4, v5, v6, v7")
-		// The cap is enforced inside handleCMTWithServerVersions
-		if len(versions) > 5 {
-			versions = versions[:5]
-		}
-		assert.Len(t, versions, 5)
-	})
-
-	t.Run("1 instance per version for CMT (matrix handles parallelism)", func(t *testing.T) {
-		for _, numVersions := range []int{1, 2, 3, 5} {
-			// CMT_MATRIX cross-products environment × server; one server per version is enough
-			assert.Equal(t, numVersions, numVersions*1)
-		}
 	})
 
 	t.Run("buildDesktopCMTMatrixJSON produces correct schema", func(t *testing.T) {
@@ -571,26 +401,22 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		s0 := servers[0].(map[string]interface{})
 		assert.Equal(t, "v11.1.0", s0["version"])
 		assert.Equal(t, "https://v1.example.com", s0["url"])
+		// Desktop ignores the `latest` field; cmtServer.Latest is shared with mobile but is
+		// never set on the desktop path, and `omitempty` keeps it out of the JSON entirely.
+		_, has0 := s0["latest"]
+		assert.False(t, has0, "desktop matrix must not carry the `latest` field")
 		s1 := servers[1].(map[string]interface{})
 		assert.Equal(t, "v11.2.0", s1["version"])
 		assert.Equal(t, "https://v2.example.com", s1["url"])
+		_, has1 := s1["latest"]
+		assert.False(t, has1, "desktop matrix must not carry the `latest` field")
 	})
 
-	t.Run("CMT dispatches compatibility-matrix-testing.yml once", func(t *testing.T) {
-		// One dispatch regardless of version count — all versions in CMT_MATRIX.server array
-		dispatchCount := 1
-		assert.Equal(t, 1, dispatchCount, "desktop CMT must dispatch exactly once")
-	})
-
-	t.Run("CMT tracking key includes runID for uniqueness and sha for cleanup", func(t *testing.T) {
+	t.Run("CMT tracking key is keyed by dispatched test run id", func(t *testing.T) {
 		repoName := "mattermost-desktop"
-		sha := "deadbeef"
-		var runID int64 = 999
-		// runID prevents collision when two dispatches share the same branch HEAD SHA;
-		// key still ends with "-{sha}" so findAndDestroyInstancesBySHA can match it.
-		key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
-		assert.Equal(t, "mattermost-desktop-cmt-999-deadbeef", key)
-		assert.True(t, strings.HasSuffix(key, "-"+sha), "key must end with sha for cleanup")
+		var testRunID int64 = 999
+		key := cmtInstanceKey(repoName, testRunID)
+		assert.Equal(t, "mattermost-desktop-cmt-999", key)
 	})
 
 	t.Run("CMT workflow name detection", func(t *testing.T) {
@@ -630,16 +456,16 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		s0 := servers[0].(map[string]interface{})
 		assert.Equal(t, "v11.1.0", s0["version"])
 		assert.Equal(t, "https://v1.example.com", s0["url"])
+		// Older version: `latest` is omitted entirely (cmtServer.Latest is false, omitempty).
+		_, has0 := s0["latest"]
+		assert.False(t, has0, "older mobile entries must not carry the `latest` field")
 		s1 := servers[1].(map[string]interface{})
 		assert.Equal(t, "v11.2.0", s1["version"])
 		assert.Equal(t, "https://v2.example.com", s1["url"])
-	})
-
-	t.Run("mobile CMT dispatches once not once per version", func(t *testing.T) {
-		// All versions go into CMT_MATRIX.server; compatibility-matrix-testing.yml
-		// fans them out via its matrix strategy — no per-version dispatch needed.
-		dispatchCount := 1
-		assert.Equal(t, 1, dispatchCount, "mobile CMT must dispatch exactly once")
+		// Highest semver gets `latest: true`. The mobile workflow uses this to decide whether
+		// to run the whole suite (latest) or just smoke (older) — that policy lives there,
+		// not in matterwick.
+		assert.Equal(t, true, s1["latest"])
 	})
 
 	t.Run("CMT_MATRIX uses server array not SITE_URL inputs", func(t *testing.T) {
@@ -658,16 +484,82 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		assert.Contains(t, jsonStr, "\"url\"")
 	})
 
-	t.Run("mobile CMT single instance per version for matrix fan-out", func(t *testing.T) {
-		// Mobile CMT uses one server per version; compatibility-matrix-testing.yml
-		// creates one test job per server entry.
-		versions := []string{"v11.1.0", "v11.2.0", "v11.3.0"}
-		instances := []*E2EInstance{
-			{URL: "https://v1.example.com"},
-			{URL: "https://v2.example.com"},
-			{URL: "https://v3.example.com"},
+	t.Run("mobile CMT marks the highest-semver entry as latest", func(t *testing.T) {
+		// 5-element resolved set (today's typical shape): ESR + 3 minors + current RC.
+		// Across the boundary cases that matter: ESR is older despite high patch numbers;
+		// RC vs stable for the same X.Y.Z should treat stable as higher; multi-digit RC
+		// numbers (rc.10 > rc.2). Locking these in so the workflow's latest gate doesn't
+		// silently shift if someone tweaks the comparator.
+		cases := []struct {
+			name     string
+			versions []string
+			wantLatestIdx int
+		}{
+			{
+				name:          "ESR + 3 minors + RC: RC's base is newest so RC is latest",
+				versions:      []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"},
+				wantLatestIdx: 4,
+			},
+			{
+				name:          "ESR with high patch loses to lower-patch newer minor",
+				versions:      []string{"10.11.19", "11.0.0"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "stable beats same-X.Y.Z RC",
+				versions:      []string{"11.7.0-rc3", "11.7.0"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "rc.10 > rc.2 (no string compare)",
+				versions:      []string{"11.8.0-rc2", "11.8.0-rc10"},
+				wantLatestIdx: 1,
+			},
+			{
+				name:          "single version is latest",
+				versions:      []string{"11.7.2"},
+				wantLatestIdx: 0,
+			},
 		}
-		assert.Equal(t, len(versions), len(instances), "one instance per version")
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				instances := make([]*E2EInstance, len(tc.versions))
+				for i := range tc.versions {
+					instances[i] = &E2EInstance{URL: fmt.Sprintf("https://v%d.example.com", i)}
+				}
+				jsonStr, err := buildMobileCMTMatrixJSON(tc.versions, instances)
+				require.NoError(t, err)
+				var matrix map[string]interface{}
+				require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+				servers := matrix["server"].([]interface{})
+				require.Len(t, servers, len(tc.versions))
+				for i, raw := range servers {
+					s := raw.(map[string]interface{})
+					_, has := s["latest"]
+					if i == tc.wantLatestIdx {
+						assert.Equal(t, true, s["latest"], "index %d (%q) should be latest", i, tc.versions[i])
+					} else {
+						assert.False(t, has, "index %d (%q) must not carry latest", i, tc.versions[i])
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("mobile CMT: all unparseable versions => last entry marked latest", func(t *testing.T) {
+		versions := []string{"junk", "also-junk"}
+		instances := []*E2EInstance{
+			{URL: "https://a.example.com"},
+			{URL: "https://b.example.com"},
+		}
+		jsonStr, err := buildMobileCMTMatrixJSON(versions, instances)
+		require.NoError(t, err)
+		var matrix map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+		servers := matrix["server"].([]interface{})
+		_, has0 := servers[0].(map[string]interface{})["latest"]
+		assert.False(t, has0)
+		assert.Equal(t, true, servers[1].(map[string]interface{})["latest"])
 	})
 }
 
@@ -777,36 +669,117 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 		assert.Len(t, collected, 6, "should collect 3 instances from each of 2 push keys")
 	})
 
-	t.Run("CMT cleanup by sha via findAndDestroyInstancesBySHA", func(t *testing.T) {
+	t.Run("CMT cleanup by run id removes only the matching tracking key", func(t *testing.T) {
 		repoName := "mattermost-desktop"
-		sha := "abc123cmt"
-		var runID int64 = 42
-		key := fmt.Sprintf("%s-cmt-%d-%s", repoName, runID, sha)
+		var testRunID int64 = 42
+		key := cmtInstanceKey(repoName, testRunID)
 
 		cmtInstances := makeDesktopInstances()
 		s.e2eInstancesLock.Lock()
 		s.e2eInstances[key] = cmtInstances
 		s.e2eInstancesLock.Unlock()
 
-		// Simulate findAndDestroyInstancesBySHA: scan for prefix+suffix match
-		prefix := repoName + "-"
-		suffix := "-" + sha
-		s.e2eInstancesLock.Lock()
-		var found []*E2EInstance
-		for k, v := range s.e2eInstances {
-			if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, suffix) {
-				found = append(found, v...)
-				delete(s.e2eInstances, k)
-			}
-		}
-		s.e2eInstancesLock.Unlock()
+		assert.True(t, instanceKeyMatchesRunID(key, repoName, testRunID))
 
-		assert.Len(t, found, 3)
+		// Exercise the live map-mutation helper, not a hand-rolled loop — so a future
+		// change to removeCMTInstancesByRunID's locking, key derivation, or return shape
+		// fails this test instead of silently passing.
+		removed := s.removeCMTInstancesByRunID(repoName, testRunID, s.Logger)
+		assert.Len(t, removed, 3, "must return the removed instances so the caller can destroy them")
 
 		s.e2eInstancesLock.Lock()
 		_, exists := s.e2eInstances[key]
 		s.e2eInstancesLock.Unlock()
-		assert.False(t, exists)
+		assert.False(t, exists, "matching key must be removed from the tracking map")
+	})
+
+	t.Run("concurrent CMT runs on same SHA only destroy the completing run", func(t *testing.T) {
+		repoName := "mattermost-mobile"
+		run1 := int64(100)
+		run2 := int64(200)
+		key1 := cmtInstanceKey(repoName, run1)
+		key2 := cmtInstanceKey(repoName, run2)
+
+		s.e2eInstancesLock.Lock()
+		s.e2eInstances[key1] = makeDesktopInstances()
+		s.e2eInstances[key2] = makeDesktopInstances()
+		s.e2eInstancesLock.Unlock()
+
+		// Use the live map-mutation helper so this regression-tests the real path.
+		removed := s.removeCMTInstancesByRunID(repoName, run1, s.Logger)
+		assert.Len(t, removed, 3, "run1's instances must be returned")
+
+		s.e2eInstancesLock.Lock()
+		_, exists1 := s.e2eInstances[key1]
+		_, exists2 := s.e2eInstances[key2]
+		s.e2eInstancesLock.Unlock()
+		assert.False(t, exists1, "removeCMTInstancesByRunID must remove run1's key")
+		assert.True(t, exists2, "other concurrent CMT run must survive cleanup of cancelled run")
+
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key2)
+		s.e2eInstancesLock.Unlock()
+	})
+
+	t.Run("CMT cleanup by run id is a no-op when run id is zero", func(t *testing.T) {
+		repoName := "mattermost-mobile"
+		key := cmtInstanceKey(repoName, 777)
+		s.e2eInstancesLock.Lock()
+		s.e2eInstances[key] = makeDesktopInstances()
+		s.e2eInstancesLock.Unlock()
+		defer func() {
+			s.e2eInstancesLock.Lock()
+			delete(s.e2eInstances, key)
+			s.e2eInstancesLock.Unlock()
+		}()
+
+		// runID 0 is the "could not resolve" sentinel from pollDispatchedWorkflowRun.
+		// The helper must NOT match any key in that case.
+		removed := s.removeCMTInstancesByRunID(repoName, 0, s.Logger)
+		assert.Nil(t, removed, "zero run id must return nil so no destroy fires")
+		s.e2eInstancesLock.Lock()
+		_, exists := s.e2eInstances[key]
+		s.e2eInstancesLock.Unlock()
+		assert.True(t, exists, "zero run id must leave all keys intact")
+	})
+}
+
+// ------------------------------------------------------------
+// 9b. SHA-scoped cleanup must not reap a concurrent flow on the same SHA
+// ------------------------------------------------------------
+
+func TestInstanceKeyMatchesRunID(t *testing.T) {
+	repo := "mattermost-mobile"
+	runID := int64(100)
+	cmtKey := cmtInstanceKey(repo, runID)
+	otherRunKey := cmtInstanceKey(repo, 200)
+
+	assert.True(t, instanceKeyMatchesRunID(cmtKey, repo, runID))
+	assert.False(t, instanceKeyMatchesRunID(otherRunKey, repo, runID))
+	assert.False(t, instanceKeyMatchesRunID(cmtKey, "mattermost-desktop", runID))
+}
+
+func TestInstanceKeyMatchesSHA(t *testing.T) {
+	repo := "mattermost-mobile"
+	sha := "deadbeef"
+	nightlyKey := fmt.Sprintf("%s-scheduled-200-%s", repo, sha)   // nightly flow, same SHA
+	pushKey := fmt.Sprintf("%s-push-release-9.0-%s", repo, sha)   // push flow, same SHA
+	prKey := fmt.Sprintf("%s-pr-42", repo)                        // PR flow, no -sha suffix
+	legacyCMTKey := fmt.Sprintf("%s-cmt-100-%s", repo, sha)       // legacy CMT key shape (runID + sha) — pre-refactor
+	liveCMTKey := cmtInstanceKey(repo, 100)                       // live CMT key shape ({repo}-cmt-{runID}, no sha)
+	otherSHAKey := fmt.Sprintf("%s-cmt-100-%s", repo, "feedface") // legacy CMT key with different sha
+
+	t.Run("non-CMT completion matches push/scheduled but NEVER any CMT shape", func(t *testing.T) {
+		assert.True(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, false))
+		assert.True(t, instanceKeyMatchesSHA(pushKey, repo, sha, false))
+		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, false), "PR keys have no -sha suffix")
+		assert.False(t, instanceKeyMatchesSHA(legacyCMTKey, repo, sha, false), "legacy CMT keys are CMT-prefixed and never SHA-cleaned by non-CMT completions")
+		assert.False(t, instanceKeyMatchesSHA(liveCMTKey, repo, sha, false), "live CMT keys have no -sha suffix so cannot match a non-CMT SHA cleanup")
+		assert.False(t, instanceKeyMatchesSHA(otherSHAKey, repo, sha, false), "legacy CMT key with different sha must not match")
+	})
+
+	t.Run("other repo is never matched", func(t *testing.T) {
+		assert.False(t, instanceKeyMatchesSHA("mattermost-desktop-cmt-100-"+sha, repo, sha, true))
 	})
 }
 
@@ -838,16 +811,6 @@ func TestDryRun_InstanceNameLength(t *testing.T) {
 		assert.LessOrEqual(t, len(instanceName)+len(dnsDomain), 63)
 	})
 
-	t.Run("CMT single instance name sanitization replaces dots", func(t *testing.T) {
-		version := "v11.1.0"
-		// createSingleCMTInstance lowercases and replaces dots
-		sanitizedVersion := strings.ToLower(strings.ReplaceAll(version, ".", "-"))
-		assert.Equal(t, "v11-1-0", sanitizedVersion)
-
-		// Single instance suffix: no platform component (matrix handles that)
-		suffix := fmt.Sprintf("-cmt-%s", sanitizedVersion)
-		assert.Equal(t, "-cmt-v11-1-0", suffix)
-	})
 }
 
 // ------------------------------------------------------------
@@ -1286,24 +1249,6 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 		assert.Equal(t, "https://site3.test.example.com", c.Inputs["SITE_3_URL"])
 	})
 
-	t.Run("all instances in a PR run share the same resolved version", func(t *testing.T) {
-		// createMultipleE2EInstances calls resolveMattermostServerVersion() once and passes
-		// the same version to all createCloudInstallation calls.
-		resolvedVersion := "11.6.0"
-		platforms := []string{"linux", "macos", "windows"}
-		instances := make([]*E2EInstance, len(platforms))
-		for i, p := range platforms {
-			instances[i] = &E2EInstance{
-				Platform:      p,
-				ServerVersion: resolvedVersion, // same version for every instance
-			}
-		}
-		for i, inst := range instances {
-			assert.Equal(t, resolvedVersion, inst.ServerVersion,
-				"instance[%d] (platform=%s) must have the resolved version", i, inst.Platform)
-		}
-	})
-
 	t.Run("resolveMattermostServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
 		// Docker Hub tags are bare semver (e.g. "11.6.0"), NOT "v11.6.0".
 		// Verify the v-stripping produces a Docker Hub compatible string.
@@ -1323,26 +1268,6 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 // ------------------------------------------------------------
 
 func TestDryRun_CMTVersionNormalization(t *testing.T) {
-	t.Run("v-prefix stripped before instance creation", func(t *testing.T) {
-		// handleCMTWithServerVersions strips "v" from each version before provisioning.
-		// Verify that strings.TrimPrefix produces Docker Hub compatible versions.
-		inputs := []struct {
-			input string
-			want  string
-		}{
-			{"v11.0.1", "11.0.1"},
-			{"v11.1.0", "11.1.0"},
-			{"v12.0.0", "12.0.0"},
-			{"11.0.1", "11.0.1"}, // no v — unchanged
-			{"11.1.0", "11.1.0"}, // no v — unchanged
-			{"v11.6.0-rc1", "11.6.0-rc1"}, // RC: v stripped but rest preserved
-		}
-		for _, tt := range inputs {
-			got := strings.TrimPrefix(tt.input, "v")
-			assert.Equal(t, tt.want, got, "TrimPrefix(%q, 'v')", tt.input)
-		}
-	})
-
 	t.Run("comma-separated input parsed and v-stripped", func(t *testing.T) {
 		// parseServerVersionsFromString splits; the CMT loop then strips v from each.
 		raw := "v11.0.1, v11.1.0, 11.2.0"
@@ -1354,26 +1279,6 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 			stripped = append(stripped, strings.TrimPrefix(strings.TrimSpace(v), "v"))
 		}
 		assert.Equal(t, []string{"11.0.1", "11.1.0", "11.2.0"}, stripped)
-	})
-
-	t.Run("CMT instances carry stripped version in ServerVersion", func(t *testing.T) {
-		// Instances created by handleCMTWithServerVersions use the stripped version.
-		// Simulate by constructing instances as the real code would.
-		rawVersions := []string{"v11.0.1", "v11.1.0"}
-		var instances []*E2EInstance
-		for _, v := range rawVersions {
-			stripped := strings.TrimPrefix(v, "v")
-			instances = append(instances, &E2EInstance{
-				URL:           fmt.Sprintf("https://%s.test.example.com", stripped),
-				ServerVersion: stripped,
-			})
-		}
-		assert.Equal(t, "11.0.1", instances[0].ServerVersion)
-		assert.Equal(t, "11.1.0", instances[1].ServerVersion)
-		for _, inst := range instances {
-			assert.False(t, strings.HasPrefix(inst.ServerVersion, "v"),
-				"CMT instance ServerVersion must not start with 'v'")
-		}
 	})
 
 	t.Run("CMT matrix JSON contains stripped versions", func(t *testing.T) {
@@ -1407,13 +1312,288 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 		assert.Equal(t, "11.1.0", s1["version"])
 	})
 
-	t.Run("CMT versions capped at 5", func(t *testing.T) {
-		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0"
-		parsed := parseServerVersionsFromString(input)
-		const maxVersions = 5
-		if len(parsed) > maxVersions {
-			parsed = parsed[:maxVersions]
-		}
-		assert.Len(t, parsed, 5, "CMT versions must be capped at 5")
+}
+
+// ------------------------------------------------------------
+// 15. resolveCMTServerVersions() — auto-derived CMT version set
+// ------------------------------------------------------------
+
+func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
+	// A realistic releases payload (newest first): an upcoming RC, recent stable minors,
+	// and ESR lines flagged in the body. Includes multiple patches per line and a draft.
+	releasesBody := `[
+		{"tag_name":"v11.8.0-rc3","draft":false,"prerelease":true,"body":"Mattermost Platform Release 11.8.0-rc3"},
+		{"tag_name":"v11.8.0-rc2","draft":false,"prerelease":true,"body":"rc"},
+		{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2 contains fixes."},
+		{"tag_name":"v11.7.1","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.1"},
+		{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+		{"tag_name":"v11.6.3","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.3"},
+		{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"},
+		{"tag_name":"v11.99.0","draft":true,"prerelease":false,"body":"draft should be ignored"},
+		{"tag_name":"v10.11.19","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.19 contains security fixes."},
+		{"tag_name":"v10.11.18","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.18"}
+	]`
+
+	t.Run("auto-derives ESR + latest 3 minors + current RC, latest patch each", func(t *testing.T) {
+		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveCMTServerVersions()
+		// 10.11.19 (ESR) + 11.5.7/11.6.4/11.7.2 (latest 3 minors; 11.7 also ESR) + 11.8.0-rc3 (RC),
+		// latest patch per line, v-stripped, ascending.
+		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, got)
 	})
+
+	t.Run("explicit config override is returned verbatim, no API call", func(t *testing.T) {
+		called := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+		s.Config.CMTServerVersions = []string{"9.11.0", "10.5.0"}
+
+		assert.Equal(t, []string{"9.11.0", "10.5.0"}, s.cmtServerVersions())
+		assert.False(t, called, "manual override must not hit the GitHub API")
+	})
+
+	t.Run("API error falls back to defaultCMTServerVersions", func(t *testing.T) {
+		srv := mockReleasesServer(t, "boom", http.StatusInternalServerError)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, defaultCMTServerVersions, s.resolveCMTServerVersions())
+	})
+
+	t.Run("RC omitted when not newer than latest stable", func(t *testing.T) {
+		// Only stable releases here; an old RC for an already-released line must not appear.
+		body := `[
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"},
+			{"tag_name":"v11.7.0-rc1","draft":false,"prerelease":true,"body":"rc"},
+			{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+			{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveCMTServerVersions()
+		assert.Equal(t, []string{"11.5.7", "11.6.4", "11.7.2"}, got, "stale RC must be excluded")
+	})
+
+	t.Run("parseCMTVersion handles stable, rc, and v-prefix; rejects junk", func(t *testing.T) {
+		v, ok := parseCMTVersion("v11.8.0-rc3")
+		assert.True(t, ok)
+		assert.Equal(t, "11.8.0-rc3", v.raw)
+		assert.Equal(t, 3, v.rc)
+		v2, ok2 := parseCMTVersion("10.11.19")
+		assert.True(t, ok2)
+		assert.Equal(t, 0, v2.rc)
+		_, ok3 := parseCMTVersion("v11.7.0-beta.1")
+		assert.False(t, ok3, "non-rc prerelease suffixes are not CMT versions")
+		_, ok4 := parseCMTVersion("not-a-version")
+		assert.False(t, ok4)
+		// stable sorts above its rc for the same X.Y.Z
+		assert.True(t, v.less(v2) == false)
+	})
+}
+
+// TestResolveBranchHeadSHA verifies the dispatch-time HEAD resolution used to key non-PR
+// cleanup. Non-PR flows dispatch the test workflow with ref=branch, so the run's head_sha is
+// the branch HEAD at dispatch time. We key cleanup on that resolved SHA (not the trigger SHA)
+// so findAndDestroyInstancesBySHA matches when the run completes.
+func TestResolveBranchHeadSHA(t *testing.T) {
+	t.Run("returns the branch HEAD sha from the commits API", func(t *testing.T) {
+		var gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"sha":"abc123def456"}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		sha, err := s.resolveBranchHeadSHA("mattermost", "desktop", "release-12.0")
+		assert.NoError(t, err)
+		assert.Equal(t, "abc123def456", sha)
+		assert.Equal(t, "/repos/mattermost/desktop/commits/release-12.0", gotPath)
+	})
+
+	t.Run("errors on non-2xx so caller can fall back to trigger sha", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		_, err := s.resolveBranchHeadSHA("mattermost", "desktop", "no-such-branch")
+		assert.Error(t, err)
+	})
+
+	t.Run("errors on empty sha so caller can fall back to trigger sha", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"sha":""}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		_, err := s.resolveBranchHeadSHA("mattermost", "desktop", "main")
+		assert.Error(t, err)
+	})
+}
+
+// TestE2EPRInstanceMaxAge verifies the PR max-age knob: configured value wins, else 24h default.
+func TestE2EPRInstanceMaxAge(t *testing.T) {
+	s := newDryRunServer(t, "", "mattermost")
+
+	s.Config.E2EPRInstanceMaxAge = 0
+	assert.Equal(t, 24*time.Hour, s.e2ePRInstanceMaxAge(), "0 should fall back to 24h default")
+
+	s.Config.E2EPRInstanceMaxAge = 48
+	assert.Equal(t, 48*time.Hour, s.e2ePRInstanceMaxAge(), "configured value should win")
+}
+
+// TestEvictReapedPRInstances verifies that when the periodic scan reaps a PR's servers, the
+// in-memory tracking entry is removed so the next E2E/Run provisions a fresh set rather than
+// reusing now-deleted servers. Non-PR (SHA-keyed) entries must be left untouched.
+func TestEvictReapedPRInstances(t *testing.T) {
+	t.Run("evicts the PR key when any of its instances was reaped", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{
+			{InstallationID: "inst-a", Platform: "linux"},
+			{InstallationID: "inst-b", Platform: "macos"},
+			{InstallationID: "inst-c", Platform: "windows"},
+		}
+
+		// Only one member reaped, but the whole set ages out together, so the key goes.
+		s.evictReapedPRInstances([]string{"inst-b"}, s.Logger)
+
+		_, ok := s.e2eInstances["desktop-pr-42"]
+		assert.False(t, ok, "PR key must be evicted so re-applying E2E/Run creates a fresh set")
+	})
+
+	t.Run("leaves unrelated PR keys and non-PR (SHA-keyed) entries intact", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{{InstallationID: "inst-a"}}
+		s.e2eInstances["mattermost-mobile-pr-9"] = []*E2EInstance{{InstallationID: "inst-x"}}
+		s.e2eInstances["desktop-cmt-555-deadbeef"] = []*E2EInstance{{InstallationID: "inst-cmt"}}
+
+		s.evictReapedPRInstances([]string{"inst-a"}, s.Logger)
+
+		_, gone := s.e2eInstances["desktop-pr-42"]
+		assert.False(t, gone, "the matching PR key is evicted")
+		_, otherPR := s.e2eInstances["mattermost-mobile-pr-9"]
+		assert.True(t, otherPR, "an unrelated PR key must remain")
+		_, cmt := s.e2eInstances["desktop-cmt-555-deadbeef"]
+		assert.True(t, cmt, "a non-PR (SHA-keyed) entry must remain")
+	})
+
+	t.Run("no reaped IDs is a no-op", func(t *testing.T) {
+		s := newDryRunServer(t, "", "mattermost")
+		s.e2eInstances["desktop-pr-42"] = []*E2EInstance{{InstallationID: "inst-a"}}
+
+		s.evictReapedPRInstances(nil, s.Logger)
+
+		_, ok := s.e2eInstances["desktop-pr-42"]
+		assert.True(t, ok, "nothing reaped means nothing evicted")
+	})
+}
+
+// TestShouldTriggerCMT verifies CMT gating across all sources: manual dispatch (any ref), RC
+// tag cut (the new primary trigger), and release branch (defense-in-depth). Anything else —
+// feature branches, GA tags, nightly tags, beta tags, default branch — must be rejected so
+// that mobile's `on: push tags` glob slips and stray runs don't burn the multi-version matrix.
+func TestShouldTriggerCMT(t *testing.T) {
+	s := newDryRunServer(t, "", "mattermost")
+
+	// Manual dispatch always runs, regardless of ref.
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "main"))
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "v6.2.0-rc.1"))
+	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "release-6.2"))
+
+	// RC tag cut (primary trigger). For tag pushes head_branch is the tag name.
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.1"))    // desktop convention
+	assert.True(t, s.shouldTriggerCMT("push", "v2.41.0-rc.1"))   // future mobile
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.10"))   // multi-digit rc
+	assert.True(t, s.shouldTriggerCMT("push", "6.2.0-rc.1"))     // missing 'v' prefix is permitted
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc1"))     // no separator before number
+
+	// Release branch (defense-in-depth — kept for backwards compat / manual triggers).
+	assert.True(t, s.shouldTriggerCMT("push", "release-6.2"))
+
+	// Must NOT trigger: GA tags, betas, nightly tags, feature branches, default branch.
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0"))                  // GA tag — no -rc
+	assert.False(t, s.shouldTriggerCMT("push", "v1.0.22-beta"))            // pre-release but not RC
+	assert.False(t, s.shouldTriggerCMT("push", "6.3.0-nightly.20260601"))  // nightly tag
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0-rcabc"))            // -rc but no number
+	assert.False(t, s.shouldTriggerCMT("create", "feature/cool-thing"))
+	assert.False(t, s.shouldTriggerCMT("push", "main"))
+	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
+
+	// Mobile build-release-NNN branch push (mobile's RC-cut equivalent).
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-786"))      // 3-digit
+	assert.True(t, s.shouldTriggerCMT("push", "build-release-1100"))     // 4-digit
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-12345"))   // 5+ digit rejected; bump regex when convention changes
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-1"))       // < 3 digits, likely a test
+	assert.False(t, s.shouldTriggerCMT("push", "build-release-ios-707")) // platform variant
+}
+
+// TestIsRCTag covers the RC-tag regex in isolation so the boundary cases stay locked in.
+func TestIsRCTag(t *testing.T) {
+	for _, ref := range []string{"v6.2.0-rc.1", "v6.2.0-rc.10", "v2.41.0-rc.2", "6.2.0-rc.1", "v6.2.0-rc1", "v6.2.0-rc-1"} {
+		assert.True(t, isRCTag(ref), "expected RC tag: %q", ref)
+	}
+	for _, ref := range []string{
+		"v6.2.0",                  // GA
+		"v6.2.0-rc",               // missing number
+		"v6.2.0-rcabc",            // letters after -rc
+		"v1.0.22-beta",            // not RC
+		"6.3.0-nightly.20260601",  // nightly
+		"release-6.2",             // branch
+		"main",
+		"",
+	} {
+		assert.False(t, isRCTag(ref), "must not match: %q", ref)
+	}
+}
+
+// TestIsBuildReleaseBranch locks in the boundaries for mobile's build-release-NNN gate:
+// exactly 3-or-4 digits required (rejects test artifacts like build-release-1 AND
+// rejects unsanctioned 5+ digit values); platform-specific variants
+// (build-release-ios-NNN etc.) are rejected; no overlap with the RC-tag or
+// release-* gates.
+func TestIsBuildReleaseBranch(t *testing.T) {
+	for _, ref := range []string{
+		"build-release-786",  // real 3-digit
+		"build-release-1100", // real 4-digit
+		"build-release-9999", // upper end of 4-digit window
+	} {
+		assert.True(t, isBuildReleaseBranch(ref), "expected build-release branch: %q", ref)
+	}
+	for _, ref := range []string{
+		"build-release-1",            // 1 digit — test artifact / typo
+		"build-release-99",           // 2 digit — below convention
+		"build-release-12345",        // 5 digit — above convention; bump regex when crossing this
+		"build-release-ios-707",      // platform-specific
+		"build-release-sim-707",      // simulator-only
+		"build-release-android-1100", // android-specific
+		"build-release-786-rc1",      // stray suffix
+		"build-release-",             // no number
+		"build-release-abc",          // non-numeric
+		"release-2.41",               // handled by isReleaseBranch
+		"v2.41.0-rc.1",               // handled by isRCTag
+		"",
+	} {
+		assert.False(t, isBuildReleaseBranch(ref), "must not match: %q", ref)
+	}
 }

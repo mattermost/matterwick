@@ -89,8 +89,11 @@ func (s *Server) resolveMattermostServerVersion() string {
 		if parseErr != nil {
 			continue
 		}
-		if len(v.Pre) > 0 && (v.Pre[0].VersionStr == "alpha" || v.Pre[0].VersionStr == "beta") {
-			continue
+		if len(v.Pre) > 0 {
+			pre := v.Pre[0].VersionStr
+			if strings.HasPrefix(pre, "alpha") || strings.HasPrefix(pre, "beta") {
+				continue
+			}
 		}
 		candidates = append(candidates, candidate{tag: raw, ver: v})
 	}
