@@ -103,7 +103,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	// On completion: CMT keys on run id, non-CMT flows key on SHA.
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		if s.Config.CMTTestWorkflowName != "" && workflowName == s.Config.CMTTestWorkflowName {
+		if workflowName == s.cmtTestWorkflowName() {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
 			s.findAndDestroyInstancesByRunID(repoName, runID, logger)
 		} else {
@@ -125,6 +125,19 @@ func (s *Server) isE2ETestWorkflow(name string) bool {
 		}
 	}
 	return false
+}
+
+// defaultCMTTestWorkflowName is the "name:" of compatibility-matrix-testing.yml in the
+// desktop/mobile repos. Used when Config.CMTTestWorkflowName is empty so CMT cleanup (keyed
+// by run id) never silently falls back to SHA cleanup, which can't match a -cmt-{runID} key.
+const defaultCMTTestWorkflowName = "Compatibility Matrix Testing"
+
+// cmtTestWorkflowName returns the configured CMT test workflow name, or the default.
+func (s *Server) cmtTestWorkflowName() string {
+	if s.Config.CMTTestWorkflowName != "" {
+		return s.Config.CMTTestWorkflowName
+	}
+	return defaultCMTTestWorkflowName
 }
 
 func cmtInstanceKey(repoName string, testRunID int64) string {

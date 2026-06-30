@@ -84,5 +84,6 @@
   "E2EInstanceMaxAge": 6,
   "E2EPRInstanceMaxAge": 24,
   "CMTTriggerWorkflowName": "CMT Provisioner",
+  "CMTTestWorkflowName": "Compatibility Matrix Testing",
   "CMTServerVersions": ["10.11.18", "11.7.1"]
 }
