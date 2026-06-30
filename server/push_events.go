@@ -39,11 +39,7 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	})
 	logger.Info("Push event received")
 
-	// Push-event auto-trigger covers desktop `master` and mobile `main` post-merge runs.
-	// Release-branch (release-X.Y) push trigger was removed — release stabilization is
-	// covered by PR-label E2E pre-merge and CMT at the RC-build moment, so the per-
-	// cherry-pick cost during stabilization is no longer justified. The post-merge run
-	// here is the per-commit regression signal that catches bugs the day they merge.
+	// Release-branch push trigger was removed; release stabilization is covered by PR-label E2E and CMT.
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
@@ -236,10 +232,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	return instances, nil
 }
 
-// getRunnerForPlatform returns the GitHub Actions runner label for E2E functional
-// workflows (PR label + push events). CMT workflows use a separate hardcoded matrix
-// in buildDesktopCMTMatrixJSON (macos-13) because compatibility testing pins a
-// specific OS version; functional tests track latest.
+// getRunnerForPlatform returns the runner label for E2E functional tests. CMT uses a separate hardcoded matrix with pinned OS versions.
 func getRunnerForPlatform(platform string) string {
 	switch strings.ToLower(platform) {
 	case "linux":
@@ -291,8 +284,7 @@ func (s *Server) triggerDesktopE2EWorkflowForPushEvent(repoOwner, repoName, bran
 
 	logger.WithField("instanceDetails", instanceDetailsJSON).Debug("Triggering desktop E2E workflow")
 
-	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
-	// removed), so runType is always MASTER for desktop push events.
+	// runType is always MASTER — only master/main pushes reach this path.
 	return s.dispatchDesktopE2EWorkflow(repoOwner, repoName, branch, sha, instanceDetailsJSON, "MASTER")
 }
 

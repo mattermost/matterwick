@@ -17,7 +17,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// WorkflowRunWebhookPayload represents the workflow_run webhook payload with inputs
 type WorkflowRunWebhookPayload struct {
 	Action      string                 `json:"action"`
 	WorkflowRun WorkflowRunWithInputs  `json:"workflow_run"`
@@ -25,7 +24,6 @@ type WorkflowRunWebhookPayload struct {
 	Workflow    map[string]interface{} `json:"workflow"`
 }
 
-// WorkflowRunWithInputs extends WorkflowRun with inputs field
 type WorkflowRunWithInputs struct {
 	ID         int64             `json:"id"`
 	Name       string            `json:"name"`
@@ -35,7 +33,6 @@ type WorkflowRunWithInputs struct {
 	Inputs     map[string]string `json:"inputs"`
 }
 
-// ParseWorkflowRunEventWithInputs parses workflow_run event and extracts inputs
 func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload, error) {
 	decoder := json.NewDecoder(data)
 	var payload WorkflowRunWebhookPayload
@@ -46,7 +43,7 @@ func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload
 	return &payload, nil
 }
 
-// handleWorkflowRunEventWithInputs routes workflow_run events to CMT, nightly, or cleanup handlers.
+// handleWorkflowRunEventWithInputs routes workflow_run events to CMT or cleanup handlers.
 func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPayload) {
 	// Extract repository info
 	repoData := payload.Repository
@@ -81,22 +78,9 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		"head_sha": headSHA,
 	})
 
-	// CMT: a lightweight, scheduled trigger workflow (Config.CMTTriggerWorkflowName, e.g.
-	// "CMT Provisioner") fires in the desktop/mobile repo. matterwick provisions one instance
-	// per version in the resolved CMT set (s.cmtServerVersions) and dispatches
-	// compatibility-matrix-testing.yml. No inputs are read from the event — the version set is
-	// resolved by matterwick — so this works despite GitHub's workflow_run payload not carrying
-	// workflow_dispatch inputs.
-	// Cleanup happens when the test workflow ("Compatibility Matrix Testing") completes, handled
-	// by the isE2ETestWorkflow branch below.
+	// CMT trigger: provision one server per version in s.cmtServerVersions() and dispatch compatibility-matrix-testing.yml.
 	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
 		if payload.Action == "requested" {
-			// Gate CMT to the cases we actually want. The trigger workflow fires on RC tag pushes
-			// (e.g. `v6.2.0-rc.1`) and on manual dispatch. For tag pushes the workflow_run
-			// payload's head_branch carries the *tag name*, not a branch. Provision CMT when:
-			//   - the run was started manually (workflow_dispatch, any ref), OR
-			//   - head_branch is an RC tag (isRCTag), OR
-			//   - head_branch is a release branch (defense-in-depth for legacy/manual triggers).
 			triggerEvent := payload.WorkflowRun.Event
 			if s.shouldTriggerCMT(triggerEvent, headBranch) {
 				logger.WithFields(logrus.Fields{
@@ -114,12 +98,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// --- Test workflow completion: clean up provisioned instances ---
-	//
-	// CMT keys on the dispatched *test* workflow run id ({repo}-cmt-{testRunID}) so
-	// concurrent re-spins on the same branch HEAD cannot cross-destroy each other's servers
-	// when GitHub concurrency cancels an older run. Non-CMT flows (push/scheduled) still
-	// key on head_sha suffix; orphans are reaped by cleanupStaleE2EInstances.
+	// On completion: CMT keys on run id, non-CMT flows key on SHA.
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
 		if workflowName == cmtTestWorkflowName {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
@@ -135,8 +114,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
-// isE2ETestWorkflow returns true if the workflow name is a configured E2E test workflow
-// (as opposed to a trigger or CMT provisioner workflow).
+// isE2ETestWorkflow reports whether name is in Config.E2ETestWorkflowNames.
 func (s *Server) isE2ETestWorkflow(name string) bool {
 	for _, n := range s.Config.E2ETestWorkflowNames {
 		if n == name {
@@ -146,18 +124,13 @@ func (s *Server) isE2ETestWorkflow(name string) bool {
 	return false
 }
 
-// cmtTestWorkflowName is the workflow "name:" of compatibility-matrix-testing.yml in the
-// desktop and mobile repos.
 const cmtTestWorkflowName = "Compatibility Matrix Testing"
 
-// cmtInstanceKey is the in-memory tracking key for a CMT test workflow run.
 func cmtInstanceKey(repoName string, testRunID int64) string {
 	return fmt.Sprintf("%s-cmt-%d", repoName, testRunID)
 }
 
-// cmtDispatchMutex returns a per-repository mutex that serializes the CMT
-// dispatch+poll+store critical section so two near-simultaneous dispatches cannot
-// resolve to the same test workflow run id in pollDispatchedWorkflowRun.
+// cmtDispatchMutex returns a per-repo mutex for the dispatch+poll+store critical section.
 func (s *Server) cmtDispatchMutex(repoName string) *sync.Mutex {
 	s.cmtDispatchLocksMu.Lock()
 	defer s.cmtDispatchLocksMu.Unlock()
@@ -174,8 +147,7 @@ func instanceKeyMatchesRunID(key, repoName string, testRunID int64) bool {
 	return key == cmtInstanceKey(repoName, testRunID)
 }
 
-// claimedCMTRunIDs returns the set of CMT test run ids currently tracked for repoName.
-// Used by pollDispatchedWorkflowRun to skip ids already claimed by a previous dispatch.
+// claimedCMTRunIDs returns tracked CMT run ids for repoName; the poll uses this to skip already-claimed dispatches.
 func (s *Server) claimedCMTRunIDs(repoName string) map[int64]bool {
 	prefix := repoName + "-cmt-"
 	s.e2eInstancesLock.Lock()
@@ -193,13 +165,7 @@ func (s *Server) claimedCMTRunIDs(repoName string) map[int64]bool {
 	return claimed
 }
 
-// removeCMTInstancesByRunID atomically removes and returns the CMT instance set keyed to
-// the completing compatibility-matrix-testing.yml run id. Returns nil for runID 0 (the
-// "could not resolve" sentinel from pollDispatchedWorkflowRun) so unresolved dispatches
-// cannot accidentally wipe a real entry, and nil when the key has no entry.
-//
-// Split from findAndDestroyInstancesByRunID so tests can exercise the locking, filtering,
-// and return shape without touching CloudClient.
+// removeCMTInstancesByRunID removes and returns CMT instances for testRunID. Returns nil for runID 0 (unresolved dispatch sentinel).
 func (s *Server) removeCMTInstancesByRunID(repoName string, testRunID int64, logger logrus.FieldLogger) []*E2EInstance {
 	if testRunID == 0 {
 		return nil
@@ -232,11 +198,7 @@ func (s *Server) findAndDestroyInstancesByRunID(repoName string, testRunID int64
 	s.destroyE2EInstances(instances, logger)
 }
 
-// instanceKeyMatchesSHA reports whether a tracking key belongs to repoName, ends with the given
-// head SHA, and matches the requested flow: CMT keys ("{repo}-cmt-…") when cmtOnly is true,
-// non-CMT keys (push/scheduled) when false. This scoping prevents a completing workflow from
-// reaping a different flow's run that happens to share the same commit SHA (e.g. the monthly CMT
-// trigger and the nightly trigger firing on the same master commit).
+// instanceKeyMatchesSHA reports whether key belongs to repoName, ends with headSHA, and matches the flow type (CMT vs push/scheduled) to prevent cross-flow SHA collisions.
 func instanceKeyMatchesSHA(key, repoName, headSHA string, cmtOnly bool) bool {
 	if !strings.HasPrefix(key, repoName+"-") || !strings.HasSuffix(key, "-"+headSHA) {
 		return false
@@ -244,10 +206,7 @@ func instanceKeyMatchesSHA(key, repoName, headSHA string, cmtOnly bool) bool {
 	return strings.HasPrefix(key, repoName+"-cmt-") == cmtOnly
 }
 
-// findAndDestroyInstancesBySHA scans the instance map for entries belonging to repoName whose
-// tracking key ends with "-{headSHA}" and destroys them. When cmtOnly is true only CMT keys
-// ("{repo}-cmt-…") match; when false only non-CMT keys (push/scheduled) match — so a completing
-// workflow never tears down a different flow's run that happens to share the same SHA.
+// findAndDestroyInstancesBySHA destroys instances whose key ends with headSHA, scoped to CMT or non-CMT flows to prevent cross-flow teardown.
 func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, cmtOnly bool, logger logrus.FieldLogger) {
 	if headSHA == "" {
 		return
@@ -276,9 +235,7 @@ func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, cmtOnly 
 	s.destroyE2EInstances(found, logger)
 }
 
-// parseServerVersionsFromString parses comma-separated server versions string
-// Example input: "v11.1.0, v11.2.0, v12.0.0"
-// Returns: ["v11.1.0", "v11.2.0", "v12.0.0"]
+// parseServerVersionsFromString splits a comma-separated version string and trims whitespace.
 func parseServerVersionsFromString(input string) []string {
 	versions := splitCommaSeparated(input)
 	if versions == nil {
@@ -287,15 +244,7 @@ func parseServerVersionsFromString(input string) []string {
 	return versions
 }
 
-// shouldTriggerCMT decides whether a CMT-trigger workflow_run should actually provision CMT.
-// CMT runs only when:
-//   - the run was started manually (workflow_dispatch, any ref), OR
-//   - head_branch is an RC tag (desktop convention: v6.2.0-rc.1), OR
-//   - head_branch is a mobile release-build branch (build-release-NNN, 3+ digits), OR
-//   - head_branch is a release branch (defense-in-depth — legacy & for any manual ref).
-//
-// For tag-push events GitHub sets workflow_run.head_branch to the tag name (no refs/tags/
-// prefix), so an RC tag like "v6.2.0-rc.1" arrives in headBranch.
+// shouldTriggerCMT returns true for manual dispatch, RC tags, mobile build-release branches, or release branches.
 func (s *Server) shouldTriggerCMT(triggerEvent, headBranch string) bool {
 	return triggerEvent == "workflow_dispatch" ||
 		isRCTag(headBranch) ||
@@ -303,43 +252,22 @@ func (s *Server) shouldTriggerCMT(triggerEvent, headBranch string) bool {
 		s.isReleaseBranch(headBranch)
 }
 
-// rcTagPattern matches RC tags like "v6.2.0-rc.1", "v2.41.0-rc.10", "6.2.0-rc.1". The leading
-// "v" is optional, and the rc suffix can be "-rc.N", "-rcN", or "-rc-N" (we keep it permissive
-// but require the literal "-rc" and a trailing number). Compiled once at package init.
+// rcTagPattern matches RC tags: optional "v", then semver, then "-rc" + number (e.g. v6.2.0-rc.1, 6.2.0-rc1).
 var rcTagPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+-rc[.\-]?\d+$`)
 
-// isRCTag reports whether ref looks like a release-candidate tag we want to trigger CMT on.
-// Excludes GA tags (v6.2.0), beta/alpha pre-releases (v1.0.22-beta), and nightly tags
-// (6.3.0-nightly.20260601).
 func isRCTag(ref string) bool {
 	return rcTagPattern.MatchString(ref)
 }
 
-// buildReleaseBranchPattern matches mobile's release-build branches: "build-release-" followed
-// by exactly 3 or 4 digits (the current convention — e.g. build-release-786 / build-release-1100).
-// The 3-digit floor rejects accidental test branches like "build-release-1"; the 4-digit ceiling
-// rejects unexpectedly large values (typo or unsanctioned scheme change). If mobile ever
-// adopts a 5+ digit build number, bump this upper bound and the matching glob in
-// .github/workflows/cmt-provisioner.yml in lock-step.
-//
-// Platform-specific variants (build-release-ios-NNN, build-release-sim-NNN,
-// build-release-android-NNN) don't start with a digit after the "build-release-" prefix and
-// are excluded.
+// buildReleaseBranchPattern matches mobile's build-release-NNN branches (exactly 3–4 digits). Update in sync with cmt-provisioner.yml if the convention changes.
 var buildReleaseBranchPattern = regexp.MustCompile(`^build-release-\d{3,4}$`)
 
-// isBuildReleaseBranch reports whether ref matches mobile's build-release-NNN convention.
-// The branch is created by the "Mattermost Mobile Release" external workflow when an RC
-// build is dispatched to TestFlight / Play Store, so it's mobile's equivalent of an RC tag
-// cut. Used as a separate gate from isReleaseBranch because release-* fires on every
-// cherry-pick / version-bump push, which would be far too noisy for CMT.
+// isBuildReleaseBranch reports whether ref is mobile's RC-cut branch (build-release-NNN). Used as a CMT gate separate from isReleaseBranch to avoid triggering on every cherry-pick.
 func isBuildReleaseBranch(ref string) bool {
 	return buildReleaseBranchPattern.MatchString(ref)
 }
 
-// handleCMTTrigger is invoked when the scheduled CMT trigger workflow fires. It resolves the
-// instance type from the repo, resolves the server-version set (auto-derived from Mattermost
-// releases, or the manual Config.CMTServerVersions override), and hands off to
-// handleCMTWithServerVersions. Nothing needs to be read from the workflow_run event.
+// handleCMTTrigger resolves instance type and server versions, then delegates to handleCMTWithServerVersions.
 func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
 	instanceType := "desktop"
 	if strings.Contains(repoName, "mobile") {
@@ -361,9 +289,7 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
 // version, builds the CMT_MATRIX JSON, and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
-	// Cap the number of versions (one cloud instance per version) to prevent runaway
-	// provisioning. Matches the cap inside resolveCMTServerVersions; this second guard
-	// catches operator overrides via Config.CMTServerVersions that exceed the limit.
+	// Cap at 5 — also enforced by resolveCMTServerVersions, but Config.CMTServerVersions can bypass that.
 	const maxVersions = 5
 	if len(serverVersions) > maxVersions {
 		logger.Warnf("Capping server versions from %d to %d", len(serverVersions), maxVersions)
@@ -378,10 +304,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 	})
 	logger.Info("Starting CMT with server versions")
 
-	// Create one instance per version. The CMT matrix cross-products environment × server,
-	// so a single server URL handles all platform test runners for that version. All-or-
-	// nothing: if any version fails, destroy what was already created — a partial matrix
-	// would silently drop coverage and the operator wouldn't see it on the commit status.
+	// All-or-nothing: a partial matrix silently drops coverage, so roll back on any failure.
 	var allInstances []*E2EInstance
 	var validVersions []string
 
@@ -427,10 +350,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		return
 	}
 
-	// Serialize dispatch+poll+store per repo. Without this, two concurrent CMT triggers on
-	// the same repo can have overlapping poll windows in pollDispatchedWorkflowRun and both
-	// resolve to the same test workflow run id, causing the second store to overwrite the
-	// first entry and leak the first run's instances to the periodic DNS scan.
+	// Serialize per repo: concurrent triggers could race to the same run id without this mutex.
 	dispatchLock := s.cmtDispatchMutex(repoName)
 	dispatchLock.Lock()
 	defer dispatchLock.Unlock()
@@ -443,10 +363,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 	}
 
 	if testRunID == 0 {
-		// GitHub accepted the dispatch (204) but we could not resolve the queued run id
-		// within the poll deadline. Do NOT destroy instances — the workflow may still run
-		// against them. The periodic DNS-pattern scan will reap them after E2EInstanceMaxAge
-		// (configurable; default scan applies). Operator must investigate the warning.
+		// Dispatch succeeded but run id unresolved — leave instances for the periodic stale-scan.
 		logger.WithField("trigger_run", runID).Warn("CMT dispatched but test run id unresolved; instances left to periodic stale-scan backstop")
 		return
 	}
@@ -477,38 +394,14 @@ func (s *Server) createSingleCMTInstance(repoName, instanceType, version string,
 	return s.createCloudInstallation(context.Background(), name, version, username, password, instanceType, logger)
 }
 
-// cmtServer is the server entry in CMT_MATRIX JSON. Mobile uses the optional `latest` flag
-// to mark the highest-semver entry, so the mobile workflow can decide to run the whole suite
-// against the latest server and smoke-only against older ones. Desktop ignores it and the
-// `omitempty` keeps desktop's matrix JSON unchanged (the field is just absent there).
-//
-// IMPORTANT — layering: matterwick only signals which server is "latest". It does NOT decide
-// what tests run for latest vs non-latest — that policy (smoke path vs whole suite path,
-// parallelism, etc.) lives in the mobile workflow, where the test-directory structure is
-// known.
+// cmtServer is one entry in CMT_MATRIX. Latest is set on the highest-semver entry (mobile only); omitempty keeps it absent from desktop JSON.
 type cmtServer struct {
 	Version string `json:"version"`
 	URL     string `json:"url"`
 	Latest  bool   `json:"latest,omitempty"`
 }
 
-// buildDesktopCMTMatrixJSON builds the CMT_MATRIX JSON for compatibility-matrix-testing.yml
-// in the desktop repo. The matrix cross-products environment × server, so one server URL
-// is shared across all three platform runners.
-//
-// Schema:
-//
-//	{
-//	  "environment": [
-//	    {"os": "linux", "runner": "ubuntu-22.04"},
-//	    {"os": "macos", "runner": "macos-13"},
-//	    {"os": "windows", "runner": "windows-2022"}
-//	  ],
-//	  "server": [
-//	    {"version": "v11.1.0", "url": "https://..."},
-//	    ...
-//	  ]
-//	}
+// buildDesktopCMTMatrixJSON builds CMT_MATRIX for compatibility-matrix-testing.yml: 3 fixed environment runners × N server versions.
 func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (string, error) {
 	type cmtEnvironment struct {
 		OS     string `json:"os"`
@@ -540,29 +433,13 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 	return string(b), nil
 }
 
-// buildMobileCMTMatrixJSON builds the CMT_MATRIX JSON for compatibility-matrix-testing.yml
-// in the mobile repo. One iOS test job is created per server version. The highest-semver
-// entry is marked `latest: true` so the mobile workflow can branch on it (e.g. whole suite
-// for latest, smoke for older). What "latest" implies test-wise is the workflow's policy,
-// not matterwick's — see the cmtServer doc comment.
-//
-// Schema:
-//
-//	{
-//	  "server": [
-//	    {"version": "10.11.18", "url": "https://..."},
-//	    {"version": "11.7.1",   "url": "https://...", "latest": true}
-//	  ]
-//	}
+// buildMobileCMTMatrixJSON builds CMT_MATRIX for compatibility-matrix-testing.yml: N server entries, highest-semver marked latest:true.
 func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (string, error) {
 	type mobileCMTMatrix struct {
 		Server []cmtServer `json:"server"`
 	}
 
-	// Find the highest-semver entry across versions that parse successfully. parseCMTVersion
-	// handles vX.Y.Z and vX.Y.Z-rcN (with or without the "v"). Unparseable versions are
-	// silently skipped — they just don't compete for "latest". If none parse, mark the last
-	// entry so maestro legs are not all skipped and final status does not false-fail.
+	// Mark the highest-parseable version as latest; fall back to last entry if none parse.
 	latestIdx := -1
 	var latestVer cmtVersion
 	for i, version := range versions {
@@ -601,22 +478,15 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 	return string(b), nil
 }
 
-// dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml with the populated
-// CMT_MATRIX JSON, targeting the branch ref (workflow_dispatch requires a branch/tag, not a SHA),
-// then polls the GitHub API for the queued test run id used to key instance cleanup.
+// dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml and polls for the run id used to key cleanup.
 func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON, instanceType string, logger logrus.FieldLogger) (int64, error) {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
 
-	// Snapshot existing workflow_dispatch run ids BEFORE dispatching. The poll then
-	// returns the newest run id NOT in this set — eliminating the time-window race
-	// where an older manual or completed workflow_dispatch run on the same branch
-	// could win the poll if our newly dispatched run hasn't appeared yet.
+	// Snapshot run ids before dispatch so the poll only accepts strictly-new ids.
 	preDispatchRunIDs, snapErr := s.listExistingCMTRunIDs(repoOwner, repoName, branch, logger)
 	if snapErr != nil {
-		// Failing to snapshot is not fatal — fall back to "everything is pre-existing"
-		// which forces the poll to wait for a strictly-new run id. Worst case is
-		// a longer poll if the new dispatch is slow to show up.
+		// Non-fatal: poll will still accept any new id that appears after this moment.
 		logger.WithError(snapErr).Warn("Failed to snapshot pre-dispatch CMT run ids; poll will only accept ids not seen before dispatch")
 		preDispatchRunIDs = map[int64]bool{}
 	}
@@ -635,7 +505,6 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 		"instanceType": instanceType,
 	}).Debug("Dispatching compatibility-matrix-testing.yml")
 
-	// GitHub workflow_dispatch requires a branch or tag name as ref, not a commit SHA.
 	req, err := client.NewRequest("POST",
 		fmt.Sprintf("/repos/%s/%s/actions/workflows/compatibility-matrix-testing.yml/dispatches", repoOwner, repoName),
 		map[string]interface{}{
@@ -656,9 +525,7 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 
 	testRunID, err := s.pollDispatchedWorkflowRun(repoOwner, repoName, "compatibility-matrix-testing.yml", branch, preDispatchRunIDs, logger)
 	if err != nil {
-		// Dispatch already succeeded (204). Returning (0, nil) tells the caller to skip
-		// SHA→runID-keyed cleanup tracking but to LEAVE instances in place — the workflow
-		// may still execute against them. The periodic stale-scan is the backstop.
+		// Return 0 to skip run-id tracking; leave instances for the periodic stale-scan.
 		logger.WithError(err).Warn("Dispatched compatibility-matrix-testing.yml but could not resolve test run id within poll deadline")
 		return 0, nil
 	}
@@ -667,9 +534,7 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 	return testRunID, nil
 }
 
-// listExistingCMTRunIDs snapshots the set of recent workflow_dispatch run ids for
-// compatibility-matrix-testing.yml on branch. Used immediately before dispatch so the
-// post-dispatch poll can ignore any id that already existed.
+// listExistingCMTRunIDs returns recent run ids for compatibility-matrix-testing.yml on branch, snapshotted before dispatch.
 func (s *Server) listExistingCMTRunIDs(repoOwner, repoName, branch string, logger logrus.FieldLogger) (map[int64]bool, error) {
 	runs, err := s.listCMTRuns(repoOwner, repoName, "compatibility-matrix-testing.yml", branch)
 	if err != nil {
@@ -716,10 +581,7 @@ func (s *Server) listCMTRuns(repoOwner, repoName, workflowFile, branch string) (
 	return resp.WorkflowRuns, nil
 }
 
-// pollDispatchedWorkflowRun polls until GitHub lists a workflow_dispatch run for branch
-// whose id was NOT present in preDispatchRunIDs (snapshotted just before the dispatch call).
-// This is race-free vs. a time-window approach: even if an older manual dispatch is still
-// listed, its id was already in the pre-dispatch snapshot and is filtered out.
+// pollDispatchedWorkflowRun polls for a new run id not in preDispatchRunIDs. The pre-dispatch snapshot makes this race-free vs. time-window approaches.
 func (s *Server) pollDispatchedWorkflowRun(repoOwner, repoName, workflowFile, branch string, preDispatchRunIDs map[int64]bool, logger logrus.FieldLogger) (int64, error) {
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
@@ -728,9 +590,7 @@ func (s *Server) pollDispatchedWorkflowRun(repoOwner, repoName, workflowFile, br
 			return 0, err
 		}
 
-		// Skip run ids already tracked in e2eInstances — defense in depth so a hypothetical
-		// concurrent dispatch (or a re-poll after a non-clean restart) cannot resolve to the
-		// same id as a previously-stored entry and overwrite it.
+		// Also skip ids already tracked to guard against concurrent dispatches overwriting a stored entry.
 		claimed := s.claimedCMTRunIDs(repoName)
 
 		var bestID int64

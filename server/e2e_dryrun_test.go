@@ -187,18 +187,6 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("three platforms created for desktop", func(t *testing.T) {
-		assert.Len(t, instances, 3)
-		platforms := []string{instances[0].Platform, instances[1].Platform, instances[2].Platform}
-		assert.Equal(t, []string{"linux", "macos", "windows"}, platforms)
-	})
-
-	t.Run("runner assignment is correct", func(t *testing.T) {
-		assert.Equal(t, "ubuntu-latest", instances[0].Runner)
-		assert.Equal(t, "macos-latest", instances[1].Runner)
-		assert.Equal(t, "windows-2022", instances[2].Runner)
-	})
-
 	t.Run("workflow inputs built correctly", func(t *testing.T) {
 		// Drive the real triggerDesktopE2EWorkflow so assertions validate the
 		// actual payload produced by production code, not a hand-built map.
@@ -226,12 +214,6 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		assert.NotEmpty(t, c.Inputs["instance_details"])
 	})
 
-	t.Run("workflow path targets e2e-functional.yml", func(t *testing.T) {
-		path := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches",
-			"mattermost", "mattermost-desktop", "e2e-functional.yml")
-		assert.Contains(t, path, "e2e-functional.yml")
-		assert.Contains(t, path, "mattermost-desktop")
-	})
 }
 
 // ------------------------------------------------------------
@@ -288,30 +270,6 @@ func TestDryRun_MobileDispatch(t *testing.T) {
 		})
 	}
 
-	t.Run("mobile platforms are site-1/2/3 not linux/macos/windows", func(t *testing.T) {
-		platforms := []string{instances[0].Platform, instances[1].Platform, instances[2].Platform}
-		assert.Equal(t, []string{"site-1", "site-2", "site-3"}, platforms)
-	})
-
-	t.Run("mobile instances have no runner", func(t *testing.T) {
-		for _, inst := range instances {
-			assert.Empty(t, inst.Runner)
-		}
-	})
-
-	t.Run("triggerMobileE2EWorkflow requires exactly 3 instances", func(t *testing.T) {
-		// Verify the guard: only 2 instances → error path
-		twoInstances := instances[:2]
-		assert.NotEqual(t, 3, len(twoInstances),
-			"should fail the len(instances)!=3 check in triggerMobileE2EWorkflow")
-	})
-
-	t.Run("workflow path targets e2e-detox-pr.yml", func(t *testing.T) {
-		path := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches",
-			"mattermost", "mattermost-mobile", "e2e-detox-pr.yml")
-		assert.Contains(t, path, "e2e-detox-pr.yml")
-		assert.Contains(t, path, "mattermost-mobile")
-	})
 }
 
 // ------------------------------------------------------------
@@ -344,66 +302,6 @@ func TestDryRun_LabelDetection(t *testing.T) {
 				assert.Equal(t, tt.platform, s.extractPlatformFromLabel(tt.label))
 			})
 		}
-	}
-}
-
-// ------------------------------------------------------------
-// 4. Repo type → correct platforms and workflow
-// ------------------------------------------------------------
-
-func TestDryRun_RepoTypeDetection(t *testing.T) {
-	tests := []struct {
-		repoName      string
-		wantType      string
-		wantPlatforms []string
-		wantWorkflow  string
-	}{
-		{
-			repoName:      "mattermost-desktop",
-			wantType:      "desktop",
-			wantPlatforms: []string{"linux", "macos", "windows"},
-			wantWorkflow:  "e2e-functional.yml",
-		},
-		{
-			repoName:      "mattermost-desktop-releases",
-			wantType:      "desktop",
-			wantPlatforms: []string{"linux", "macos", "windows"},
-			wantWorkflow:  "e2e-functional.yml",
-		},
-		{
-			repoName:      "mattermost-mobile",
-			wantType:      "mobile",
-			wantPlatforms: []string{"site-1", "site-2", "site-3"},
-			wantWorkflow:  "e2e-detox-pr.yml",
-		},
-		{
-			repoName:      "mattermost-mobile-v2",
-			wantType:      "mobile",
-			wantPlatforms: []string{"site-1", "site-2", "site-3"},
-			wantWorkflow:  "e2e-detox-pr.yml",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.repoName, func(t *testing.T) {
-			var instanceType string
-			var platforms []string
-			var workflow string
-
-			if strings.Contains(tt.repoName, "desktop") {
-				instanceType = "desktop"
-				platforms = []string{"linux", "macos", "windows"}
-				workflow = "e2e-functional.yml"
-			} else if strings.Contains(tt.repoName, "mobile") {
-				instanceType = "mobile"
-				platforms = []string{"site-1", "site-2", "site-3"}
-				workflow = "e2e-detox-pr.yml"
-			}
-
-			assert.Equal(t, tt.wantType, instanceType)
-			assert.Equal(t, tt.wantPlatforms, platforms)
-			assert.Equal(t, tt.wantWorkflow, workflow)
-		})
 	}
 }
 
@@ -458,17 +356,6 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 			"extractBranchName is unaware of ref type; caller must pre-filter")
 	})
 
-	t.Run("desktop push always creates linux/macos/windows instances", func(t *testing.T) {
-		// createMultipleE2EInstancesForPushEvent uses desktop platforms for push events
-		expectedPlatforms := []string{"linux", "macos", "windows"}
-		instances := makeDesktopInstances()
-		var gotPlatforms []string
-		for _, inst := range instances {
-			gotPlatforms = append(gotPlatforms, inst.Platform)
-		}
-		assert.Equal(t, expectedPlatforms, gotPlatforms)
-	})
-
 	t.Run("desktop push instance_details carries server_version", func(t *testing.T) {
 		instances := makeDesktopInstances()
 		instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
@@ -483,47 +370,6 @@ func TestDryRun_DesktopPushEvent(t *testing.T) {
 }
 
 // ------------------------------------------------------------
-// 6. Mobile push event logic
-// ------------------------------------------------------------
-
-func TestDryRun_MobilePushEvent(t *testing.T) {
-	t.Run("mobile push uses SITE_1/2/3_URL inputs not instance_details", func(t *testing.T) {
-		instances := makeMobileInstances()
-		sha := "sha999"
-		branch := "release-8.0"
-
-		// Simulate triggerMobileE2EWorkflowForPushEvent inputs
-		inputs := map[string]interface{}{
-			"SITE_1_URL":     instances[0].URL,
-			"SITE_2_URL":     instances[1].URL,
-			"SITE_3_URL":     instances[2].URL,
-			"MOBILE_VERSION": sha,
-			"PLATFORM":       "both",
-		}
-
-		assert.Equal(t, "https://site1.test.example.com", inputs["SITE_1_URL"])
-		assert.Equal(t, "https://site2.test.example.com", inputs["SITE_2_URL"])
-		assert.Equal(t, "https://site3.test.example.com", inputs["SITE_3_URL"])
-		assert.Equal(t, sha, inputs["MOBILE_VERSION"])
-		assert.Equal(t, "both", inputs["PLATFORM"])
-		assert.NotContains(t, inputs, "instance_details",
-			"mobile push must not use instance_details")
-		_ = branch
-	})
-
-	t.Run("mobile push always tests both platforms", func(t *testing.T) {
-		// Push events (release/master) always use PLATFORM=both (no label context)
-		platform := "both"
-		assert.Equal(t, "both", platform)
-	})
-
-	t.Run("mobile push requires 3 instances", func(t *testing.T) {
-		instances := makeMobileInstances()
-		assert.Len(t, instances, 3)
-	})
-}
-
-// ------------------------------------------------------------
 // 7. Desktop CMT logic
 // ------------------------------------------------------------
 
@@ -531,23 +377,6 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 	t.Run("parses server_versions input", func(t *testing.T) {
 		versions := parseServerVersionsFromString("v11.1.0, v11.2.0, v12.0.0")
 		assert.Equal(t, []string{"v11.1.0", "v11.2.0", "v12.0.0"}, versions)
-	})
-
-	t.Run("caps server versions to 5", func(t *testing.T) {
-		versions := parseServerVersionsFromString("v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12")
-		// The cap is enforced inside handleCMTWithServerVersions (maxVersions = 5).
-		const maxVersions = 5
-		if len(versions) > maxVersions {
-			versions = versions[:maxVersions]
-		}
-		assert.Len(t, versions, maxVersions)
-	})
-
-	t.Run("1 instance per version for CMT (matrix handles parallelism)", func(t *testing.T) {
-		for _, numVersions := range []int{1, 2, 3, 5} {
-			// CMT_MATRIX cross-products environment × server; one server per version is enough
-			assert.Equal(t, numVersions, numVersions*1)
-		}
 	})
 
 	t.Run("buildDesktopCMTMatrixJSON produces correct schema", func(t *testing.T) {
@@ -581,12 +410,6 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		assert.Equal(t, "https://v2.example.com", s1["url"])
 		_, has1 := s1["latest"]
 		assert.False(t, has1, "desktop matrix must not carry the `latest` field")
-	})
-
-	t.Run("CMT dispatches compatibility-matrix-testing.yml once", func(t *testing.T) {
-		// One dispatch regardless of version count — all versions in CMT_MATRIX.server array
-		dispatchCount := 1
-		assert.Equal(t, 1, dispatchCount, "desktop CMT must dispatch exactly once")
 	})
 
 	t.Run("CMT tracking key is keyed by dispatched test run id", func(t *testing.T) {
@@ -645,13 +468,6 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		assert.Equal(t, true, s1["latest"])
 	})
 
-	t.Run("mobile CMT dispatches once not once per version", func(t *testing.T) {
-		// All versions go into CMT_MATRIX.server; compatibility-matrix-testing.yml
-		// fans them out via its matrix strategy — no per-version dispatch needed.
-		dispatchCount := 1
-		assert.Equal(t, 1, dispatchCount, "mobile CMT must dispatch exactly once")
-	})
-
 	t.Run("CMT_MATRIX uses server array not SITE_URL inputs", func(t *testing.T) {
 		versions := []string{"v11.1.0", "v11.2.0"}
 		instances := []*E2EInstance{
@@ -666,18 +482,6 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		assert.NotContains(t, jsonStr, "SITE_2_URL")
 		assert.Contains(t, jsonStr, "\"server\"")
 		assert.Contains(t, jsonStr, "\"url\"")
-	})
-
-	t.Run("mobile CMT single instance per version for matrix fan-out", func(t *testing.T) {
-		// Mobile CMT uses one server per version; compatibility-matrix-testing.yml
-		// creates one test job per server entry.
-		versions := []string{"v11.1.0", "v11.2.0", "v11.3.0"}
-		instances := []*E2EInstance{
-			{URL: "https://v1.example.com"},
-			{URL: "https://v2.example.com"},
-			{URL: "https://v3.example.com"},
-		}
-		assert.Equal(t, len(versions), len(instances), "one instance per version")
 	})
 
 	t.Run("mobile CMT marks the highest-semver entry as latest", func(t *testing.T) {
@@ -1007,16 +811,6 @@ func TestDryRun_InstanceNameLength(t *testing.T) {
 		assert.LessOrEqual(t, len(instanceName)+len(dnsDomain), 63)
 	})
 
-	t.Run("CMT single instance name sanitization replaces dots", func(t *testing.T) {
-		version := "v11.1.0"
-		// createSingleCMTInstance lowercases and replaces dots
-		sanitizedVersion := strings.ToLower(strings.ReplaceAll(version, ".", "-"))
-		assert.Equal(t, "v11-1-0", sanitizedVersion)
-
-		// Single instance suffix: no platform component (matrix handles that)
-		suffix := fmt.Sprintf("-cmt-%s", sanitizedVersion)
-		assert.Equal(t, "-cmt-v11-1-0", suffix)
-	})
 }
 
 // ------------------------------------------------------------
@@ -1455,24 +1249,6 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 		assert.Equal(t, "https://site3.test.example.com", c.Inputs["SITE_3_URL"])
 	})
 
-	t.Run("all instances in a PR run share the same resolved version", func(t *testing.T) {
-		// createMultipleE2EInstances calls resolveMattermostServerVersion() once and passes
-		// the same version to all createCloudInstallation calls.
-		resolvedVersion := "11.6.0"
-		platforms := []string{"linux", "macos", "windows"}
-		instances := make([]*E2EInstance, len(platforms))
-		for i, p := range platforms {
-			instances[i] = &E2EInstance{
-				Platform:      p,
-				ServerVersion: resolvedVersion, // same version for every instance
-			}
-		}
-		for i, inst := range instances {
-			assert.Equal(t, resolvedVersion, inst.ServerVersion,
-				"instance[%d] (platform=%s) must have the resolved version", i, inst.Platform)
-		}
-	})
-
 	t.Run("resolveMattermostServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
 		// Docker Hub tags are bare semver (e.g. "11.6.0"), NOT "v11.6.0".
 		// Verify the v-stripping produces a Docker Hub compatible string.
@@ -1492,26 +1268,6 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 // ------------------------------------------------------------
 
 func TestDryRun_CMTVersionNormalization(t *testing.T) {
-	t.Run("v-prefix stripped before instance creation", func(t *testing.T) {
-		// handleCMTWithServerVersions strips "v" from each version before provisioning.
-		// Verify that strings.TrimPrefix produces Docker Hub compatible versions.
-		inputs := []struct {
-			input string
-			want  string
-		}{
-			{"v11.0.1", "11.0.1"},
-			{"v11.1.0", "11.1.0"},
-			{"v12.0.0", "12.0.0"},
-			{"11.0.1", "11.0.1"}, // no v — unchanged
-			{"11.1.0", "11.1.0"}, // no v — unchanged
-			{"v11.6.0-rc1", "11.6.0-rc1"}, // RC: v stripped but rest preserved
-		}
-		for _, tt := range inputs {
-			got := strings.TrimPrefix(tt.input, "v")
-			assert.Equal(t, tt.want, got, "TrimPrefix(%q, 'v')", tt.input)
-		}
-	})
-
 	t.Run("comma-separated input parsed and v-stripped", func(t *testing.T) {
 		// parseServerVersionsFromString splits; the CMT loop then strips v from each.
 		raw := "v11.0.1, v11.1.0, 11.2.0"
@@ -1523,26 +1279,6 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 			stripped = append(stripped, strings.TrimPrefix(strings.TrimSpace(v), "v"))
 		}
 		assert.Equal(t, []string{"11.0.1", "11.1.0", "11.2.0"}, stripped)
-	})
-
-	t.Run("CMT instances carry stripped version in ServerVersion", func(t *testing.T) {
-		// Instances created by handleCMTWithServerVersions use the stripped version.
-		// Simulate by constructing instances as the real code would.
-		rawVersions := []string{"v11.0.1", "v11.1.0"}
-		var instances []*E2EInstance
-		for _, v := range rawVersions {
-			stripped := strings.TrimPrefix(v, "v")
-			instances = append(instances, &E2EInstance{
-				URL:           fmt.Sprintf("https://%s.test.example.com", stripped),
-				ServerVersion: stripped,
-			})
-		}
-		assert.Equal(t, "11.0.1", instances[0].ServerVersion)
-		assert.Equal(t, "11.1.0", instances[1].ServerVersion)
-		for _, inst := range instances {
-			assert.False(t, strings.HasPrefix(inst.ServerVersion, "v"),
-				"CMT instance ServerVersion must not start with 'v'")
-		}
 	})
 
 	t.Run("CMT matrix JSON contains stripped versions", func(t *testing.T) {
@@ -1576,15 +1312,6 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 		assert.Equal(t, "11.1.0", s1["version"])
 	})
 
-	t.Run("CMT versions capped at 5", func(t *testing.T) {
-		input := "v1.0.0, v2.0.0, v3.0.0, v4.0.0, v5.0.0, v6.0.0, v7.0.0, v8.0.0, v9.0.0, v10.0.0, v11.0.0, v12.0.0"
-		parsed := parseServerVersionsFromString(input)
-		const maxVersions = 5
-		if len(parsed) > maxVersions {
-			parsed = parsed[:maxVersions]
-		}
-		assert.Len(t, parsed, 5, "CMT versions must be capped at 5")
-	})
 }
 
 // ------------------------------------------------------------

@@ -36,9 +36,7 @@ type E2EInstance struct {
 	ServerVersion  string `json:"server_version"`
 }
 
-// e2eUniqueSuffix returns an 8-character random hex suffix for instance name uniqueness.
-// Uses cloudModel.NewID (crypto/rand-based UUID) truncated to 8 chars so that
-// concurrent calls always produce distinct values regardless of clock resolution.
+// e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
 func e2eUniqueSuffix() string {
 	return cloudModel.NewID()[:8]
 }
@@ -98,17 +96,12 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
-	// Snapshot the cleanup generation before provisioning begins. If handleE2ECleanup
-	// fires while the ~30 min creation is in flight, it increments this counter.
-	// We re-check below before storing instances so we never write stale entries.
+	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
 	s.e2ePRCleanupGenerationLock.Lock()
 	startGeneration := s.e2ePRCleanupGeneration[key]
 	s.e2ePRCleanupGenerationLock.Unlock()
 
-	// storeIfCurrent writes instances under both locks atomically and only if the
-	// cleanup generation hasn't advanced since startGeneration. Returns false if a
-	// concurrent handleE2ECleanup already invalidated this provisioning attempt;
-	// caller must destroy `instances` in that case to avoid leaks.
+	// storeIfCurrent atomically writes instances, but only if cleanup hasn't advanced since provisioning started.
 	storeIfCurrent := func(toStore []*E2EInstance) bool {
 		s.e2ePRCleanupGenerationLock.Lock()
 		defer s.e2ePRCleanupGenerationLock.Unlock()
@@ -121,11 +114,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return true
 	}
 
-	// Guard against duplicate webhook deliveries. The in-progress key includes
-	// the test platform so that a second mobile label with a *different* platform
-	// (e.g. E2E/Run-Android while E2E/Run-iOS is provisioning) is not incorrectly
-	// dropped — it will reuse the in-flight instances once they are stored, or
-	// create its own if they are not yet available.
+	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
 	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
 	s.e2eInProgressLock.Lock()
 	if s.e2eInProgress[inProgressKey] {
@@ -188,9 +177,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Instance creation takes ~30 min. Check if the PR was closed during that window.
-	// If so, destroy the freshly created instances — no further cleanup events will fire
-	// for a closed PR, so storing them would leak them permanently.
+	// Check if PR closed during provisioning (~30 min) — cleanup events don't fire for closed PRs.
 	prInfo, _, prErr := newGithubClient(s.Config.GithubAccessToken).PullRequests.Get(
 		context.Background(), pr.RepoOwner, pr.RepoName, pr.Number)
 	if prErr != nil {
@@ -201,8 +188,6 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// Re-check cleanup generation and store instances atomically under both locks so a
-	// concurrent handleE2ECleanup cannot slip between the check and the map write.
 	if !storeIfCurrent(instances) {
 		logger.Warn("E2E reset was requested during provisioning; discarding freshly created instances")
 		s.destroyE2EInstances(instances, logger)
@@ -225,9 +210,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.Info("Successfully triggered E2E workflow")
 }
 
-// createMultipleE2EInstances creates all platform instances in parallel.
-// Results are returned in the same order as platforms[] so that callers can rely on
-// index-based platform assignment (e.g. instances[0] = site-1 for mobile).
+// createMultipleE2EInstances creates instances in parallel; results are in platforms[] order for stable index assignment.
 func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
 	if len(platforms) == 0 {
 		return nil, fmt.Errorf("no platforms specified")
@@ -305,9 +288,7 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	return instances, nil
 }
 
-// createCloudInstallation creates a single installation via provisioner API.
-// ctx is used to cancel the polling wait so that parallel callers can abort early when a
-// sibling goroutine fails, instead of waiting up to 30 minutes per polling interval.
+// createCloudInstallation creates one installation and polls until stable. Cancelling ctx aborts the wait so parallel callers can fail fast.
 func (s *Server) createCloudInstallation(ctx context.Context, name, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("installation creation cancelled before request: %w", err)
@@ -352,10 +333,6 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		return nil, fmt.Errorf("failed to create installation: %w", err)
 	}
 
-	// cleanupCreatedInstallation is a best-effort cleanup helper used on all failure paths after
-	// CreateInstallation succeeds. Without it, the cloud installation would be permanently
-	// orphaned because it has not yet been added to the in-memory tracking map.
-	// It deletes the installation, logs any deletion error, and returns cause unchanged.
 	cleanupCreatedInstallation := func(cause error) error {
 		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
 			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to clean up partially created installation")
@@ -722,14 +699,7 @@ func (s *Server) e2ePRInstanceMaxAge() time.Duration {
 	return 24 * time.Hour
 }
 
-// cleanupStaleE2EInstances destroys aged-out E2E instances of both kinds:
-//   - non-PR instances (CMT/nightly/push) past e2eInstanceMaxAge — backstop for the primary
-//     SHA-matched completion cleanup.
-//   - PR instances past e2ePRInstanceMaxAge — PR instances have no completion-based teardown
-//     (they are deliberately kept alive for reuse), so this age cap stops long-open PRs from
-//     accumulating servers indefinitely. When a PR instance is reaped, its in-memory tracking
-//     entry is also evicted so re-applying E2E/Run provisions a fresh set instead of dispatching
-//     against a now-deleted server.
+// cleanupStaleE2EInstances reaps aged-out E2E instances: non-PR flows use e2eInstanceMaxAge, PR instances use e2ePRInstanceMaxAge (PR servers are kept alive for reuse; the cap prevents indefinite accumulation).
 func (s *Server) cleanupStaleE2EInstances() {
 	nonPRMaxAge := s.e2eInstanceMaxAge()
 	prMaxAge := s.e2ePRInstanceMaxAge()
@@ -820,10 +790,7 @@ func (s *Server) cleanupStaleE2EInstances() {
 	logger.Info("E2E instance cleanup scan complete")
 }
 
-// evictReapedPRInstances removes PR tracking entries from the in-memory map when any of their
-// servers were deleted by the periodic age scan. A PR's instances share a creation time, so the
-// whole set ages out together; removing the entry when any member is reaped ensures the reuse
-// path never hands back a partially-deleted set.
+// evictReapedPRInstances removes PR tracking entries when any member was reaped, so the reuse path never returns a partially-deleted set.
 func (s *Server) evictReapedPRInstances(reapedInstallationIDs []string, logger logrus.FieldLogger) {
 	reaped := make(map[string]bool, len(reapedInstallationIDs))
 	for _, id := range reapedInstallationIDs {
@@ -847,15 +814,7 @@ func (s *Server) evictReapedPRInstances(reapedInstallationIDs []string, logger l
 	}
 }
 
-// resolveBranchHeadSHA returns the current HEAD commit SHA of branch via the GitHub API.
-//
-// Non-PR E2E flows (push, nightly, CMT) provision instances and then dispatch the test
-// workflow with `ref: <branch>` (workflow_dispatch cannot take a commit SHA). GitHub records
-// the dispatched run's head_sha as the branch HEAD at dispatch time, which can differ from the
-// SHA that triggered provisioning if the branch advanced during the (often long) provisioning
-// window. Cleanup keys instances by SHA and matches on the completed run's head_sha, so we key
-// on the branch HEAD resolved at dispatch time to keep them aligned. Callers fall back to the
-// trigger SHA on error (the periodic age-based scan remains the backstop either way).
+// resolveBranchHeadSHA returns the branch HEAD SHA at dispatch time. Non-PR flows dispatch with ref=branch, so the run's head_sha may differ from the trigger SHA if the branch advanced during provisioning.
 func (s *Server) resolveBranchHeadSHA(owner, repoName, branch string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -953,12 +912,7 @@ func (s *Server) cmtServerVersions() []string {
 	return s.resolveCMTServerVersions()
 }
 
-// resolveCMTServerVersions auto-derives the CMT version set from the mattermost/mattermost
-// GitHub releases: the active ESR line(s) + the latest 3 stable minor lines + the current
-// release candidate, each as the latest patch of its line. ESR lines are detected from the
-// release notes ("Extended Support Release"). It is called once per CMT trigger (rare:
-// monthly schedule + occasional manual dispatch), so it fetches fresh with no caching.
-// Falls back to defaultCMTServerVersions on error or if nothing parses.
+// resolveCMTServerVersions fetches Mattermost releases and picks: all active ESR lines + latest 3 stable minors + current RC, one patch per line. Falls back to defaultCMTServerVersions on error.
 func (s *Server) resolveCMTServerVersions() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1281,14 +1235,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers the desktop E2E workflow (e2e-functional.yml) via the
-// GitHub Actions API. Cleanup is driven by the workflow_run completed event matched on the
-// commit SHA, so no tracking key is passed as an input (e2e-functional.yml does not declare
-// one, and GitHub rejects a workflow_dispatch carrying an undeclared input with a 422).
-//
-// `nightly` was previously sent on this dispatch when matterwick's nightly handler fired the
-// desktop workflow. That handler is gone; matterwick never has reason to set nightly=true any
-// more, and the downstream `nightly` input was removed from e2e-functional.yml. Don't send it.
+// dispatchDesktopE2EWorkflow triggers e2e-functional.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
 func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
@@ -1349,10 +1296,7 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 	return nil
 }
 
-// dispatchMobileE2EWorkflow triggers the mobile E2E workflow (e2e-detox-pr.yml) via the
-// GitHub Actions API. Cleanup is driven by the workflow_run completed event matched on the
-// commit SHA, so no tracking key is passed as an input (e2e-detox-pr.yml does not declare
-// one, and GitHub rejects a workflow_dispatch carrying an undeclared input with a 422).
+// dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
 func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
