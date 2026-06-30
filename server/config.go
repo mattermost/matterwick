@@ -130,17 +130,23 @@ type MatterwickConfig struct {
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
 
-	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight,
-	// scheduled CMT trigger workflow in the desktop/mobile repos. When matterwick receives
-	// a workflow_run "requested" event for this workflow it provisions one instance per
-	// version in CMTServerVersions and dispatches compatibility-matrix-testing.yml.
+	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight
+	// CMT trigger workflow in the desktop/mobile repos. Matterwick provisions instances and
+	// dispatches compatibility-matrix-testing.yml when it receives a workflow_run "requested"
+	// event for this workflow.
 	CMTTriggerWorkflowName string
+
+	// CMTTestWorkflowName is the workflow name of the actual CMT test workflow
+	// (compatibility-matrix-testing.yml). Used to distinguish CMT completions (cleanup by
+	// run ID) from regular E2E completions (cleanup by SHA).
+	CMTTestWorkflowName string
 
 	// CMTServerVersions is an OPTIONAL manual override for the CMT version set. When non-empty
 	// it is used verbatim (values must be valid Mattermost image tags: full semver, no "v"
 	// prefix, e.g. "10.11.0"). When empty (the normal case) matterwick auto-derives the set
 	// from Mattermost's GitHub releases via Server.resolveCMTServerVersions.
 	CMTServerVersions []string
+
 }
 
 // defaultCMTServerVersions is the fallback CMT version set used only when auto-resolution

@@ -17,6 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// WorkflowRunWebhookPayload is the parsed body of a workflow_run webhook event.
 type WorkflowRunWebhookPayload struct {
 	Action      string                 `json:"action"`
 	WorkflowRun WorkflowRunWithInputs  `json:"workflow_run"`
@@ -24,6 +25,7 @@ type WorkflowRunWebhookPayload struct {
 	Workflow    map[string]interface{} `json:"workflow"`
 }
 
+// WorkflowRunWithInputs is the workflow_run object extended with the workflow_dispatch inputs field.
 type WorkflowRunWithInputs struct {
 	ID         int64             `json:"id"`
 	Name       string            `json:"name"`
@@ -33,6 +35,7 @@ type WorkflowRunWithInputs struct {
 	Inputs     map[string]string `json:"inputs"`
 }
 
+// ParseWorkflowRunEventWithInputs decodes a workflow_run webhook payload from r.
 func ParseWorkflowRunEventWithInputs(data io.Reader) (*WorkflowRunWebhookPayload, error) {
 	decoder := json.NewDecoder(data)
 	var payload WorkflowRunWebhookPayload
@@ -100,7 +103,7 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 
 	// On completion: CMT keys on run id, non-CMT flows key on SHA.
 	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		if workflowName == cmtTestWorkflowName {
+		if s.Config.CMTTestWorkflowName != "" && workflowName == s.Config.CMTTestWorkflowName {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
 			s.findAndDestroyInstancesByRunID(repoName, runID, logger)
 		} else {
@@ -123,8 +126,6 @@ func (s *Server) isE2ETestWorkflow(name string) bool {
 	}
 	return false
 }
-
-const cmtTestWorkflowName = "Compatibility Matrix Testing"
 
 func cmtInstanceKey(repoName string, testRunID int64) string {
 	return fmt.Sprintf("%s-cmt-%d", repoName, testRunID)
