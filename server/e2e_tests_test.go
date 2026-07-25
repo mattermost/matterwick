@@ -208,7 +208,7 @@ func TestE2EInstanceValidation(t *testing.T) {
 		{
 			name: "Valid mobile instance",
 			instance: &E2EInstance{
-				Platform:       "site-1",
+				Platform:       "android-site-1",
 				URL:            "https://example.com",
 				InstallationID: "id-123",
 				ServerVersion:  "v11.1.0",
@@ -273,28 +273,40 @@ func TestMobileInstanceDetailsFormat(t *testing.T) {
 		description string
 	}{
 		{
-			name: "Three mobile instances (site-1, site-2, site-3)",
+			name: "Five mobile instances split by platform with shared site-3",
 			instances: []*E2EInstance{
 				{
-					Platform:       "site-1",
-					URL:            "https://site1.example.com",
+					Platform:       "android-site-1",
+					URL:            "https://android-site1.example.com",
 					InstallationID: "id-1",
 					ServerVersion:  "master",
 				},
 				{
-					Platform:       "site-2",
-					URL:            "https://site2.example.com",
+					Platform:       "android-site-2",
+					URL:            "https://android-site2.example.com",
 					InstallationID: "id-2",
+					ServerVersion:  "master",
+				},
+				{
+					Platform:       "ios-site-1",
+					URL:            "https://ios-site1.example.com",
+					InstallationID: "id-3",
+					ServerVersion:  "master",
+				},
+				{
+					Platform:       "ios-site-2",
+					URL:            "https://ios-site2.example.com",
+					InstallationID: "id-4",
 					ServerVersion:  "master",
 				},
 				{
 					Platform:       "site-3",
 					URL:            "https://site3.example.com",
-					InstallationID: "id-3",
+					InstallationID: "id-5",
 					ServerVersion:  "master",
 				},
 			},
-			description: "Mobile instances should use site-1/2/3 platform naming",
+			description: "Mobile instances should use platform-specific site naming",
 		},
 	}
 
@@ -311,10 +323,10 @@ func TestMobileInstanceDetailsFormat(t *testing.T) {
 			err = json.Unmarshal([]byte(result), &details)
 			require.NoError(t, err, "Result should be valid JSON")
 
-			assert.Equal(t, 3, len(details), "Should have 3 instances")
+			assert.Equal(t, 5, len(details), "Should have 5 instances")
 
 			// Verify platform names
-			expectedPlatforms := []string{"site-1", "site-2", "site-3"}
+			expectedPlatforms := []string{"android-site-1", "android-site-2", "ios-site-1", "ios-site-2", "site-3"}
 			for i, detail := range details {
 				assert.Equal(t, expectedPlatforms[i], detail["platform"], "Platform should match mobile naming scheme")
 			}
@@ -491,7 +503,7 @@ func TestE2EInstanceCreation(t *testing.T) {
 		},
 		{
 			name:          "Mobile instance creation",
-			platform:      "site-1",
+			platform:      "ios-site-1",
 			serverVersion: "v11.1.0",
 			description:   "Should create mobile instance with site platform and version",
 		},
@@ -595,18 +607,32 @@ func TestInstancePlatformMapping(t *testing.T) {
 			description: "Windows is desktop platform",
 		},
 		{
-			name:        "Site-1 platform",
-			platform:    "site-1",
+			name:        "Android site-1 platform",
+			platform:    "android-site-1",
 			isDesktop:   false,
 			isMobile:    true,
-			description: "site-1 is mobile platform",
+			description: "android-site-1 is mobile platform",
 		},
 		{
-			name:        "Site-2 platform",
-			platform:    "site-2",
+			name:        "Android site-2 platform",
+			platform:    "android-site-2",
 			isDesktop:   false,
 			isMobile:    true,
-			description: "site-2 is mobile platform",
+			description: "android-site-2 is mobile platform",
+		},
+		{
+			name:        "iOS site-1 platform",
+			platform:    "ios-site-1",
+			isDesktop:   false,
+			isMobile:    true,
+			description: "ios-site-1 is mobile platform",
+		},
+		{
+			name:        "iOS site-2 platform",
+			platform:    "ios-site-2",
+			isDesktop:   false,
+			isMobile:    true,
+			description: "ios-site-2 is mobile platform",
 		},
 		{
 			name:        "Site-3 platform",
@@ -620,7 +646,8 @@ func TestInstancePlatformMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			isDesktop := tt.platform == "linux" || tt.platform == "macos" || tt.platform == "windows"
-			isMobile := tt.platform == "site-1" || tt.platform == "site-2" || tt.platform == "site-3"
+			isMobile := tt.platform == "android-site-1" || tt.platform == "android-site-2" ||
+				tt.platform == "ios-site-1" || tt.platform == "ios-site-2" || tt.platform == "site-3"
 
 			assert.Equal(t, tt.isDesktop, isDesktop, tt.description+" (desktop check)")
 			assert.Equal(t, tt.isMobile, isMobile, tt.description+" (mobile check)")

@@ -144,15 +144,14 @@ type MatterwickConfig struct {
 	// CMTServerVersions is an OPTIONAL manual override for the CMT version set. When non-empty
 	// it is used verbatim (values must be valid Mattermost image tags: full semver, no "v"
 	// prefix, e.g. "10.11.0"). When empty (the normal case) matterwick auto-derives the set
-	// from Mattermost's GitHub releases via Server.resolveCMTServerVersions.
+	// from Mattermost's GitHub releases via Server.resolveCMTServerVersions (newest ESR
+	// lines + latest stable minors + current RC). Leave empty in production.
 	CMTServerVersions []string
-
 }
 
 // defaultCMTServerVersions is the fallback CMT version set used only when auto-resolution
-// fails (GitHub API error) and no manual override is configured. Kept reasonably current:
-// the active v10.11 ESR plus a recent v11 release.
-var defaultCMTServerVersions = []string{"10.11.18", "11.7.1"}
+// fails (GitHub API error) and no manual override is configured.
+var defaultCMTServerVersions = []string{"10.11.22", "11.7.7"}
 
 func findConfigFile(fileName string) string {
 	if _, err := os.Stat("/tmp/" + fileName); err == nil {

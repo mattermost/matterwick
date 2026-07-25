@@ -146,13 +146,29 @@ func makeDesktopInstances() []*E2EInstance {
 	}
 }
 
-// makeMobileInstances fabricates the 3 mobile instances (site-1/2/3).
+// makeMobileInstances fabricates the 5 platform-isolated mobile instances.
 func makeMobileInstances() []*E2EInstance {
 	return []*E2EInstance{
-		{Name: "inst-site1", Platform: "site-1", URL: "https://site1.test.example.com", InstallationID: "id-1", ServerVersion: "master"},
-		{Name: "inst-site2", Platform: "site-2", URL: "https://site2.test.example.com", InstallationID: "id-2", ServerVersion: "master"},
-		{Name: "inst-site3", Platform: "site-3", URL: "https://site3.test.example.com", InstallationID: "id-3", ServerVersion: "master"},
+		{Name: "inst-android-site1", Platform: "android-site-1", URL: "https://android-site1.test.example.com", InstallationID: "id-1", ServerVersion: "master"},
+		{Name: "inst-android-site2", Platform: "android-site-2", URL: "https://android-site2.test.example.com", InstallationID: "id-2", ServerVersion: "master"},
+		{Name: "inst-ios-site1", Platform: "ios-site-1", URL: "https://ios-site1.test.example.com", InstallationID: "id-3", ServerVersion: "master"},
+		{Name: "inst-ios-site2", Platform: "ios-site-2", URL: "https://ios-site2.test.example.com", InstallationID: "id-4", ServerVersion: "master"},
+		{Name: "inst-site3", Platform: "site-3", URL: "https://site3.test.example.com", InstallationID: "id-5", ServerVersion: "master"},
 	}
+}
+
+func makeMobileCMTInstances(versions []string) []*E2EInstance {
+	instances := make([]*E2EInstance, 0, len(versions)*len(mobileE2EPlatforms))
+	for versionIndex, version := range versions {
+		for platformIndex, platform := range mobileE2EPlatforms {
+			instances = append(instances, &E2EInstance{
+				Platform:      platform,
+				URL:           fmt.Sprintf("https://v%d-site%d.example.com", versionIndex, platformIndex+1),
+				ServerVersion: version,
+			})
+		}
+	}
+	return instances
 }
 
 // ------------------------------------------------------------
@@ -238,38 +254,65 @@ func TestDryRun_MobileDispatch(t *testing.T) {
 			platform := s.extractPlatformFromLabel(tt.label)
 			assert.Equal(t, tt.platform, platform)
 
-			// Build the inputs as triggerMobileE2EWorkflow does
-			inputs := map[string]interface{}{
-				"MOBILE_VERSION": prSha,
-				"PLATFORM":       platform,
+			ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
+			client := newTestGitHubClient(t, ghSrv)
+			pr := &model.PullRequest{
+				RepoOwner: "mattermost",
+				RepoName:  "mattermost-mobile",
+				Number:    42,
+				Ref:       prRef,
+				Sha:       prSha,
 			}
-			for i, inst := range instances {
-				inputs[fmt.Sprintf("SITE_%d_URL", i+1)] = inst.URL
-			}
+			require.NoError(t, s.triggerMobileE2EWorkflow(context.Background(), client, pr, instances, platform))
+			require.Len(t, *captures, 1)
 
-			body := map[string]interface{}{"ref": prRef, "inputs": inputs}
-			jsonBytes, err := json.Marshal(body)
-			require.NoError(t, err)
-
-			var parsed struct {
-				Ref    string                 `json:"ref"`
-				Inputs map[string]interface{} `json:"inputs"`
-			}
-			require.NoError(t, json.Unmarshal(jsonBytes, &parsed))
-
-			assert.Equal(t, prRef, parsed.Ref)
-			assert.Equal(t, tt.platform, parsed.Inputs["PLATFORM"])
-			assert.Equal(t, prSha, parsed.Inputs["MOBILE_VERSION"])
-			assert.Equal(t, "https://site1.test.example.com", parsed.Inputs["SITE_1_URL"])
-			assert.Equal(t, "https://site2.test.example.com", parsed.Inputs["SITE_2_URL"])
-			assert.Equal(t, "https://site3.test.example.com", parsed.Inputs["SITE_3_URL"])
+			capture := (*captures)[0]
+			assert.Equal(t, prRef, capture.Ref)
+			assert.Equal(t, tt.platform, capture.Inputs["PLATFORM"])
+			assert.Equal(t, prSha, capture.Inputs["MOBILE_VERSION"])
+			assert.Equal(t, "https://android-site1.test.example.com", capture.Inputs["ANDROID_SITE_1_URL"])
+			assert.Equal(t, "https://android-site2.test.example.com", capture.Inputs["ANDROID_SITE_2_URL"])
+			assert.Equal(t, "https://ios-site1.test.example.com", capture.Inputs["IOS_SITE_1_URL"])
+			assert.Equal(t, "https://ios-site2.test.example.com", capture.Inputs["IOS_SITE_2_URL"])
+			assert.Equal(t, "https://site3.test.example.com", capture.Inputs["SITE_3_URL"])
 
 			// Mobile must NOT use instance_details (desktop-only field)
-			assert.NotContains(t, parsed.Inputs, "instance_details",
+			assert.NotContains(t, capture.Inputs, "instance_details",
 				"mobile workflow must not send instance_details")
+			assert.NotContains(t, capture.Inputs, "SITE_1_URL",
+				"new Matterwick dispatches must use explicit platform URL inputs")
+			assert.NotContains(t, capture.Inputs, "SITE_2_URL",
+				"new Matterwick dispatches must use explicit platform URL inputs")
 		})
 	}
 
+}
+
+func TestDryRun_MobileTopology(t *testing.T) {
+	assert.Equal(t, []string{
+		"android-site-1",
+		"android-site-2",
+		"ios-site-1",
+		"ios-site-2",
+		"site-3",
+	}, mobileE2EPlatforms)
+	assert.Equal(t, []string{
+		"ANDROID_SITE_1_URL",
+		"ANDROID_SITE_2_URL",
+		"IOS_SITE_1_URL",
+		"IOS_SITE_2_URL",
+		"SITE_3_URL",
+	}, mobileE2EWorkflowInputKeys)
+
+	s := newDryRunServer(t, "", "mattermost")
+	err := s.triggerMobileE2EWorkflowForPushEvent(
+		"mattermost",
+		"mattermost-mobile",
+		"main",
+		"abc123",
+		makeMobileInstances()[:3],
+	)
+	require.EqualError(t, err, "mobile E2E requires 5 instances")
 }
 
 // ------------------------------------------------------------
@@ -440,10 +483,7 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 func TestDryRun_MobileCMT(t *testing.T) {
 	t.Run("buildMobileCMTMatrixJSON produces correct schema", func(t *testing.T) {
 		versions := []string{"v11.1.0", "v11.2.0"}
-		instances := []*E2EInstance{
-			{URL: "https://v1.example.com", ServerVersion: "v11.1.0"},
-			{URL: "https://v2.example.com", ServerVersion: "v11.2.0"},
-		}
+		instances := makeMobileCMTInstances(versions)
 		jsonStr, err := buildMobileCMTMatrixJSON(versions, instances)
 		require.NoError(t, err)
 
@@ -455,33 +495,43 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		require.Len(t, servers, 2)
 		s0 := servers[0].(map[string]interface{})
 		assert.Equal(t, "v11.1.0", s0["version"])
-		assert.Equal(t, "https://v1.example.com", s0["url"])
+		assert.Equal(t, "https://v0-site1.example.com", s0["android_site_1_url"])
+		assert.Equal(t, "https://v0-site2.example.com", s0["android_site_2_url"])
+		assert.Equal(t, "https://v0-site3.example.com", s0["ios_site_1_url"])
+		assert.Equal(t, "https://v0-site4.example.com", s0["ios_site_2_url"])
+		assert.Equal(t, "https://v0-site5.example.com", s0["site_3_url"])
+		assert.NotContains(t, s0, "url")
 		// Older version: `latest` is omitted entirely (cmtServer.Latest is false, omitempty).
 		_, has0 := s0["latest"]
 		assert.False(t, has0, "older mobile entries must not carry the `latest` field")
 		s1 := servers[1].(map[string]interface{})
 		assert.Equal(t, "v11.2.0", s1["version"])
-		assert.Equal(t, "https://v2.example.com", s1["url"])
+		assert.Equal(t, "https://v1-site1.example.com", s1["android_site_1_url"])
+		assert.Equal(t, "https://v1-site5.example.com", s1["site_3_url"])
 		// Highest semver gets `latest: true`. The mobile workflow uses this to decide whether
 		// to run the whole suite (latest) or just smoke (older) — that policy lives there,
 		// not in matterwick.
 		assert.Equal(t, true, s1["latest"])
 	})
 
-	t.Run("CMT_MATRIX uses server array not SITE_URL inputs", func(t *testing.T) {
+	t.Run("CMT_MATRIX carries explicit five-server topology per version", func(t *testing.T) {
 		versions := []string{"v11.1.0", "v11.2.0"}
-		instances := []*E2EInstance{
-			{URL: "https://v1.example.com", ServerVersion: "v11.1.0"},
-			{URL: "https://v2.example.com", ServerVersion: "v11.2.0"},
-		}
+		instances := makeMobileCMTInstances(versions)
 		jsonStr, err := buildMobileCMTMatrixJSON(versions, instances)
 		require.NoError(t, err)
 
-		// CMT_MATRIX must use "server" array, not the SITE_1/2/3_URL inputs used for PR runs
-		assert.NotContains(t, jsonStr, "SITE_1_URL")
-		assert.NotContains(t, jsonStr, "SITE_2_URL")
 		assert.Contains(t, jsonStr, "\"server\"")
-		assert.Contains(t, jsonStr, "\"url\"")
+		assert.Contains(t, jsonStr, "\"android_site_1_url\"")
+		assert.Contains(t, jsonStr, "\"android_site_2_url\"")
+		assert.Contains(t, jsonStr, "\"ios_site_1_url\"")
+		assert.Contains(t, jsonStr, "\"ios_site_2_url\"")
+		assert.Contains(t, jsonStr, "\"site_3_url\"")
+	})
+
+	t.Run("mobile CMT rejects partial topologies", func(t *testing.T) {
+		versions := []string{"v11.1.0", "v11.2.0"}
+		_, err := buildMobileCMTMatrixJSON(versions, makeMobileCMTInstances(versions)[:9])
+		require.EqualError(t, err, "mobile CMT requires 10 instances for 2 versions, got 9")
 	})
 
 	t.Run("mobile CMT marks the highest-semver entry as latest", func(t *testing.T) {
@@ -491,8 +541,8 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		// numbers (rc.10 > rc.2). Locking these in so the workflow's latest gate doesn't
 		// silently shift if someone tweaks the comparator.
 		cases := []struct {
-			name     string
-			versions []string
+			name          string
+			versions      []string
 			wantLatestIdx int
 		}{
 			{
@@ -523,10 +573,7 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				instances := make([]*E2EInstance, len(tc.versions))
-				for i := range tc.versions {
-					instances[i] = &E2EInstance{URL: fmt.Sprintf("https://v%d.example.com", i)}
-				}
+				instances := makeMobileCMTInstances(tc.versions)
 				jsonStr, err := buildMobileCMTMatrixJSON(tc.versions, instances)
 				require.NoError(t, err)
 				var matrix map[string]interface{}
@@ -548,10 +595,7 @@ func TestDryRun_MobileCMT(t *testing.T) {
 
 	t.Run("mobile CMT: all unparseable versions => last entry marked latest", func(t *testing.T) {
 		versions := []string{"junk", "also-junk"}
-		instances := []*E2EInstance{
-			{URL: "https://a.example.com"},
-			{URL: "https://b.example.com"},
-		}
+		instances := makeMobileCMTInstances(versions)
 		jsonStr, err := buildMobileCMTMatrixJSON(versions, instances)
 		require.NoError(t, err)
 		var matrix map[string]interface{}
@@ -602,7 +646,7 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 		delete(s.e2eInstances, key)
 		s.e2eInstancesLock.Unlock()
 
-		assert.Len(t, retrieved, 3)
+		assert.Len(t, retrieved, 5)
 
 		s.e2eInstancesLock.Lock()
 		_, exists := s.e2eInstances[key]
@@ -666,7 +710,7 @@ func TestDryRun_InstanceTracking(t *testing.T) {
 		}
 		s.e2eInstancesLock.Unlock()
 
-		assert.Len(t, collected, 6, "should collect 3 instances from each of 2 push keys")
+		assert.Len(t, collected, 10, "should collect 5 instances from each of 2 push keys")
 	})
 
 	t.Run("CMT cleanup by run id removes only the matching tracking key", func(t *testing.T) {
@@ -1213,16 +1257,9 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 	t.Run("mobile dispatch does not include MM_SERVER_VERSION", func(t *testing.T) {
 		// Drive triggerMobileE2EWorkflow so we assert the real payload, not a hand-built map.
 		s := newDryRunServer(t, "", "mattermost")
-		instances := []*E2EInstance{
-			{Name: "inst-site1", Platform: "site-1",
-				URL: "https://site1.test.example.com", InstallationID: "id-1",
-				ServerVersion: "11.6.0"},
-			{Name: "inst-site2", Platform: "site-2",
-				URL: "https://site2.test.example.com", InstallationID: "id-2",
-				ServerVersion: "11.6.0"},
-			{Name: "inst-site3", Platform: "site-3",
-				URL: "https://site3.test.example.com", InstallationID: "id-3",
-				ServerVersion: "11.6.0"},
+		instances := makeMobileInstances()
+		for _, instance := range instances {
+			instance.ServerVersion = "11.6.0"
 		}
 
 		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
@@ -1244,8 +1281,10 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 			"mobile dispatch must never include MM_SERVER_VERSION")
 		assert.NotContains(t, c.Inputs, "instance_details",
 			"mobile dispatch must never include instance_details")
-		assert.Equal(t, "https://site1.test.example.com", c.Inputs["SITE_1_URL"])
-		assert.Equal(t, "https://site2.test.example.com", c.Inputs["SITE_2_URL"])
+		assert.Equal(t, "https://android-site1.test.example.com", c.Inputs["ANDROID_SITE_1_URL"])
+		assert.Equal(t, "https://android-site2.test.example.com", c.Inputs["ANDROID_SITE_2_URL"])
+		assert.Equal(t, "https://ios-site1.test.example.com", c.Inputs["IOS_SITE_1_URL"])
+		assert.Equal(t, "https://ios-site2.test.example.com", c.Inputs["IOS_SITE_2_URL"])
 		assert.Equal(t, "https://site3.test.example.com", c.Inputs["SITE_3_URL"])
 	})
 
@@ -1320,43 +1359,54 @@ func TestDryRun_CMTVersionNormalization(t *testing.T) {
 
 func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 	// A realistic releases payload (newest first): an upcoming RC, recent stable minors,
-	// and ESR lines flagged in the body. Includes multiple patches per line and a draft.
+	// and ESR lines flagged in the body. Includes multiple patches per line, a draft, and
+	// an EOL ESR (9.11) that must not enter the matrix.
 	releasesBody := `[
 		{"tag_name":"v11.8.0-rc3","draft":false,"prerelease":true,"body":"Mattermost Platform Release 11.8.0-rc3"},
 		{"tag_name":"v11.8.0-rc2","draft":false,"prerelease":true,"body":"rc"},
 		{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2 contains fixes."},
-		{"tag_name":"v11.7.1","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.1"},
+		{"tag_name":"v11.7.0","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.0"},
 		{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
 		{"tag_name":"v11.6.3","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.3"},
 		{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"},
 		{"tag_name":"v11.99.0","draft":true,"prerelease":false,"body":"draft should be ignored"},
 		{"tag_name":"v10.11.19","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.19 contains security fixes."},
-		{"tag_name":"v10.11.18","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.18"}
+		{"tag_name":"v10.11.17","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.17"},
+		{"tag_name":"v9.11.18","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 9.11.18"}
 	]`
 
-	t.Run("auto-derives ESR + latest 3 minors + current RC, latest patch each", func(t *testing.T) {
+	t.Run("auto-derives newest 2 ESRs + latest 3 minors + current RC, latest patch each", func(t *testing.T) {
 		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
 		s := newDryRunServer(t, "", "mattermost")
 		s.githubAPIBase = srv.URL + "/"
 
 		got := s.resolveCMTServerVersions()
-		// 10.11.19 (ESR) + 11.5.7/11.6.4/11.7.2 (latest 3 minors; 11.7 also ESR) + 11.8.0-rc3 (RC),
-		// latest patch per line, v-stripped, ascending.
+		// 10.11.19 + 11.7.2 (newest 2 ESRs) + 11.5.7/11.6.4 (fill latest-3) + 11.8.0-rc3,
+		// 9.11.18 EOL ESR dropped, latest patch per line, v-stripped, ascending.
 		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, got)
 	})
 
-	t.Run("explicit config override is returned verbatim, no API call", func(t *testing.T) {
+	t.Run("cmtServerVersions uses resolve when CMTServerVersions is empty", func(t *testing.T) {
+		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+		s.Config.CMTServerVersions = nil
+
+		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, s.cmtServerVersions())
+	})
+
+	t.Run("explicit CMTServerVersions override skips resolve", func(t *testing.T) {
 		called := false
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
-			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(releasesBody))
 		}))
 		t.Cleanup(srv.Close)
 		s := newDryRunServer(t, "", "mattermost")
 		s.githubAPIBase = srv.URL + "/"
-		s.Config.CMTServerVersions = []string{"9.11.0", "10.5.0"}
+		s.Config.CMTServerVersions = []string{"10.11.22", "11.10.0-rc1"}
 
-		assert.Equal(t, []string{"9.11.0", "10.5.0"}, s.cmtServerVersions())
+		assert.Equal(t, []string{"10.11.22", "11.10.0-rc1"}, s.cmtServerVersions())
 		assert.False(t, called, "manual override must not hit the GitHub API")
 	})
 
@@ -1364,8 +1414,31 @@ func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 		srv := mockReleasesServer(t, "boom", http.StatusInternalServerError)
 		s := newDryRunServer(t, "", "mattermost")
 		s.githubAPIBase = srv.URL + "/"
+		s.Config.CMTServerVersions = nil
 
 		assert.Equal(t, defaultCMTServerVersions, s.resolveCMTServerVersions())
+		assert.Equal(t, []string{"10.11.22", "11.7.7"}, defaultCMTServerVersions)
+		assert.Equal(t, defaultCMTServerVersions, s.cmtServerVersions())
+	})
+
+	t.Run("cap prefers trailing ESR over oldest feature minor", func(t *testing.T) {
+		// 2 ESRs + 3 distinct latest minors + RC = 6 before cap; drop 11.8 (oldest non-ESR).
+		body := `[
+			{"tag_name":"v11.11.0-rc1","draft":false,"prerelease":true,"body":"rc"},
+			{"tag_name":"v11.10.0","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.10.0"},
+			{"tag_name":"v11.9.0","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.9.0"},
+			{"tag_name":"v11.8.0","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.8.0"},
+			{"tag_name":"v11.7.7","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.7"},
+			{"tag_name":"v10.11.22","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.22"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveCMTServerVersions()
+		assert.Equal(t, []string{"10.11.22", "11.7.7", "11.9.0", "11.10.0", "11.11.0-rc1"}, got)
+		assert.NotContains(t, got, "11.8.0")
+		assert.Len(t, got, maxCMTServerVersions)
 	})
 
 	t.Run("RC omitted when not newer than latest stable", func(t *testing.T) {
@@ -1522,20 +1595,20 @@ func TestShouldTriggerCMT(t *testing.T) {
 	assert.True(t, s.shouldTriggerCMT("workflow_dispatch", "release-6.2"))
 
 	// RC tag cut (primary trigger). For tag pushes head_branch is the tag name.
-	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.1"))    // desktop convention
-	assert.True(t, s.shouldTriggerCMT("push", "v2.41.0-rc.1"))   // future mobile
-	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.10"))   // multi-digit rc
-	assert.True(t, s.shouldTriggerCMT("push", "6.2.0-rc.1"))     // missing 'v' prefix is permitted
-	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc1"))     // no separator before number
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.1"))  // desktop convention
+	assert.True(t, s.shouldTriggerCMT("push", "v2.41.0-rc.1")) // future mobile
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc.10")) // multi-digit rc
+	assert.True(t, s.shouldTriggerCMT("push", "6.2.0-rc.1"))   // missing 'v' prefix is permitted
+	assert.True(t, s.shouldTriggerCMT("push", "v6.2.0-rc1"))   // no separator before number
 
 	// Release branch (defense-in-depth — kept for backwards compat / manual triggers).
 	assert.True(t, s.shouldTriggerCMT("push", "release-6.2"))
 
 	// Must NOT trigger: GA tags, betas, nightly tags, feature branches, default branch.
-	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0"))                  // GA tag — no -rc
-	assert.False(t, s.shouldTriggerCMT("push", "v1.0.22-beta"))            // pre-release but not RC
-	assert.False(t, s.shouldTriggerCMT("push", "6.3.0-nightly.20260601"))  // nightly tag
-	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0-rcabc"))            // -rc but no number
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0"))                 // GA tag — no -rc
+	assert.False(t, s.shouldTriggerCMT("push", "v1.0.22-beta"))           // pre-release but not RC
+	assert.False(t, s.shouldTriggerCMT("push", "6.3.0-nightly.20260601")) // nightly tag
+	assert.False(t, s.shouldTriggerCMT("push", "v6.2.0-rcabc"))           // -rc but no number
 	assert.False(t, s.shouldTriggerCMT("create", "feature/cool-thing"))
 	assert.False(t, s.shouldTriggerCMT("push", "main"))
 	assert.False(t, s.shouldTriggerCMT("schedule", "main"))
@@ -1554,12 +1627,12 @@ func TestIsRCTag(t *testing.T) {
 		assert.True(t, isRCTag(ref), "expected RC tag: %q", ref)
 	}
 	for _, ref := range []string{
-		"v6.2.0",                  // GA
-		"v6.2.0-rc",               // missing number
-		"v6.2.0-rcabc",            // letters after -rc
-		"v1.0.22-beta",            // not RC
-		"6.3.0-nightly.20260601",  // nightly
-		"release-6.2",             // branch
+		"v6.2.0",                 // GA
+		"v6.2.0-rc",              // missing number
+		"v6.2.0-rcabc",           // letters after -rc
+		"v1.0.22-beta",           // not RC
+		"6.3.0-nightly.20260601", // nightly
+		"release-6.2",            // branch
 		"main",
 		"",
 	} {
