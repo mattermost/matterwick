@@ -161,7 +161,7 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	if instanceType == "desktop" {
 		platforms = []string{"linux", "macos", "windows"}
 	} else {
-		platforms = []string{"site-1", "site-2", "site-3"}
+		platforms = mobileE2EPlatforms
 	}
 
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -295,22 +295,29 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		"branch": branch,
 	})
 
-	if len(instances) < 3 {
-		logger.Errorf("Mobile E2E requires 3 instances, got %d", len(instances))
-		return fmt.Errorf("mobile E2E requires 3 instances")
+	if len(instances) != len(mobileE2EPlatforms) {
+		logger.Errorf("Mobile E2E requires %d instances, got %d", len(mobileE2EPlatforms), len(instances))
+		return fmt.Errorf("mobile E2E requires %d instances", len(mobileE2EPlatforms))
+	}
+
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
 	}
 
 	logger.WithFields(logrus.Fields{
-		"site_1_url": instances[0].URL,
-		"site_2_url": instances[1].URL,
-		"site_3_url": instances[2].URL,
+		"android_site_1_url": mobileInputs["ANDROID_SITE_1_URL"],
+		"android_site_2_url": mobileInputs["ANDROID_SITE_2_URL"],
+		"ios_site_1_url":     mobileInputs["IOS_SITE_1_URL"],
+		"ios_site_2_url":     mobileInputs["IOS_SITE_2_URL"],
+		"site_3_url":         mobileInputs["SITE_3_URL"],
 	}).Debug("Triggering mobile E2E workflow for push event")
 
 	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
 	// removed), so runType is always MASTER for mobile push events.
 	return s.dispatchMobileE2EWorkflow(
 		repoOwner, repoName, branch, sha,
-		instances[0].URL, instances[1].URL, instances[2].URL,
+		instances,
 		"both", // push events always test both iOS and Android
 		"MASTER",
 	)

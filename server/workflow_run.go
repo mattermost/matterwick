@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -300,14 +301,34 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 	s.handleCMTWithServerVersions(owner, repoName, instanceType, branch, sha, versions, runID, logger)
 }
 
-// handleCMTWithServerVersions orchestrates CMT testing: creates one instance per server
-// version, builds the CMT_MATRIX JSON, and dispatches compatibility-matrix-testing.yml once.
+// capCMTServerVersions keeps at most maxCMTServerVersions entries, preferring the
+// newest parseable semvers. Copies the input so Config.CMTServerVersions is not mutated.
+func capCMTServerVersions(serverVersions []string) []string {
+	if len(serverVersions) <= maxCMTServerVersions {
+		return serverVersions
+	}
+	sorted := append([]string(nil), serverVersions...)
+	sort.Slice(sorted, func(i, j int) bool {
+		vi, oki := parseCMTVersion(sorted[i])
+		vj, okj := parseCMTVersion(sorted[j])
+		if oki != okj {
+			return !oki // unparseable first so the newest tail keeps valid versions
+		}
+		if !oki {
+			return sorted[i] < sorted[j]
+		}
+		return vi.less(vj)
+	})
+	return sorted[len(sorted)-maxCMTServerVersions:]
+}
+
+// handleCMTWithServerVersions orchestrates CMT testing and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
-	// Cap at 5 — also enforced by resolveCMTServerVersions, but Config.CMTServerVersions can bypass that.
-	const maxVersions = 5
-	if len(serverVersions) > maxVersions {
-		logger.Warnf("Capping server versions from %d to %d", len(serverVersions), maxVersions)
-		serverVersions = serverVersions[:maxVersions]
+	// Cap at maxCMTServerVersions. Auto-resolve already enforces this with ESR
+	// preference; this is a backstop for a mis-set Config.CMTServerVersions override.
+	if len(serverVersions) > maxCMTServerVersions {
+		logger.Warnf("Capping server versions from %d to %d (keeping newest)", len(serverVersions), maxCMTServerVersions)
+		serverVersions = capCMTServerVersions(serverVersions)
 	}
 
 	logger = logger.WithFields(logrus.Fields{
@@ -330,16 +351,37 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		// Docker Hub tags use bare semver (e.g. "11.6.0"), not "v11.6.0".
 		version = strings.TrimPrefix(version, "v")
 
-		logger.WithField("version", version).Info("Creating CMT instance for server version")
+		logger.WithField("version", version).Info("Creating CMT instances for server version")
 
-		instance, err := s.createSingleCMTInstance(repoName, instanceType, version, logger)
-		if err != nil {
-			logger.WithError(err).Errorf("Failed to create instance for version %s; rolling back partial CMT matrix", version)
-			s.destroyE2EInstances(allInstances, logger)
+		var versionInstances []*E2EInstance
+		if instanceType == "mobile" {
+			var err error
+			versionInstances, err = s.createMobileCMTInstances(context.Background(), repoName, version, logger)
+			if err != nil {
+				logger.WithError(err).Errorf("Failed to create topology for version %s; rolling back partial CMT matrix", version)
+				s.destroyE2EInstances(allInstances, logger)
+				return
+			}
+		} else {
+			instance, err := s.createSingleCMTInstance(context.Background(), repoName, instanceType, version, "", logger)
+			if err != nil {
+				logger.WithError(err).Errorf("Failed to create instance for version %s; rolling back partial CMT matrix", version)
+				s.destroyE2EInstances(allInstances, logger)
+				return
+			}
+			versionInstances = []*E2EInstance{instance}
+		}
+		expectedInstances := 1
+		if instanceType == "mobile" {
+			expectedInstances = len(mobileE2EPlatforms)
+		}
+		if len(versionInstances) != expectedInstances {
+			logger.Errorf("Failed to create complete CMT topology for version %s; rolling back partial CMT matrix", version)
+			s.destroyE2EInstances(append(allInstances, versionInstances...), logger)
 			return
 		}
 
-		allInstances = append(allInstances, instance)
+		allInstances = append(allInstances, versionInstances...)
 		validVersions = append(validVersions, version)
 	}
 
@@ -395,24 +437,81 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 }
 
 // createSingleCMTInstance creates one Mattermost cloud instance for a CMT server version.
-// CMT only needs one server per version — the test matrix handles platform parallelism.
-func (s *Server) createSingleCMTInstance(repoName, instanceType, version string, logger logrus.FieldLogger) (*E2EInstance, error) {
-	// Name format: {type}-{version}-{hex6}
+func (s *Server) createSingleCMTInstance(ctx context.Context, repoName, instanceType, version, platform string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	sanitizedVersion := sanitizeForDNS(version)
 	uid := e2eUniqueSuffix()
-	name := e2eInstanceName(s.Config.DNSNameTestServer, instanceType, sanitizedVersion, uid)
+	nameParts := []string{instanceType, sanitizedVersion}
+	if platform != "" {
+		nameParts = append(nameParts, platform)
+	}
+	nameParts = append(nameParts, uid)
+	name := e2eInstanceName(s.Config.DNSNameTestServer, nameParts...)
 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	return s.createCloudInstallation(context.Background(), name, version, username, password, instanceType, logger)
+	instance, err := s.createCloudInstallation(ctx, name, version, username, password, instanceType, logger)
+	if instance != nil {
+		instance.Platform = platform
+	}
+	return instance, err
 }
 
-// cmtServer is one entry in CMT_MATRIX. Latest is set on the highest-semver entry (mobile only); omitempty keeps it absent from desktop JSON.
+// createMobileCMTInstances creates one five-server topology for a server version.
+func (s *Server) createMobileCMTInstances(ctx context.Context, repoName, version string, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type result struct {
+		instance *E2EInstance
+		err      error
+	}
+	results := make([]result, len(mobileE2EPlatforms))
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	for i, platform := range mobileE2EPlatforms {
+		wg.Add(1)
+		go func(idx int, platform string) {
+			defer wg.Done()
+			instance, err := s.createSingleCMTInstance(ctx, repoName, "mobile", version, platform, logger)
+			results[idx] = result{instance: instance, err: err}
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				errMu.Unlock()
+			}
+		}(i, platform)
+	}
+	wg.Wait()
+
+	instances := make([]*E2EInstance, 0, len(results))
+	for _, result := range results {
+		if result.err != nil {
+			continue
+		}
+		instances = append(instances, result.instance)
+	}
+	if firstErr != nil {
+		s.destroyE2EInstances(instances, logger)
+		return nil, firstErr
+	}
+	return instances, nil
+}
+
+// cmtServer is one entry in CMT_MATRIX. Mobile entries carry a five-server topology.
 type cmtServer struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	Latest  bool   `json:"latest,omitempty"`
+	Version         string `json:"version"`
+	URL             string `json:"url,omitempty"`
+	AndroidSite1URL string `json:"android_site_1_url,omitempty"`
+	AndroidSite2URL string `json:"android_site_2_url,omitempty"`
+	IOSSite1URL     string `json:"ios_site_1_url,omitempty"`
+	IOSSite2URL     string `json:"ios_site_2_url,omitempty"`
+	Site3URL        string `json:"site_3_url,omitempty"`
+	Latest          bool   `json:"latest,omitempty"`
 }
 
 // buildDesktopCMTMatrixJSON builds CMT_MATRIX for compatibility-matrix-testing.yml: 3 fixed environment runners × N server versions.
@@ -447,7 +546,7 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 	return string(b), nil
 }
 
-// buildMobileCMTMatrixJSON builds CMT_MATRIX for compatibility-matrix-testing.yml: N server entries, highest-semver marked latest:true.
+// buildMobileCMTMatrixJSON builds one five-server topology per version, with the highest semver marked latest:true.
 func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (string, error) {
 	type mobileCMTMatrix struct {
 		Server []cmtServer `json:"server"`
@@ -456,10 +555,12 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 	// Mark the highest-parseable version as latest; fall back to last entry if none parse.
 	latestIdx := -1
 	var latestVer cmtVersion
+	requiredInstances := len(versions) * len(mobileE2EPlatforms)
+	if len(instances) != requiredInstances {
+		return "", fmt.Errorf("mobile CMT requires %d instances for %d versions, got %d", requiredInstances, len(versions), len(instances))
+	}
+
 	for i, version := range versions {
-		if i >= len(instances) {
-			break
-		}
 		v, ok := parseCMTVersion(version)
 		if !ok {
 			continue
@@ -475,10 +576,30 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 
 	var matrix mobileCMTMatrix
 	for i, version := range versions {
-		if i >= len(instances) {
-			break
+		entry := cmtServer{Version: version}
+		block := instances[i*len(mobileE2EPlatforms) : (i+1)*len(mobileE2EPlatforms)]
+		platformToURL := make(map[string]string, len(block))
+		for _, inst := range block {
+			platformToURL[inst.Platform] = inst.URL
 		}
-		entry := cmtServer{Version: version, URL: instances[i].URL}
+		for _, platform := range mobileE2EPlatforms {
+			url, ok := platformToURL[platform]
+			if !ok {
+				return "", fmt.Errorf("mobile CMT missing instance for platform %s in version %s", platform, version)
+			}
+			switch platform {
+			case "android-site-1":
+				entry.AndroidSite1URL = url
+			case "android-site-2":
+				entry.AndroidSite2URL = url
+			case "ios-site-1":
+				entry.IOSSite1URL = url
+			case "ios-site-2":
+				entry.IOSSite2URL = url
+			case "site-3":
+				entry.Site3URL = url
+			}
+		}
 		if i == latestIdx {
 			entry.Latest = true
 		}
@@ -638,4 +759,3 @@ func (s *Server) pollDispatchedWorkflowRun(repoOwner, repoName, workflowFile, br
 
 	return 0, fmt.Errorf("timed out polling for dispatched workflow run on branch %s", branch)
 }
-

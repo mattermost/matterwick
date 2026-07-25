@@ -583,3 +583,57 @@ func TestVersionParsingWithVariations(t *testing.T) {
 		})
 	}
 }
+
+func TestCapCMTServerVersions(t *testing.T) {
+	t.Run("returns input unchanged when at or under cap", func(t *testing.T) {
+		in := []string{"10.11.22", "11.7.7", "11.9.0"}
+		got := capCMTServerVersions(in)
+		if len(got) != len(in) {
+			t.Fatalf("expected %d, got %d", len(in), len(got))
+		}
+		for i := range in {
+			if got[i] != in[i] {
+				t.Errorf("index %d: expected %s, got %s", i, in[i], got[i])
+			}
+		}
+	})
+
+	t.Run("keeps newest semvers regardless of input order", func(t *testing.T) {
+		in := []string{"11.8.0", "10.11.22", "11.10.0", "11.7.7", "11.9.0", "11.11.0-rc1"}
+		got := capCMTServerVersions(in)
+		want := []string{"11.7.7", "11.8.0", "11.9.0", "11.10.0", "11.11.0-rc1"}
+		if len(got) != len(want) {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("index %d: expected %s, got %s", i, want[i], got[i])
+			}
+		}
+	})
+
+	t.Run("does not mutate input slice", func(t *testing.T) {
+		in := []string{"11.8.0", "10.11.22", "11.10.0", "11.7.7", "11.9.0", "11.11.0-rc1"}
+		orig := append([]string(nil), in...)
+		_ = capCMTServerVersions(in)
+		for i := range orig {
+			if in[i] != orig[i] {
+				t.Fatalf("input mutated at %d: want %s, got %s", i, orig[i], in[i])
+			}
+		}
+	})
+
+	t.Run("drops unparseable values when mixed with valid versions", func(t *testing.T) {
+		in := []string{"not-a-version", "11.10.0", "also-bad", "11.9.0", "11.8.0", "11.7.7", "10.11.22"}
+		got := capCMTServerVersions(in)
+		want := []string{"10.11.22", "11.7.7", "11.8.0", "11.9.0", "11.10.0"}
+		if len(got) != len(want) {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("index %d: expected %s, got %s", i, want[i], got[i])
+			}
+		}
+	})
+}

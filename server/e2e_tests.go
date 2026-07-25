@@ -26,14 +26,52 @@ import (
 // E2EInstance represents a single E2E test server instance
 // Note: Platform field has different meanings for desktop vs mobile:
 //   - Desktop: Platform = OS runner (linux/macos/windows) where tests execute
-//   - Mobile: Platform = instance identifier (site-1/site-2/site-3) for the test server
+//   - Mobile: Platform = platform/site identifier for the test server
 type E2EInstance struct {
 	Name           string `json:"name"`
-	Platform       string `json:"platform"` // Desktop: linux/macos/windows (OS runner), Mobile: site-1/site-2/site-3 (instance ID)
+	Platform       string `json:"platform"` // Desktop: linux/macos/windows (OS runner), Mobile: platform/site instance ID
 	Runner         string `json:"runner"`   // For desktop only: GitHub Actions runner label
 	URL            string `json:"url"`
 	InstallationID string `json:"installation_id"`
 	ServerVersion  string `json:"server_version"`
+}
+
+var mobileE2EPlatforms = []string{
+	"android-site-1",
+	"android-site-2",
+	"ios-site-1",
+	"ios-site-2",
+	"site-3",
+}
+
+var mobileE2EWorkflowInputKeys = []string{
+	"ANDROID_SITE_1_URL",
+	"ANDROID_SITE_2_URL",
+	"IOS_SITE_1_URL",
+	"IOS_SITE_2_URL",
+	"SITE_3_URL",
+}
+
+// buildMobileURLInputs maps each mobile instance's Platform to its workflow input URL.
+// It validates that exactly the canonical platforms are present and pairs them with
+// mobileE2EWorkflowInputKeys so callers cannot drift from the canonical order.
+func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
+	if len(instances) != len(mobileE2EPlatforms) {
+		return nil, fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
+	}
+	platformToURL := make(map[string]string, len(instances))
+	for _, inst := range instances {
+		platformToURL[inst.Platform] = inst.URL
+	}
+	inputs := make(map[string]string, len(mobileE2EWorkflowInputKeys))
+	for i, platform := range mobileE2EPlatforms {
+		url, ok := platformToURL[platform]
+		if !ok {
+			return nil, fmt.Errorf("mobile E2E missing instance for platform %s", platform)
+		}
+		inputs[mobileE2EWorkflowInputKeys[i]] = url
+	}
+	return inputs, nil
 }
 
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
@@ -85,8 +123,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		testPlatform = "all"
 	} else if strings.Contains(pr.RepoName, "mobile") {
 		instanceType = "mobile"
-		// Always create all 3 mobile instances (workflow expects SITE_1/2/3_URL).
-		platforms = []string{"site-1", "site-2", "site-3"}
+		platforms = mobileE2EPlatforms
 		testPlatform = s.extractPlatformFromLabel(label)
 		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
 	} else {
@@ -309,6 +346,29 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		"MM_RATELIMITSETTINGS_VARYBYREMOTEADDR":              cloudModel.EnvVar{Value: "false"},
 		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
 		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
+	}
+	if instanceType == "mobile" {
+		envVars["MM_FEATUREFLAGS_CHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_FEATUREFLAGS_MMBLOCKSENABLED"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_FILESETTINGS_ENABLEPUBLICLINK"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_PASSWORDSETTINGS_MINIMUMLENGTH"] = cloudModel.EnvVar{Value: "8"}
+		envVars["MM_PLUGINSETTINGS_ENABLEMARKETPLACE"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_PLUGINSETTINGS_ENABLEREMOTEMARKETPLACE"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_PLUGINSETTINGS_ENABLEUPLOADS"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_RATELIMITSETTINGS_MAXBURST"] = cloudModel.EnvVar{Value: "50000"}
+		envVars["MM_RATELIMITSETTINGS_PERSEC"] = cloudModel.EnvVar{Value: "10000"}
+		envVars["MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_SERVICESETTINGS_MAXIMUMACTIVEUSERS"] = cloudModel.EnvVar{Value: "999999"}
+		envVars["MM_SERVICESETTINGS_MAXIMUMLOGINATTEMPTS"] = cloudModel.EnvVar{Value: "999999"}
+		envVars["MM_SERVICESETTINGS_SESSIONLENGTHWEBINHOURS"] = cloudModel.EnvVar{Value: "4320"}
+		envVars["MM_SUPPORTSETTINGS_HELPLINK"] = cloudModel.EnvVar{Value: "https://docs.mattermost.com/"}
+		envVars["MM_SUPPORTSETTINGS_REPORTAPROBLEMTYPE"] = cloudModel.EnvVar{Value: "default"}
+		envVars["MM_TEAMSETTINGS_MAXUSERSPERTEAM"] = cloudModel.EnvVar{Value: "999999"}
+		envVars["MM_EXPERIMENTALSETTINGS_ENABLEWATERMARK"] = cloudModel.EnvVar{Value: "false"}
+		envVars["MM_EXPERIMENTALSETTINGS_RESTRICTSYSTEMADMIN"] = cloudModel.EnvVar{Value: "false"}
 	}
 
 	installationRequest := &cloudModel.CreateInstallationRequest{
@@ -558,20 +618,23 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		"testPlatform": testPlatform, // ios/android/both
 	})
 
-	if len(instances) != 3 {
-		return fmt.Errorf("mobile E2E requires exactly 3 instances, got %d", len(instances))
+	if len(instances) != len(mobileE2EPlatforms) {
+		return fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
 	}
 
-	// Build workflow inputs dynamically based on the provided instances
+	// Build workflow inputs keyed by Platform so dispatch order is independent of slice order.
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
+	}
+
 	inputs := map[string]interface{}{
 		"MOBILE_VERSION": pr.Sha,
 		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
 		"pr_number":      fmt.Sprintf("%d", pr.Number),
 	}
-	for i, inst := range instances {
-		// SITE_1_URL, SITE_2_URL, SITE_3_URL
-		siteKey := fmt.Sprintf("SITE_%d_URL", i+1)
-		inputs[siteKey] = inst.URL
+	for inputKey, url := range mobileInputs {
+		inputs[inputKey] = url
 	}
 
 	// Use the github REST API to trigger the workflow_dispatch event
@@ -844,12 +907,14 @@ func (s *Server) resolveBranchHeadSHA(owner, repoName, branch string) (string, e
 
 // cmtVersion is a parsed Mattermost release version: major.minor.patch with an optional
 // release-candidate number. raw is the bare-semver string passed to the cloud provisioner
-// (e.g. "11.7.1" or "11.8.0-rc3").
+// (e.g. "10.11.22" or "11.10.0-rc1").
 type cmtVersion struct {
 	major, minor, patch int
 	rc                  int // 0 = stable, >0 = -rcN
 	raw                 string
 }
+
+type cmtMinorKey struct{ major, minor int }
 
 // parseCMTVersion parses "vX.Y.Z" or "vX.Y.Z-rcN" (the leading "v" is optional). It returns
 // ok=false for anything else (other prerelease suffixes like -beta/-alpha are ignored for CMT).
@@ -902,9 +967,12 @@ func (a cmtVersion) less(b cmtVersion) bool {
 	return ar < br
 }
 
+const maxCMTServerVersions = 5
+const maxCMTESRLines = 2 // current + trailing ESR; older body-flagged ESRs are treated as EOL
+
 // cmtServerVersions returns the version set CMT runs against. An explicit, non-empty
-// Config.CMTServerVersions is used verbatim (manual override / pin); otherwise the set is
-// auto-derived from the Mattermost GitHub releases.
+// Config.CMTServerVersions is used verbatim (manual override / pin). Otherwise the set is
+// auto-derived from Mattermost GitHub releases. Shared by mobile and desktop CMT triggers.
 func (s *Server) cmtServerVersions() []string {
 	if len(s.Config.CMTServerVersions) > 0 {
 		return s.Config.CMTServerVersions
@@ -912,7 +980,10 @@ func (s *Server) cmtServerVersions() []string {
 	return s.resolveCMTServerVersions()
 }
 
-// resolveCMTServerVersions fetches Mattermost releases and picks: all active ESR lines + latest 3 stable minors + current RC, one patch per line. Falls back to defaultCMTServerVersions on error.
+// resolveCMTServerVersions fetches Mattermost releases and picks: the newest
+// maxCMTESRLines ESR lines (body-string "extended support release") + latest 3 stable
+// minors + current RC, one patch per line. Only used when Config.CMTServerVersions is
+// empty. Falls back to defaultCMTServerVersions on error.
 func (s *Server) resolveCMTServerVersions() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -954,9 +1025,8 @@ func (s *Server) resolveCMTServerVersions() []string {
 		}
 	}
 
-	type minorKey struct{ major, minor int }
-	latestStable := map[minorKey]cmtVersion{}
-	esrMinors := map[minorKey]bool{}
+	latestStable := map[cmtMinorKey]cmtVersion{}
+	esrMinors := map[cmtMinorKey]bool{}
 	var bestRC cmtVersion
 	haveRC := false
 
@@ -968,7 +1038,7 @@ func (s *Server) resolveCMTServerVersions() []string {
 		if !ok {
 			continue
 		}
-		key := minorKey{v.major, v.minor}
+		key := cmtMinorKey{v.major, v.minor}
 		if v.rc > 0 {
 			if !haveRC || bestRC.less(v) {
 				bestRC = v
@@ -996,14 +1066,25 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 	sort.Slice(minors, func(i, j int) bool { return minors[j].less(minors[i]) })
 
-	selected := map[minorKey]cmtVersion{}
+	selected := map[cmtMinorKey]cmtVersion{}
 	for i := 0; i < len(minors) && i < 3; i++ { // latest 3 stable minor lines
-		selected[minorKey{minors[i].major, minors[i].minor}] = minors[i]
+		selected[cmtMinorKey{minors[i].major, minors[i].minor}] = minors[i]
 	}
-	for k := range esrMinors { // active ESR line(s)
+	// Keep only the newest maxCMTESRLines ESR minors (current + trailing). Older lines
+	// still carry "extended support release" in historical GitHub release bodies and
+	// would otherwise flood the matrix (9.11 / 10.5 false positives after EOS).
+	esrChosen := make([]cmtVersion, 0, len(esrMinors))
+	for k := range esrMinors {
 		if v, ok := latestStable[k]; ok {
-			selected[k] = v
+			esrChosen = append(esrChosen, v)
 		}
+	}
+	sort.Slice(esrChosen, func(i, j int) bool { return esrChosen[j].less(esrChosen[i]) }) // newest first
+	keptESR := map[cmtMinorKey]bool{}
+	for i := 0; i < len(esrChosen) && i < maxCMTESRLines; i++ {
+		k := cmtMinorKey{esrChosen[i].major, esrChosen[i].minor}
+		selected[k] = esrChosen[i]
+		keptESR[k] = true
 	}
 
 	chosen := make([]cmtVersion, 0, len(selected)+1)
@@ -1016,14 +1097,10 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) }) // ascending
 
-	// Cap at 5 versions to bound provisioning cost and matrix wall-clock: latest RC
-	// (when present) + up to 4 previous lines. ESR-aware selection above may pick
-	// more if a release window has multiple active ESRs; in that case we keep the
-	// newest 5 and drop the oldest entries (typically the older ESR line) — surfaces
-	// in the [resolveCMTServerVersions] log line for the operator.
-	const maxVersions = 5
-	if len(chosen) > maxVersions {
-		chosen = chosen[len(chosen)-maxVersions:] // keep the newest if over the cap
+	// Cap at maxCMTServerVersions. Prefer kept ESR lines over older feature minors so the
+	// trailing ESR is not dropped when latest-3 + 2 ESRs + RC exceeds the cap.
+	if len(chosen) > maxCMTServerVersions {
+		chosen = capCMTVersionsPreferringESR(chosen, keptESR, maxCMTServerVersions)
 	}
 
 	versions := make([]string, 0, len(chosen))
@@ -1032,6 +1109,35 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 	s.Logger.WithField("versions", versions).Info("[resolveCMTServerVersions] Auto-derived CMT server version set")
 	return versions
+}
+
+// capCMTVersionsPreferringESR keeps at most maxN versions from an ascending list, dropping
+// oldest non-ESR entries first. If only ESR lines remain and we're still over, drop the
+// oldest ESR. RC counts as non-ESR but is usually newest so survives.
+func capCMTVersionsPreferringESR(chosen []cmtVersion, esrMinors map[cmtMinorKey]bool, maxN int) []cmtVersion {
+	if len(chosen) <= maxN {
+		return chosen
+	}
+
+	isESR := func(v cmtVersion) bool {
+		return v.rc == 0 && esrMinors[cmtMinorKey{v.major, v.minor}]
+	}
+
+	kept := append([]cmtVersion(nil), chosen...)
+	for len(kept) > maxN {
+		dropIdx := -1
+		for i, v := range kept {
+			if !isESR(v) {
+				dropIdx = i
+				break
+			}
+		}
+		if dropIdx < 0 {
+			dropIdx = 0
+		}
+		kept = append(kept[:dropIdx], kept[dropIdx+1:]...)
+	}
+	return kept
 }
 
 // destroyE2EInstances destroys all given E2E instances
@@ -1297,9 +1403,18 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 }
 
 // dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
-func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1URL, site2URL, site3URL, platform, runType string) error {
+func (s *Server) dispatchMobileE2EWorkflow(
+	repoOwner, repoName, ref, sha string,
+	instances []*E2EInstance,
+	platform, runType string,
+) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
+
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
+	}
 
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo": repoName,
@@ -1308,12 +1423,12 @@ func (s *Server) dispatchMobileE2EWorkflow(repoOwner, repoName, ref, sha, site1U
 
 	// Build the workflow dispatch request
 	workflowInputs := map[string]interface{}{
-		"SITE_1_URL":     site1URL,
-		"SITE_2_URL":     site2URL,
-		"SITE_3_URL":     site3URL,
 		"MOBILE_VERSION": sha,
 		"PLATFORM":       platform,
 		"run_type":       runType,
+	}
+	for inputKey, url := range mobileInputs {
+		workflowInputs[inputKey] = url
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
