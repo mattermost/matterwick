@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -300,14 +301,34 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 	s.handleCMTWithServerVersions(owner, repoName, instanceType, branch, sha, versions, runID, logger)
 }
 
+// capCMTServerVersions keeps at most maxCMTServerVersions entries, preferring the
+// newest parseable semvers. Copies the input so Config.CMTServerVersions is not mutated.
+func capCMTServerVersions(serverVersions []string) []string {
+	if len(serverVersions) <= maxCMTServerVersions {
+		return serverVersions
+	}
+	sorted := append([]string(nil), serverVersions...)
+	sort.Slice(sorted, func(i, j int) bool {
+		vi, oki := parseCMTVersion(sorted[i])
+		vj, okj := parseCMTVersion(sorted[j])
+		if oki != okj {
+			return !oki // unparseable first so the newest tail keeps valid versions
+		}
+		if !oki {
+			return sorted[i] < sorted[j]
+		}
+		return vi.less(vj)
+	})
+	return sorted[len(sorted)-maxCMTServerVersions:]
+}
+
 // handleCMTWithServerVersions orchestrates CMT testing and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
 	// Cap at maxCMTServerVersions. Auto-resolve already enforces this with ESR
 	// preference; this is a backstop for a mis-set Config.CMTServerVersions override.
-	// Keep the newest (tail) entries, since the matrix is normally sorted ascending.
 	if len(serverVersions) > maxCMTServerVersions {
 		logger.Warnf("Capping server versions from %d to %d (keeping newest)", len(serverVersions), maxCMTServerVersions)
-		serverVersions = serverVersions[len(serverVersions)-maxCMTServerVersions:]
+		serverVersions = capCMTServerVersions(serverVersions)
 	}
 
 	logger = logger.WithFields(logrus.Fields{
