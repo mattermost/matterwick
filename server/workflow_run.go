@@ -576,14 +576,29 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 
 	var matrix mobileCMTMatrix
 	for i, version := range versions {
-		offset := i * len(mobileE2EPlatforms)
-		entry := cmtServer{
-			Version:         version,
-			AndroidSite1URL: instances[offset].URL,
-			AndroidSite2URL: instances[offset+1].URL,
-			IOSSite1URL:     instances[offset+2].URL,
-			IOSSite2URL:     instances[offset+3].URL,
-			Site3URL:        instances[offset+4].URL,
+		entry := cmtServer{Version: version}
+		block := instances[i*len(mobileE2EPlatforms) : (i+1)*len(mobileE2EPlatforms)]
+		platformToURL := make(map[string]string, len(block))
+		for _, inst := range block {
+			platformToURL[inst.Platform] = inst.URL
+		}
+		for _, platform := range mobileE2EPlatforms {
+			url, ok := platformToURL[platform]
+			if !ok {
+				return "", fmt.Errorf("mobile CMT missing instance for platform %s in version %s", platform, version)
+			}
+			switch platform {
+			case "android-site-1":
+				entry.AndroidSite1URL = url
+			case "android-site-2":
+				entry.AndroidSite2URL = url
+			case "ios-site-1":
+				entry.IOSSite1URL = url
+			case "ios-site-2":
+				entry.IOSSite2URL = url
+			case "site-3":
+				entry.Site3URL = url
+			}
 		}
 		if i == latestIdx {
 			entry.Latest = true

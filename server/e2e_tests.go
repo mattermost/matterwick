@@ -52,6 +52,28 @@ var mobileE2EWorkflowInputKeys = []string{
 	"SITE_3_URL",
 }
 
+// buildMobileURLInputs maps each mobile instance's Platform to its workflow input URL.
+// It validates that exactly the canonical platforms are present and pairs them with
+// mobileE2EWorkflowInputKeys so callers cannot drift from the canonical order.
+func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
+	if len(instances) != len(mobileE2EPlatforms) {
+		return nil, fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
+	}
+	platformToURL := make(map[string]string, len(instances))
+	for _, inst := range instances {
+		platformToURL[inst.Platform] = inst.URL
+	}
+	inputs := make(map[string]string, len(mobileE2EWorkflowInputKeys))
+	for i, platform := range mobileE2EPlatforms {
+		url, ok := platformToURL[platform]
+		if !ok {
+			return nil, fmt.Errorf("mobile E2E missing instance for platform %s", platform)
+		}
+		inputs[mobileE2EWorkflowInputKeys[i]] = url
+	}
+	return inputs, nil
+}
+
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
 func e2eUniqueSuffix() string {
 	return cloudModel.NewID()[:8]
@@ -600,14 +622,19 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		return fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
 	}
 
-	// Build workflow inputs dynamically based on the provided instances
+	// Build workflow inputs keyed by Platform so dispatch order is independent of slice order.
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
+	}
+
 	inputs := map[string]interface{}{
 		"MOBILE_VERSION": pr.Sha,
 		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
 		"pr_number":      fmt.Sprintf("%d", pr.Number),
 	}
-	for i, inputKey := range mobileE2EWorkflowInputKeys {
-		inputs[inputKey] = instances[i].URL
+	for inputKey, url := range mobileInputs {
+		inputs[inputKey] = url
 	}
 
 	// Use the github REST API to trigger the workflow_dispatch event
@@ -1378,11 +1405,16 @@ func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, insta
 // dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
 func (s *Server) dispatchMobileE2EWorkflow(
 	repoOwner, repoName, ref, sha string,
-	androidSite1URL, androidSite2URL, iosSite1URL, iosSite2URL, site3URL string,
+	instances []*E2EInstance,
 	platform, runType string,
 ) error {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
+
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
+	}
 
 	logger := s.Logger.WithFields(logrus.Fields{
 		"repo": repoName,
@@ -1391,14 +1423,12 @@ func (s *Server) dispatchMobileE2EWorkflow(
 
 	// Build the workflow dispatch request
 	workflowInputs := map[string]interface{}{
-		"ANDROID_SITE_1_URL": androidSite1URL,
-		"ANDROID_SITE_2_URL": androidSite2URL,
-		"IOS_SITE_1_URL":     iosSite1URL,
-		"IOS_SITE_2_URL":     iosSite2URL,
-		"SITE_3_URL":         site3URL,
-		"MOBILE_VERSION":     sha,
-		"PLATFORM":           platform,
-		"run_type":           runType,
+		"MOBILE_VERSION": sha,
+		"PLATFORM":       platform,
+		"run_type":       runType,
+	}
+	for inputKey, url := range mobileInputs {
+		workflowInputs[inputKey] = url
 	}
 
 	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)

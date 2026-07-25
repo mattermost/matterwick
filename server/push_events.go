@@ -300,21 +300,24 @@ func (s *Server) triggerMobileE2EWorkflowForPushEvent(repoOwner, repoName, branc
 		return fmt.Errorf("mobile E2E requires %d instances", len(mobileE2EPlatforms))
 	}
 
+	mobileInputs, err := buildMobileURLInputs(instances)
+	if err != nil {
+		return err
+	}
+
 	logger.WithFields(logrus.Fields{
-		"android_site_1_url": instances[0].URL,
-		"android_site_2_url": instances[1].URL,
-		"ios_site_1_url":     instances[2].URL,
-		"ios_site_2_url":     instances[3].URL,
-		"site_3_url":         instances[4].URL,
+		"android_site_1_url": mobileInputs["ANDROID_SITE_1_URL"],
+		"android_site_2_url": mobileInputs["ANDROID_SITE_2_URL"],
+		"ios_site_1_url":     mobileInputs["IOS_SITE_1_URL"],
+		"ios_site_2_url":     mobileInputs["IOS_SITE_2_URL"],
+		"site_3_url":         mobileInputs["SITE_3_URL"],
 	}).Debug("Triggering mobile E2E workflow for push event")
 
 	// handlePushEvent only routes master/main pushes here (release-branch push trigger was
 	// removed), so runType is always MASTER for mobile push events.
 	return s.dispatchMobileE2EWorkflow(
 		repoOwner, repoName, branch, sha,
-		instances[0].URL, instances[1].URL,
-		instances[2].URL, instances[3].URL,
-		instances[4].URL,
+		instances,
 		"both", // push events always test both iOS and Android
 		"MASTER",
 	)

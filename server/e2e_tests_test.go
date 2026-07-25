@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
@@ -646,8 +647,7 @@ func TestInstancePlatformMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			isDesktop := tt.platform == "linux" || tt.platform == "macos" || tt.platform == "windows"
-			isMobile := tt.platform == "android-site-1" || tt.platform == "android-site-2" ||
-				tt.platform == "ios-site-1" || tt.platform == "ios-site-2" || tt.platform == "site-3"
+			isMobile := slices.Contains(mobileE2EPlatforms, tt.platform)
 
 			assert.Equal(t, tt.isDesktop, isDesktop, tt.description+" (desktop check)")
 			assert.Equal(t, tt.isMobile, isMobile, tt.description+" (mobile check)")
