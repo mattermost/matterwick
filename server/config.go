@@ -105,13 +105,13 @@ type MatterwickConfig struct {
 	// Value: plugin ID to use for mmctl enable command
 	PluginRepoToIDMapping map[string]string
 
-	E2ELabel                      string
-	E2EMobileIOSLabel             string
-	E2EMobileAndroidLabel         string
-	E2EResetServersLabel          string
-	E2EUsername                   string
-	E2EPassword                   string
-	E2EServerVersion              string
+	E2ELabel                string
+	E2EMobileIOSLabel       string
+	E2EMobileAndroidLabel   string
+	E2EResetServersLabel    string
+	E2EUsername             string
+	E2EPassword             string
+	E2EServerVersion        string
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string
 	E2ETestWorkflowNames    []string // workflow names of the actual test workflows (for completion-based cleanup)

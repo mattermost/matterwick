@@ -303,11 +303,11 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // handleCMTWithServerVersions orchestrates CMT testing and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
 	// Cap at maxCMTServerVersions. Auto-resolve already enforces this with ESR
-	// preference; this is a backstop for a mis-set Config.CMTServerVersions override
-	// (keeps the first N entries of that verbatim list).
+	// preference; this is a backstop for a mis-set Config.CMTServerVersions override.
+	// Keep the newest (tail) entries, since the matrix is normally sorted ascending.
 	if len(serverVersions) > maxCMTServerVersions {
-		logger.Warnf("Capping server versions from %d to %d", len(serverVersions), maxCMTServerVersions)
-		serverVersions = serverVersions[:maxCMTServerVersions]
+		logger.Warnf("Capping server versions from %d to %d (keeping newest)", len(serverVersions), maxCMTServerVersions)
+		serverVersions = serverVersions[len(serverVersions)-maxCMTServerVersions:]
 	}
 
 	logger = logger.WithFields(logrus.Fields{
@@ -335,14 +335,14 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 		var versionInstances []*E2EInstance
 		if instanceType == "mobile" {
 			var err error
-			versionInstances, err = s.createMobileCMTInstances(repoName, version, logger)
+			versionInstances, err = s.createMobileCMTInstances(context.Background(), repoName, version, logger)
 			if err != nil {
 				logger.WithError(err).Errorf("Failed to create topology for version %s; rolling back partial CMT matrix", version)
 				s.destroyE2EInstances(allInstances, logger)
 				return
 			}
 		} else {
-			instance, err := s.createSingleCMTInstance(repoName, instanceType, version, "", logger)
+			instance, err := s.createSingleCMTInstance(context.Background(), repoName, instanceType, version, "", logger)
 			if err != nil {
 				logger.WithError(err).Errorf("Failed to create instance for version %s; rolling back partial CMT matrix", version)
 				s.destroyE2EInstances(allInstances, logger)
@@ -416,7 +416,7 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 }
 
 // createSingleCMTInstance creates one Mattermost cloud instance for a CMT server version.
-func (s *Server) createSingleCMTInstance(repoName, instanceType, version, platform string, logger logrus.FieldLogger) (*E2EInstance, error) {
+func (s *Server) createSingleCMTInstance(ctx context.Context, repoName, instanceType, version, platform string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	sanitizedVersion := sanitizeForDNS(version)
 	uid := e2eUniqueSuffix()
 	nameParts := []string{instanceType, sanitizedVersion}
@@ -429,7 +429,7 @@ func (s *Server) createSingleCMTInstance(repoName, instanceType, version, platfo
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	instance, err := s.createCloudInstallation(context.Background(), name, version, username, password, instanceType, logger)
+	instance, err := s.createCloudInstallation(ctx, name, version, username, password, instanceType, logger)
 	if instance != nil {
 		instance.Platform = platform
 	}
@@ -437,30 +437,39 @@ func (s *Server) createSingleCMTInstance(repoName, instanceType, version, platfo
 }
 
 // createMobileCMTInstances creates one five-server topology for a server version.
-func (s *Server) createMobileCMTInstances(repoName, version string, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+func (s *Server) createMobileCMTInstances(ctx context.Context, repoName, version string, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	type result struct {
 		instance *E2EInstance
 		err      error
 	}
 	results := make([]result, len(mobileE2EPlatforms))
 	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
 	for i, platform := range mobileE2EPlatforms {
 		wg.Add(1)
 		go func(idx int, platform string) {
 			defer wg.Done()
-			instance, err := s.createSingleCMTInstance(repoName, "mobile", version, platform, logger)
+			instance, err := s.createSingleCMTInstance(ctx, repoName, "mobile", version, platform, logger)
 			results[idx] = result{instance: instance, err: err}
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				errMu.Unlock()
+			}
 		}(i, platform)
 	}
 	wg.Wait()
 
 	instances := make([]*E2EInstance, 0, len(results))
-	var firstErr error
 	for _, result := range results {
 		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
 			continue
 		}
 		instances = append(instances, result.instance)
