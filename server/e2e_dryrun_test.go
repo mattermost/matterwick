@@ -437,6 +437,14 @@ func TestDryRun_DesktopCMT(t *testing.T) {
 		environments, ok := matrix["environment"].([]interface{})
 		require.True(t, ok)
 		assert.Len(t, environments, 3, "must have linux, macos, windows")
+		runners := map[string]string{}
+		for _, env := range environments {
+			e := env.(map[string]interface{})
+			runners[e["os"].(string)] = e["runner"].(string)
+		}
+		assert.Equal(t, "ubuntu-latest", runners["linux"])
+		assert.Equal(t, "macos-26", runners["macos"])
+		assert.Equal(t, "windows-2022", runners["windows"])
 
 		servers, ok := matrix["server"].([]interface{})
 		require.True(t, ok)
