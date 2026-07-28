@@ -525,10 +525,12 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 		Server      []cmtServer      `json:"server"`
 	}
 
+	// macos-13 was retired by GitHub (queues forever). macos-26 matches desktop
+	// PR E2E / CMT remapping. ubuntu-latest matches 24.04 (libasound2t64).
 	matrix := desktopCMTMatrix{
 		Environment: []cmtEnvironment{
-			{OS: "linux", Runner: "ubuntu-22.04"},
-			{OS: "macos", Runner: "macos-13"},
+			{OS: "linux", Runner: "ubuntu-latest"},
+			{OS: "macos", Runner: "macos-26"},
 			{OS: "windows", Runner: "windows-2022"},
 		},
 	}
