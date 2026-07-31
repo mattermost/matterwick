@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mattermost/matterwick/model"
@@ -1097,4 +1098,86 @@ func sortedKeys(m map[string]any) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// TestCleanupOfPartiallyCreatedInstallation covers the failure paths that follow a
+// successful CreateInstallation: the status poll failing, and the cleanup delete failing.
+// A dropped delete orphans a paid server, so cleanup retries and then reports it.
+func TestCleanupOfPartiallyCreatedInstallation(t *testing.T) {
+	// Keep the delete backoff out of test wall-clock.
+	originalDelay := installationDeleteRetryDelay
+	installationDeleteRetryDelay = time.Millisecond
+	t.Cleanup(func() { installationDeleteRetryDelay = originalDelay })
+
+	// provisioner accepts creation, then fails the status poll so cleanup runs.
+	// deleteStatus controls what DELETE /api/installation/{id} returns; the cloud client
+	// treats only 202 Accepted as a successful delete.
+	newServer := func(t *testing.T, deleteStatus int, deletes *int) *Server {
+		t.Helper()
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/installations":
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(`{"ID":"install-abc","State":"creation-requested","OwnerID":"mobile-11-7-7-site-3-abcd1234"}`))
+			case r.Method == http.MethodDelete:
+				*deletes++
+				w.WriteHeader(deleteStatus)
+			default: // GET status — fail the poll to force the cleanup path
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		t.Cleanup(ts.Close)
+		return &Server{
+			Config: &MatterwickConfig{
+				DNSNameTestServer: "test.example.com",
+				E2EUsername:       "admin",
+			},
+			CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+			Logger:      logrus.New(),
+		}
+	}
+
+	t.Run("status poll failure deletes the created installation", func(t *testing.T) {
+		deletes := 0
+		server := newServer(t, http.StatusAccepted, &deletes)
+
+		instance, err := server.createCloudInstallation(
+			context.Background(), "mobile-11-7-7-site-3-abcd1234", "11.7.7", "admin", "pw", "mobile", server.Logger)
+
+		require.Error(t, err)
+		assert.Nil(t, instance)
+		assert.Contains(t, err.Error(), "failed to get installation status")
+		assert.Equal(t, 1, deletes, "a successful delete must not be retried")
+	})
+
+	t.Run("delete failure is retried, not dropped", func(t *testing.T) {
+		deletes := 0
+		server := newServer(t, http.StatusInternalServerError, &deletes)
+
+		_, err := server.createCloudInstallation(
+			context.Background(), "mobile-11-7-7-site-3-abcd1234", "11.7.7", "admin", "pw", "mobile", server.Logger)
+
+		require.Error(t, err, "the provisioning error must still surface, not the delete error")
+		assert.Contains(t, err.Error(), "failed to get installation status")
+		assert.Equal(t, installationDeleteAttempts, deletes,
+			"every delete attempt must be spent before the installation is declared orphaned")
+	})
+
+	t.Run("retry cleans up each failed attempt", func(t *testing.T) {
+		deletes := 0
+		server := newServer(t, http.StatusAccepted, &deletes)
+
+		i := 0
+		nameFn := func() string {
+			i++
+			return fmt.Sprintf("mobile-11-7-7-site-3-uid%d", i)
+		}
+
+		_, err := server.createCloudInstallationWithRetry(
+			context.Background(), nameFn, "11.7.7", "admin", "pw", "mobile", server.Logger)
+
+		require.Error(t, err)
+		assert.Equal(t, createCloudInstallationAttempts, deletes,
+			"each attempt's installation must be deleted, not leaked when the next attempt starts")
+	})
 }

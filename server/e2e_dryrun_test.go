@@ -1543,7 +1543,7 @@ func TestE2EPRInstanceMaxAge(t *testing.T) {
 	s := newDryRunServer(t, "", "mattermost")
 
 	s.Config.E2EPRInstanceMaxAge = 0
-	assert.Equal(t, 24*time.Hour, s.e2ePRInstanceMaxAge(), "0 should fall back to 24h default")
+	assert.Equal(t, 8*time.Hour, s.e2ePRInstanceMaxAge(), "0 should fall back to the 8h default in config-matterwick.default.json")
 
 	s.Config.E2EPRInstanceMaxAge = 48
 	assert.Equal(t, 48*time.Hour, s.e2ePRInstanceMaxAge(), "configured value should win")

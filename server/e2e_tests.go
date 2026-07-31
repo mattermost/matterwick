@@ -327,6 +327,46 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	return instances, nil
 }
 
+// installationDeleteAttempts is how many times cleanup tries to delete an installation it
+// created but could not bring up. A single failed delete would otherwise orphan a paid
+// server: the caller has already discarded the ID by the time it returns, and a retry
+// provisions under a fresh name, so nothing else references the old one until the periodic
+// stale scan reaps it hours later.
+const installationDeleteAttempts = 3
+
+// installationDeleteRetryDelay is the pause between delete attempts. Var, not const, so
+// tests can shorten it.
+var installationDeleteRetryDelay = 2 * time.Second
+
+// deleteInstallationWithRetry deletes installationID, retrying transient provisioner
+// failures. If every attempt fails the installation is orphaned, so it reports to
+// Mattermost with the ID — the periodic stale scan is the backstop, but it runs hours
+// later and a silent orphan bills until then.
+func (s *Server) deleteInstallationWithRetry(installationID, name string, logger logrus.FieldLogger) {
+	logger = logger.WithFields(logrus.Fields{
+		"installation_id": installationID,
+		"instance":        name,
+	})
+
+	var lastErr error
+	for attempt := 1; attempt <= installationDeleteAttempts; attempt++ {
+		if lastErr = s.CloudClient.DeleteInstallation(installationID); lastErr == nil {
+			return
+		}
+		logger.WithError(lastErr).WithFields(logrus.Fields{
+			"attempt":  attempt,
+			"attempts": installationDeleteAttempts,
+		}).Warn("Failed to clean up partially created installation")
+		if attempt < installationDeleteAttempts {
+			time.Sleep(installationDeleteRetryDelay)
+		}
+	}
+
+	logger.WithError(lastErr).Error("Gave up deleting partially created installation; it is orphaned until the periodic stale scan reaps it")
+	s.logErrorToMattermost("Orphaned E2E installation %s (%s): delete failed %d times (%v). The periodic stale scan will retry, but it may need manual cleanup.",
+		installationID, name, installationDeleteAttempts, lastErr)
+}
+
 // createCloudInstallationAttempts is how many times a single instance is provisioned before
 // giving up. A fresh name per attempt avoids colliding with the failed attempt's DNS record.
 const createCloudInstallationAttempts = 2
@@ -425,9 +465,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	}
 
 	cleanupCreatedInstallation := func(cause error) error {
-		if delErr := s.CloudClient.DeleteInstallation(installation.ID); delErr != nil {
-			logger.WithError(delErr).WithField("installation_id", installation.ID).Error("Failed to clean up partially created installation")
-		}
+		s.deleteInstallationWithRetry(installation.ID, name, logger)
 		return cause
 	}
 
@@ -790,7 +828,8 @@ func (s *Server) e2ePRInstanceMaxAge() time.Duration {
 	if s.Config.E2EPRInstanceMaxAge > 0 {
 		return time.Duration(s.Config.E2EPRInstanceMaxAge) * time.Hour
 	}
-	return 24 * time.Hour
+	// Keep in sync with E2EPRInstanceMaxAge in config-matterwick.default.json.
+	return 8 * time.Hour
 }
 
 // cleanupStaleE2EInstances reaps aged-out E2E instances: non-PR flows use e2eInstanceMaxAge, PR instances use e2ePRInstanceMaxAge (PR servers are kept alive for reuse; the cap prevents indefinite accumulation).
