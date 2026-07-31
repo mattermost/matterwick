@@ -508,7 +508,10 @@ func TestDryRun_MobileCMT(t *testing.T) {
 		assert.Equal(t, "https://v0-site3.example.com", s0["ios_site_1_url"])
 		assert.Equal(t, "https://v0-site4.example.com", s0["ios_site_2_url"])
 		assert.Equal(t, "https://v0-site5.example.com", s0["site_3_url"])
-		assert.NotContains(t, s0, "url")
+		// `url` stays populated (site-1) for release branches cut before mobile's
+		// five-server CMT rewrite: those workflows read ${{ matrix.server.url }} and would
+		// otherwise test against an empty server URL for a whole release cycle.
+		assert.Equal(t, "https://v0-site3.example.com", s0["url"])
 		// Older version: `latest` is omitted entirely (cmtServer.Latest is false, omitempty).
 		_, has0 := s0["latest"]
 		assert.False(t, has0, "older mobile entries must not carry the `latest` field")
@@ -1400,7 +1403,7 @@ func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 		s.githubAPIBase = srv.URL + "/"
 		s.Config.CMTServerVersions = nil
 
-		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, s.cmtServerVersions())
+		assert.Equal(t, []string{"10.11.19", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}, s.cmtServerVersions("desktop"))
 	})
 
 	t.Run("explicit CMTServerVersions override skips resolve", func(t *testing.T) {
@@ -1414,7 +1417,8 @@ func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 		s.githubAPIBase = srv.URL + "/"
 		s.Config.CMTServerVersions = []string{"10.11.22", "11.10.0-rc1"}
 
-		assert.Equal(t, []string{"10.11.22", "11.10.0-rc1"}, s.cmtServerVersions())
+		assert.Equal(t, []string{"10.11.22", "11.10.0-rc1"}, s.cmtServerVersions("desktop"))
+		assert.Equal(t, []string{"10.11.22", "11.10.0-rc1"}, s.cmtServerVersions("mobile"), "manual override applies to mobile too")
 		assert.False(t, called, "manual override must not hit the GitHub API")
 	})
 
@@ -1426,7 +1430,8 @@ func TestDryRun_ResolveCMTServerVersions(t *testing.T) {
 
 		assert.Equal(t, defaultCMTServerVersions, s.resolveCMTServerVersions())
 		assert.Equal(t, []string{"10.11.22", "11.7.7"}, defaultCMTServerVersions)
-		assert.Equal(t, defaultCMTServerVersions, s.cmtServerVersions())
+		assert.Equal(t, defaultCMTServerVersions, s.cmtServerVersions("desktop"))
+		assert.Equal(t, defaultCMTServerVersions, s.cmtServerVersions("mobile"))
 	})
 
 	t.Run("cap prefers trailing ESR over oldest feature minor", func(t *testing.T) {
@@ -1677,4 +1682,92 @@ func TestIsBuildReleaseBranch(t *testing.T) {
 	} {
 		assert.False(t, isBuildReleaseBranch(ref), "must not match: %q", ref)
 	}
+}
+
+// TestDryRun_MobileCMTVersionSelection covers the mobile version set: newest ESR, latest
+// production (newest non-ESR stable), and the current RC — one topology of five servers each.
+func TestDryRun_MobileCMTVersionSelection(t *testing.T) {
+	releasesBody := `[
+		{"tag_name":"v11.8.0-rc3","draft":false,"prerelease":true,"body":"rc"},
+		{"tag_name":"v11.8.0-rc2","draft":false,"prerelease":true,"body":"rc"},
+		{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"},
+		{"tag_name":"v11.7.1","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.1"},
+		{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+		{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"},
+		{"tag_name":"v10.11.19","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 10.11.19"}
+	]`
+
+	t.Run("picks newest ESR + latest production + current RC", func(t *testing.T) {
+		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		// 11.7.2 is the newest ESR line, 11.6.4 the newest non-ESR stable, 11.8.0-rc3 the RC.
+		// 10.11.19 (older ESR) and 11.5.7 (older stable) are left out.
+		assert.Equal(t, []string{"11.6.4", "11.7.2", "11.8.0-rc3"}, s.resolveMobileCMTServerVersions())
+	})
+
+	t.Run("mobile selection is used for mobile and not for desktop", func(t *testing.T) {
+		srv := mockReleasesServer(t, releasesBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+		s.Config.CMTServerVersions = nil
+
+		mobile := s.cmtServerVersions("mobile")
+		desktop := s.cmtServerVersions("desktop")
+		assert.Len(t, mobile, maxMobileCMTServerVersions)
+		assert.Greater(t, len(desktop), len(mobile), "desktop keeps its wider set")
+	})
+
+	t.Run("no RC in flight backfills with the next stable line", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"},
+			{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"},
+			{"tag_name":"v11.5.7","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.5.7"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		// ESR 11.7.2 + latest production 11.6.4, then 11.5.7 backfills the empty RC slot.
+		assert.Equal(t, []string{"11.5.7", "11.6.4", "11.7.2"}, s.resolveMobileCMTServerVersions())
+	})
+
+	t.Run("an RC older than the newest stable is not selected", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.6.0-rc1","draft":false,"prerelease":true,"body":"stale rc"},
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"},
+			{"tag_name":"v11.8.1","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.8.1"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveMobileCMTServerVersions()
+		assert.NotContains(t, got, "11.6.0-rc1", "a stale RC must not take the RC slot")
+		assert.Contains(t, got, "11.7.2")
+		assert.Contains(t, got, "11.8.1")
+	})
+
+	t.Run("no ESR flagged still fills the budget from stable lines", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.8.1","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.8.1"},
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.7.2"},
+			{"tag_name":"v11.6.4","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.6.4"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, []string{"11.6.4", "11.7.2", "11.8.1"}, s.resolveMobileCMTServerVersions())
+	})
+
+	t.Run("API error falls back to the default set", func(t *testing.T) {
+		srv := mockReleasesServer(t, "boom", http.StatusInternalServerError)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, defaultCMTServerVersions, s.resolveMobileCMTServerVersions())
+		assert.LessOrEqual(t, len(defaultCMTServerVersions), maxMobileCMTServerVersions)
+	})
 }

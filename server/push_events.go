@@ -111,12 +111,16 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch)
 	if err != nil {
+		// Push E2E has no PR comment to fall back on, so a provisioning failure is invisible
+		// unless it is reported. Silent misses on main are how this regressed unnoticed.
 		logger.WithError(err).Error("Failed to create E2E instances")
+		s.logErrorToMattermost("E2E on %s %s (%s) did not run: failed to provision test servers (%v)", repoName, branch, sha, err)
 		return
 	}
 
 	if len(instances) == 0 {
 		logger.Error("No instances created for E2E testing")
+		s.logErrorToMattermost("E2E on %s %s (%s) did not run: no test servers were created", repoName, branch, sha)
 		return
 	}
 
@@ -144,6 +148,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	err = s.triggerE2EWorkflowForPushEvent(repoName, instanceType, branch, sha, instances)
 	if err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
+		s.logErrorToMattermost("E2E on %s %s (%s) did not run: workflow dispatch failed (%v)", repoName, branch, sha, err)
 		s.e2eInstancesLock.Lock()
 		delete(s.e2eInstances, key)
 		s.e2eInstancesLock.Unlock()
@@ -172,7 +177,6 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 
 	serverVersion := s.serverVersionForPushEvent()
 	sanitizedVersion := sanitizeForDNS(serverVersion)
-	uid := e2eUniqueSuffix()
 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
@@ -191,11 +195,14 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 		wg.Add(1)
 		go func(idx int, platform string) {
 			defer wg.Done()
-			name := e2eInstanceName(
-				s.Config.DNSNameTestServer,
-				instanceType, sanitizedVersion, platform, uid,
-			)
-			inst, err := s.createCloudInstallation(ctx, name, serverVersion, username, password, instanceType, logger)
+			// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
+			nameFn := func() string {
+				return e2eInstanceName(
+					s.Config.DNSNameTestServer,
+					instanceType, sanitizedVersion, platform, e2eUniqueSuffix(),
+				)
+			}
+			inst, err := s.createCloudInstallationWithRetry(ctx, nameFn, serverVersion, username, password, instanceType, logger)
 			if err != nil {
 				cancel()
 				results[idx] = result{err: err}

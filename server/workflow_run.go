@@ -292,7 +292,7 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 		return
 	}
 
-	versions := s.cmtServerVersions()
+	versions := s.cmtServerVersions(instanceType)
 	logger.WithFields(logrus.Fields{
 		"instanceType": instanceType,
 		"versions":     versions,
@@ -301,10 +301,24 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 	s.handleCMTWithServerVersions(owner, repoName, instanceType, branch, sha, versions, runID, logger)
 }
 
-// capCMTServerVersions keeps at most maxCMTServerVersions entries, preferring the
-// newest parseable semvers. Copies the input so Config.CMTServerVersions is not mutated.
-func capCMTServerVersions(serverVersions []string) []string {
-	if len(serverVersions) <= maxCMTServerVersions {
+// cmtVersionCapFor returns the version cap for instanceType. Mobile provisions a full
+// len(mobileE2EPlatforms)-server topology per version, so its cap must be tighter than
+// desktop's one-server-per-version: 5 versions × 5 servers is 25 installations, which in
+// practice never all reach stable inside one CMT window.
+func cmtVersionCapFor(instanceType string) int {
+	if instanceType == "mobile" {
+		return maxMobileCMTServerVersions
+	}
+	return maxCMTServerVersions
+}
+
+// capCMTServerVersions keeps at most limit entries, preferring the newest parseable
+// semvers. Copies the input so Config.CMTServerVersions is not mutated.
+func capCMTServerVersions(serverVersions []string, limit int) []string {
+	if limit < 1 {
+		limit = 1
+	}
+	if len(serverVersions) <= limit {
 		return serverVersions
 	}
 	sorted := append([]string(nil), serverVersions...)
@@ -319,16 +333,79 @@ func capCMTServerVersions(serverVersions []string) []string {
 		}
 		return vi.less(vj)
 	})
-	return sorted[len(sorted)-maxCMTServerVersions:]
+	return sorted[len(sorted)-limit:]
+}
+
+// spanCMTServerVersions reduces serverVersions to at most limit entries while keeping both
+// ends of the range. CMT's whole value is the spread between the oldest supported server
+// (ESR) and the newest (RC) — a plain "keep the newest N" cap would collapse a mobile
+// matrix to two adjacent releases, which tests nothing about compatibility. Unparseable
+// entries are dropped rather than allowed to consume a slot.
+func spanCMTServerVersions(serverVersions []string, limit int) []string {
+	if limit < 1 {
+		limit = 1
+	}
+	if len(serverVersions) <= limit {
+		return serverVersions
+	}
+
+	parseable := make([]string, 0, len(serverVersions))
+	for _, v := range serverVersions {
+		if _, ok := parseCMTVersion(v); ok {
+			parseable = append(parseable, v)
+		}
+	}
+	if len(parseable) == 0 {
+		// Nothing to order by — fall back to the newest-N cap over the raw input.
+		return capCMTServerVersions(serverVersions, limit)
+	}
+	if len(parseable) <= limit {
+		return parseable
+	}
+
+	sort.Slice(parseable, func(i, j int) bool {
+		vi, _ := parseCMTVersion(parseable[i])
+		vj, _ := parseCMTVersion(parseable[j])
+		return vi.less(vj)
+	})
+
+	if limit == 1 {
+		return []string{parseable[len(parseable)-1]}
+	}
+
+	// Evenly spaced picks that always include the oldest and newest entry.
+	last := len(parseable) - 1
+	selected := make([]string, 0, limit)
+	seen := make(map[int]bool, limit)
+	for i := 0; i < limit; i++ {
+		idx := (i*last + (limit-1)/2) / (limit - 1)
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		selected = append(selected, parseable[idx])
+	}
+	return selected
 }
 
 // handleCMTWithServerVersions orchestrates CMT testing and dispatches compatibility-matrix-testing.yml once.
 func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, branch, sha string, serverVersions []string, runID int64, logger logrus.FieldLogger) {
-	// Cap at maxCMTServerVersions. Auto-resolve already enforces this with ESR
-	// preference; this is a backstop for a mis-set Config.CMTServerVersions override.
-	if len(serverVersions) > maxCMTServerVersions {
-		logger.Warnf("Capping server versions from %d to %d (keeping newest)", len(serverVersions), maxCMTServerVersions)
-		serverVersions = capCMTServerVersions(serverVersions)
+	// Cap per instance type. Auto-resolve enforces the desktop cap with ESR preference,
+	// but mobile needs a tighter one (5 servers per version) and Config.CMTServerVersions
+	// can bypass auto-resolve entirely.
+	versionCap := cmtVersionCapFor(instanceType)
+	if len(serverVersions) > versionCap {
+		if instanceType == "mobile" {
+			// Keep the ends of the range (oldest ESR + newest RC) so a 2-version mobile
+			// matrix still spans real compatibility distance.
+			originalCount := len(serverVersions)
+			serverVersions = spanCMTServerVersions(serverVersions, versionCap)
+			logger.Warnf("Capping mobile server versions from %d to %d (keeping range ends): %s",
+				originalCount, len(serverVersions), strings.Join(serverVersions, ", "))
+		} else {
+			logger.Warnf("Capping server versions from %d to %d (keeping newest)", len(serverVersions), versionCap)
+			serverVersions = capCMTServerVersions(serverVersions, versionCap)
+		}
 	}
 
 	logger = logger.WithFields(logrus.Fields{
@@ -339,9 +416,13 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 	})
 	logger.Info("Starting CMT with server versions")
 
-	// All-or-nothing: a partial matrix silently drops coverage, so roll back on any failure.
+	// Best-effort per version: a version whose topology fails to provision is dropped
+	// (loudly — log + Mattermost alert) and CMT still runs for the versions that came up.
+	// Aborting the whole matrix on one failed installation means zero coverage, which is
+	// strictly worse than reduced coverage, and it is why CMT stopped dispatching at all.
 	var allInstances []*E2EInstance
 	var validVersions []string
+	var droppedVersions []string
 
 	for _, version := range serverVersions {
 		version = strings.TrimSpace(version)
@@ -358,16 +439,17 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 			var err error
 			versionInstances, err = s.createMobileCMTInstances(context.Background(), repoName, version, logger)
 			if err != nil {
-				logger.WithError(err).Errorf("Failed to create topology for version %s; rolling back partial CMT matrix", version)
-				s.destroyE2EInstances(allInstances, logger)
-				return
+				// createMobileCMTInstances already destroyed its own partial topology.
+				logger.WithError(err).Errorf("Failed to create topology for version %s; dropping this version from the CMT matrix", version)
+				droppedVersions = append(droppedVersions, version)
+				continue
 			}
 		} else {
 			instance, err := s.createSingleCMTInstance(context.Background(), repoName, instanceType, version, "", logger)
 			if err != nil {
-				logger.WithError(err).Errorf("Failed to create instance for version %s; rolling back partial CMT matrix", version)
-				s.destroyE2EInstances(allInstances, logger)
-				return
+				logger.WithError(err).Errorf("Failed to create instance for version %s; dropping this version from the CMT matrix", version)
+				droppedVersions = append(droppedVersions, version)
+				continue
 			}
 			versionInstances = []*E2EInstance{instance}
 		}
@@ -376,17 +458,30 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 			expectedInstances = len(mobileE2EPlatforms)
 		}
 		if len(versionInstances) != expectedInstances {
-			logger.Errorf("Failed to create complete CMT topology for version %s; rolling back partial CMT matrix", version)
-			s.destroyE2EInstances(append(allInstances, versionInstances...), logger)
-			return
+			logger.Errorf("Incomplete CMT topology for version %s (got %d, want %d); dropping this version", version, len(versionInstances), expectedInstances)
+			s.destroyE2EInstances(versionInstances, logger)
+			droppedVersions = append(droppedVersions, version)
+			continue
 		}
 
 		allInstances = append(allInstances, versionInstances...)
 		validVersions = append(validVersions, version)
 	}
 
+	if len(droppedVersions) > 0 {
+		logger.WithFields(logrus.Fields{
+			"dropped_versions": droppedVersions,
+			"kept_versions":    validVersions,
+		}).Error("CMT matrix is running with reduced server-version coverage")
+		s.logErrorToMattermost("CMT on %s/%s (%s): dropped server version(s) %s — provisioning failed. Running with %s.",
+			repoOwner, repoName, branch, strings.Join(droppedVersions, ", "), strings.Join(validVersions, ", "))
+	}
+
 	if len(allInstances) == 0 {
-		logger.Warn("No CMT instances created (empty version set)")
+		logger.Error("No CMT instances created; nothing to dispatch")
+		if len(droppedVersions) > 0 {
+			s.logErrorToMattermost("CMT on %s/%s (%s) did not run: no server version could be provisioned.", repoOwner, repoName, branch)
+		}
 		return
 	}
 
@@ -439,18 +534,20 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 // createSingleCMTInstance creates one Mattermost cloud instance for a CMT server version.
 func (s *Server) createSingleCMTInstance(ctx context.Context, repoName, instanceType, version, platform string, logger logrus.FieldLogger) (*E2EInstance, error) {
 	sanitizedVersion := sanitizeForDNS(version)
-	uid := e2eUniqueSuffix()
-	nameParts := []string{instanceType, sanitizedVersion}
-	if platform != "" {
-		nameParts = append(nameParts, platform)
+	// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
+	nameFn := func() string {
+		nameParts := []string{instanceType, sanitizedVersion}
+		if platform != "" {
+			nameParts = append(nameParts, platform)
+		}
+		nameParts = append(nameParts, e2eUniqueSuffix())
+		return e2eInstanceName(s.Config.DNSNameTestServer, nameParts...)
 	}
-	nameParts = append(nameParts, uid)
-	name := e2eInstanceName(s.Config.DNSNameTestServer, nameParts...)
 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	instance, err := s.createCloudInstallation(ctx, name, version, username, password, instanceType, logger)
+	instance, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
 	if instance != nil {
 		instance.Platform = platform
 	}
@@ -602,6 +699,10 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 				entry.Site3URL = url
 			}
 		}
+		// Back-compat: release branches cut before mobile's five-server CMT rewrite read
+		// ${{ matrix.server.url }}. Those branches are live for a whole release cycle, so
+		// keep url populated (site-1) or CMT on them runs against an empty server URL.
+		entry.URL = entry.IOSSite1URL
 		if i == latestIdx {
 			entry.Latest = true
 		}

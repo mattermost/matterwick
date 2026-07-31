@@ -4,10 +4,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
@@ -849,4 +852,249 @@ func TestExtractPlatformFromLabel(t *testing.T) {
 			assert.Equal(t, tt.expected, result, tt.description)
 		})
 	}
+}
+
+// TestCreateCloudInstallationWithRetry covers the retry added so a single transient
+// provisioner failure no longer sinks a whole 5-instance mobile run (or a CMT matrix).
+func TestCreateCloudInstallationWithRetry(t *testing.T) {
+	newServerWithProvisioner := func(handler http.HandlerFunc) *Server {
+		ts := httptest.NewServer(handler)
+		t.Cleanup(ts.Close)
+		return &Server{
+			Config: &MatterwickConfig{
+				DNSNameTestServer: "test.example.com",
+				E2EUsername:       "admin",
+			},
+			CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+			Logger:      logrus.New(),
+		}
+	}
+
+	t.Run("retries and uses a fresh name per attempt", func(t *testing.T) {
+		var requested []string
+		server := newServerWithProvisioner(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				DNS string `json:"dns"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			requested = append(requested, body.DNS)
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+
+		i := 0
+		nameFn := func() string {
+			i++
+			return fmt.Sprintf("mobile-11-7-7-site-3-uid%d", i)
+		}
+
+		instance, err := server.createCloudInstallationWithRetry(
+			context.Background(), nameFn, "11.7.7", "admin", "pw", "mobile", server.Logger)
+
+		require.Error(t, err)
+		assert.Nil(t, instance)
+		require.Len(t, requested, createCloudInstallationAttempts, "every attempt must reach the provisioner")
+		assert.NotEqual(t, requested[0], requested[1], "a retry must not reuse the failed attempt's DNS name")
+	})
+
+	t.Run("does not retry once the shared context is cancelled", func(t *testing.T) {
+		attempts := 0
+		server := newServerWithProvisioner(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := server.createCloudInstallationWithRetry(
+			ctx, func() string { return "mobile-11-7-7-site-3-uid" }, "11.7.7", "admin", "pw", "mobile", server.Logger)
+
+		require.Error(t, err)
+		assert.Zero(t, attempts, "a cancelled sibling must stop further attempts immediately")
+	})
+}
+
+// TestCMTVersionCapFor pins the mobile-vs-desktop CMT version caps. Mobile provisions a
+// full topology per version, so its cap governs whether CMT can provision at all.
+func TestCMTVersionCapFor(t *testing.T) {
+	assert.Equal(t, maxMobileCMTServerVersions, cmtVersionCapFor("mobile"))
+	assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor("desktop"))
+	assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor(""))
+
+	// The mobile cap exists to bound instance count: versions × platforms. Fifteen is the
+	// ceiling a mobile CMT run may ask the provisioner for; #92 asked for 25.
+	assert.LessOrEqual(t, maxMobileCMTServerVersions*len(mobileE2EPlatforms), 15,
+		"a mobile CMT run must not ask the provisioner for more than 15 installations")
+}
+
+// TestCapCMTServerVersionsRespectsMax covers the per-instance-type cap argument.
+func TestCapCMTServerVersionsRespectsMax(t *testing.T) {
+	in := []string{"10.11.22", "11.7.7", "11.9.0", "11.10.0", "11.11.0-rc1"}
+
+	assert.Equal(t, []string{"11.10.0", "11.11.0-rc1"}, capCMTServerVersions(in, 2), "keeps the newest two")
+	assert.Equal(t, []string{"11.9.0", "11.10.0", "11.11.0-rc1"}, capCMTServerVersions(in, maxMobileCMTServerVersions),
+		"keeps the newest three")
+
+	assert.Equal(t, in, capCMTServerVersions(in, maxCMTServerVersions), "desktop cap leaves the set alone")
+	assert.Len(t, capCMTServerVersions(in, 0), 1, "a non-positive cap is clamped to 1, not to zero coverage")
+}
+
+// TestSpanCMTServerVersions covers the mobile cap: it must keep the ends of the version
+// range (oldest ESR + newest RC), because a newest-N cap tests no compatibility distance.
+func TestSpanCMTServerVersions(t *testing.T) {
+	resolved := []string{"10.11.22", "11.5.7", "11.6.4", "11.7.2", "11.8.0-rc3"}
+
+	t.Run("keeps oldest and newest at a two-slot cap", func(t *testing.T) {
+		got := spanCMTServerVersions(resolved, 2)
+		assert.Equal(t, []string{"10.11.22", "11.8.0-rc3"}, got)
+	})
+
+	t.Run("orders by semver, not input order", func(t *testing.T) {
+		shuffled := []string{"11.7.2", "11.8.0-rc3", "10.11.22", "11.5.7", "11.6.4"}
+		assert.Equal(t, []string{"10.11.22", "11.8.0-rc3"}, spanCMTServerVersions(shuffled, 2))
+	})
+
+	t.Run("spreads intermediate picks across the range", func(t *testing.T) {
+		got := spanCMTServerVersions(resolved, 3)
+		assert.Equal(t, []string{"10.11.22", "11.6.4", "11.8.0-rc3"}, got)
+	})
+
+	t.Run("returns input unchanged when at or under the cap", func(t *testing.T) {
+		in := []string{"10.11.22", "11.8.0"}
+		assert.Equal(t, in, spanCMTServerVersions(in, maxMobileCMTServerVersions))
+		assert.Equal(t, in, spanCMTServerVersions(in, 2))
+	})
+
+	t.Run("drops unparseable entries rather than spending a slot on them", func(t *testing.T) {
+		in := []string{"not-a-version", "10.11.22", "11.6.4", "11.8.0-rc3"}
+		assert.Equal(t, []string{"10.11.22", "11.8.0-rc3"}, spanCMTServerVersions(in, 2))
+	})
+
+	t.Run("falls back to the newest-N cap when nothing parses", func(t *testing.T) {
+		in := []string{"garbage-a", "garbage-b", "garbage-c"}
+		assert.Len(t, spanCMTServerVersions(in, 2), 2)
+	})
+
+	t.Run("never returns an empty set", func(t *testing.T) {
+		assert.Len(t, spanCMTServerVersions(resolved, 0), 1)
+	})
+
+	t.Run("does not mutate the input slice", func(t *testing.T) {
+		in := []string{"11.7.2", "11.8.0-rc3", "10.11.22", "11.5.7", "11.6.4"}
+		orig := append([]string(nil), in...)
+		_ = spanCMTServerVersions(in, 2)
+		assert.Equal(t, orig, in)
+	})
+}
+
+// TestDesktopPathsUnaffected locks the desktop guarantees against the mobile-driven changes
+// (mobile CMT back-compat url, mobile-only version cap, per-version drop tolerance).
+func TestDesktopPathsUnaffected(t *testing.T) {
+	t.Run("desktop keeps the 5-version cap and newest-N selection", func(t *testing.T) {
+		assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor("desktop"))
+
+		resolved := []string{"10.11.22", "11.7.8", "11.8.4", "11.9.0", "11.10.0-rc2"}
+		assert.Equal(t, resolved, capCMTServerVersions(resolved, cmtVersionCapFor("desktop")),
+			"a 5-version desktop set must pass through untouched")
+	})
+
+	t.Run("desktop matrix carries no mobile keys", func(t *testing.T) {
+		versions := []string{"11.9.0", "11.10.0-rc2"}
+		instances := []*E2EInstance{
+			{URL: "https://a.example.com", ServerVersion: "11.9.0"},
+			{URL: "https://b.example.com", ServerVersion: "11.10.0-rc2"},
+		}
+		jsonStr, err := buildDesktopCMTMatrixJSON(versions, instances)
+		require.NoError(t, err)
+
+		var matrix struct {
+			Server []map[string]any `json:"server"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+		require.Len(t, matrix.Server, 2)
+
+		// Assert on parsed keys, not the raw string: "latest" is a substring of the
+		// ubuntu-latest runner name.
+		for _, entry := range matrix.Server {
+			for _, mobileKey := range []string{"android_site_1_url", "android_site_2_url", "ios_site_1_url", "ios_site_2_url", "site_3_url", "latest"} {
+				assert.NotContains(t, entry, mobileKey, "mobile CMT fields must not leak into the desktop matrix")
+			}
+			assert.Equal(t, []string{"url", "version"}, sortedKeys(entry), "desktop entries carry version+url only")
+		}
+		assert.Equal(t, "https://a.example.com", matrix.Server[0]["url"])
+	})
+
+	t.Run("a dropped version leaves the desktop matrix aligned", func(t *testing.T) {
+		// What handleCMTWithServerVersions hands over after dropping a version that failed
+		// to provision: validVersions and allInstances shrink together.
+		keptVersions := []string{"10.11.22", "11.10.0-rc2"}
+		keptInstances := []*E2EInstance{
+			{URL: "https://esr.example.com", ServerVersion: "10.11.22"},
+			{URL: "https://rc.example.com", ServerVersion: "11.10.0-rc2"},
+		}
+		jsonStr, err := buildDesktopCMTMatrixJSON(keptVersions, keptInstances)
+		require.NoError(t, err)
+
+		var matrix struct {
+			Environment []map[string]string `json:"environment"`
+			Server      []map[string]any    `json:"server"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(jsonStr), &matrix))
+
+		require.Len(t, matrix.Server, len(keptVersions), "no silent truncation or padding")
+		for i, v := range keptVersions {
+			assert.Equal(t, v, matrix.Server[i]["version"])
+			assert.Equal(t, keptInstances[i].URL, matrix.Server[i]["url"], "version and URL must stay paired")
+		}
+		// The desktop workflow derives total_reports_expected as
+		// (.environment|length) * (.server|length), so a reduced matrix stays self-consistent.
+		assert.Equal(t, 3*len(keptVersions), len(matrix.Environment)*len(matrix.Server))
+	})
+
+	t.Run("desktop runner mapping unchanged", func(t *testing.T) {
+		assert.Equal(t, "ubuntu-latest", getRunnerForPlatform("linux"))
+		assert.Equal(t, "macos-latest", getRunnerForPlatform("macos"))
+		assert.Equal(t, "windows-2022", getRunnerForPlatform("windows"))
+	})
+}
+
+// TestInstanceNamePlatformRemainsParseable guards the per-attempt uid change: cloud reuse
+// recovers the platform by stripping the trailing "-{8 hex}" and matching the platform
+// suffix, so a per-instance uid must not disturb that shape.
+func TestInstanceNamePlatformRemainsParseable(t *testing.T) {
+	const dnsSuffix = "test.mattermost.cloud"
+
+	cases := []struct {
+		instanceType string
+		prefix       string
+		platforms    []string
+	}{
+		{"desktop", "pr-123", []string{"linux", "macos", "windows"}},
+		{"mobile", "pr-99999", mobileE2EPlatforms},
+	}
+
+	for _, c := range cases {
+		seen := map[string]bool{}
+		for _, platform := range c.platforms {
+			name := e2eInstanceName(dnsSuffix, c.instanceType, c.prefix, platform, e2eUniqueSuffix())
+			assert.False(t, seen[name], "instance names must be unique across platforms")
+			seen[name] = true
+
+			require.Greater(t, len(name), 9, "name must be longer than the uid it carries")
+			withoutUID := name[:len(name)-9]
+			assert.True(t, strings.HasSuffix(withoutUID, "-"+platform),
+				"reuse lookup must still recover platform %q from %q", platform, name)
+			assert.LessOrEqual(t, len(name), 62-len(dnsSuffix), "name must fit the DNS budget without truncation")
+		}
+	}
+}
+
+// sortedKeys returns m's keys in sorted order, for stable assertions on JSON shape.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

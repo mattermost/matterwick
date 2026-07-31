@@ -264,7 +264,6 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 	// Name format: {type}-pr-{pr}-{platform}-{hex6}
-	uid := e2eUniqueSuffix()
 
 	// Shared cancellable context: the first goroutine to fail cancels the rest so they
 	// exit their polling loop within one sleep interval (30s) instead of waiting up to 30min.
@@ -283,12 +282,15 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 		wg.Add(1)
 		go func(idx int, platform string) {
 			defer wg.Done()
-			instanceName := e2eInstanceName(
-				s.Config.DNSNameTestServer,
-				instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, uid,
-			)
-			logger.WithField("instance", instanceName).Info("Creating E2E instance")
-			inst, err := s.createCloudInstallation(ctx, instanceName, version, username, password, instanceType, logger)
+			// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
+			nameFn := func() string {
+				return e2eInstanceName(
+					s.Config.DNSNameTestServer,
+					instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, e2eUniqueSuffix(),
+				)
+			}
+			logger.WithField("platform", platform).Info("Creating E2E instance")
+			inst, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
 			if err != nil {
 				cancel() // signal sibling goroutines to stop waiting
 				results[idx] = result{err: err}
@@ -323,6 +325,35 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	}
 
 	return instances, nil
+}
+
+// createCloudInstallationAttempts is how many times a single instance is provisioned before
+// giving up. A fresh name per attempt avoids colliding with the failed attempt's DNS record.
+const createCloudInstallationAttempts = 2
+
+// createCloudInstallationWithRetry provisions one instance, retrying transient provisioner
+// failures. nameFn is called per attempt and must return a fresh unique name each time.
+func (s *Server) createCloudInstallationWithRetry(ctx context.Context, nameFn func() string, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
+	var lastErr error
+	for attempt := 1; attempt <= createCloudInstallationAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, fmt.Errorf("installation creation cancelled before attempt %d: %w", attempt, err)
+		}
+		instance, err := s.createCloudInstallation(ctx, nameFn(), version, username, password, instanceType, logger)
+		if err == nil {
+			return instance, nil
+		}
+		lastErr = err
+		logger.WithError(err).WithFields(logrus.Fields{
+			"attempt":  attempt,
+			"attempts": createCloudInstallationAttempts,
+			"version":  version,
+		}).Warn("Installation attempt failed")
+	}
+	return nil, lastErr
 }
 
 // createCloudInstallation creates one installation and polls until stable. Cancelling ctx aborts the wait so parallel callers can fail fast.
@@ -968,16 +999,121 @@ func (a cmtVersion) less(b cmtVersion) bool {
 }
 
 const maxCMTServerVersions = 5
+
+// maxMobileCMTServerVersions caps the mobile CMT version set at the three categories that
+// matter: newest ESR, latest production, current RC (see resolveMobileCMTServerVersions).
+// Mobile provisions one len(mobileE2EPlatforms)-server topology per version, so each slot
+// costs five installations — 3 × 5 = 15 per run, against #92's 25. Raising this is
+// expensive; prefer changing which categories are selected over adding slots.
+const maxMobileCMTServerVersions = 3
+
 const maxCMTESRLines = 2 // current + trailing ESR; older body-flagged ESRs are treated as EOL
 
 // cmtServerVersions returns the version set CMT runs against. An explicit, non-empty
 // Config.CMTServerVersions is used verbatim (manual override / pin). Otherwise the set is
 // auto-derived from Mattermost GitHub releases. Shared by mobile and desktop CMT triggers.
-func (s *Server) cmtServerVersions() []string {
+func (s *Server) cmtServerVersions(instanceType string) []string {
 	if len(s.Config.CMTServerVersions) > 0 {
 		return s.Config.CMTServerVersions
 	}
+	if instanceType == "mobile" {
+		return s.resolveMobileCMTServerVersions()
+	}
 	return s.resolveCMTServerVersions()
+}
+
+// cmtReleaseSet is the classified Mattermost release data both CMT selectors work from:
+// newest patch per stable minor line, which of those lines are ESR, and the current RC.
+type cmtReleaseSet struct {
+	latestStable map[cmtMinorKey]cmtVersion
+	esrMinors    map[cmtMinorKey]bool
+	bestRC       cmtVersion
+	haveRC       bool
+}
+
+// newestStableMinors returns every stable line's newest patch, newest line first.
+func (rs cmtReleaseSet) newestStableMinors() []cmtVersion {
+	minors := make([]cmtVersion, 0, len(rs.latestStable))
+	for _, v := range rs.latestStable {
+		minors = append(minors, v)
+	}
+	sort.Slice(minors, func(i, j int) bool { return minors[j].less(minors[i]) })
+	return minors
+}
+
+// isESRLine reports whether v's minor line is flagged as an extended support release.
+func (rs cmtReleaseSet) isESRLine(v cmtVersion) bool {
+	return rs.esrMinors[cmtMinorKey{v.major, v.minor}]
+}
+
+// resolveMobileCMTServerVersions picks the three versions mobile CMT runs against: the
+// newest ESR, the newest non-ESR stable release, and the current RC. Mobile pays five
+// servers per version, so the set is chosen by category rather than by "newest N" — the
+// point is to span ESR → GA → upcoming, not to test three adjacent patches. Falls back to
+// defaultCMTServerVersions when releases can't be fetched.
+func (s *Server) resolveMobileCMTServerVersions() []string {
+	releaseSet, err := s.fetchCMTReleaseSet()
+	if err != nil {
+		s.Logger.WithError(err).Warn("[resolveMobileCMTServerVersions] Failed to classify releases; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+
+	minors := releaseSet.newestStableMinors()
+	if len(minors) == 0 {
+		s.Logger.Warn("[resolveMobileCMTServerVersions] No stable releases parsed; using default CMT versions")
+		return defaultCMTServerVersions
+	}
+
+	seen := map[cmtMinorKey]bool{}
+	chosen := make([]cmtVersion, 0, maxMobileCMTServerVersions)
+	add := func(v cmtVersion) {
+		key := cmtMinorKey{v.major, v.minor}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		chosen = append(chosen, v)
+	}
+
+	// Newest ESR line.
+	for _, v := range minors {
+		if releaseSet.isESRLine(v) {
+			add(v)
+			break
+		}
+	}
+	// Newest stable line that isn't the ESR we just took — that's "latest production".
+	for _, v := range minors {
+		if !releaseSet.isESRLine(v) {
+			add(v)
+			break
+		}
+	}
+	// Current RC, only when it's ahead of the newest stable (i.e. an upcoming release).
+	if releaseSet.haveRC && minors[0].less(releaseSet.bestRC) {
+		add(releaseSet.bestRC)
+	}
+
+	// If a category was missing (no ESR flagged, no RC in flight), backfill with the next
+	// newest stable lines so the matrix still uses its full budget.
+	for _, v := range minors {
+		if len(chosen) >= maxMobileCMTServerVersions {
+			break
+		}
+		add(v)
+	}
+
+	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) }) // ascending
+	if len(chosen) > maxMobileCMTServerVersions {
+		chosen = chosen[len(chosen)-maxMobileCMTServerVersions:]
+	}
+
+	versions := make([]string, 0, len(chosen))
+	for _, v := range chosen {
+		versions = append(versions, v.raw)
+	}
+	s.Logger.WithField("versions", versions).Info("[resolveMobileCMTServerVersions] Auto-derived mobile CMT server version set (ESR + latest stable + RC)")
+	return versions
 }
 
 // resolveCMTServerVersions fetches Mattermost releases and picks: the newest
@@ -985,74 +1121,16 @@ func (s *Server) cmtServerVersions() []string {
 // minors + current RC, one patch per line. Only used when Config.CMTServerVersions is
 // empty. Falls back to defaultCMTServerVersions on error.
 func (s *Server) resolveCMTServerVersions() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	client := newGithubClient(s.Config.GithubAccessToken)
-	// githubAPIBase is only set in tests to redirect to a mock server.
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
+	releaseSet, err := s.fetchCMTReleaseSet()
+	if err != nil {
+		s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to classify releases; using default CMT versions")
+		return defaultCMTServerVersions
 	}
 
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-		Body       string `json:"body"`
-	}
-	const perPage = 100
-	for page := 1; ; page++ {
-		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
-		if err != nil {
-			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to build request; using default CMT versions")
-			return defaultCMTServerVersions
-		}
-		var pageReleases []struct {
-			TagName    string `json:"tag_name"`
-			Draft      bool   `json:"draft"`
-			Prerelease bool   `json:"prerelease"`
-			Body       string `json:"body"`
-		}
-		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
-			s.Logger.WithError(err).Warn("[resolveCMTServerVersions] Failed to fetch releases; using default CMT versions")
-			return defaultCMTServerVersions
-		}
-		releases = append(releases, pageReleases...)
-		if len(pageReleases) < perPage {
-			break
-		}
-	}
-
-	latestStable := map[cmtMinorKey]cmtVersion{}
-	esrMinors := map[cmtMinorKey]bool{}
-	var bestRC cmtVersion
-	haveRC := false
-
-	for _, r := range releases {
-		if r.Draft {
-			continue
-		}
-		v, ok := parseCMTVersion(r.TagName)
-		if !ok {
-			continue
-		}
-		key := cmtMinorKey{v.major, v.minor}
-		if v.rc > 0 {
-			if !haveRC || bestRC.less(v) {
-				bestRC = v
-				haveRC = true
-			}
-			continue
-		}
-		if cur, exists := latestStable[key]; !exists || cur.less(v) {
-			latestStable[key] = v
-		}
-		if strings.Contains(strings.ToLower(r.Body), "extended support release") {
-			esrMinors[key] = true
-		}
-	}
+	latestStable := releaseSet.latestStable
+	esrMinors := releaseSet.esrMinors
+	bestRC := releaseSet.bestRC
+	haveRC := releaseSet.haveRC
 
 	if len(latestStable) == 0 {
 		s.Logger.Warn("[resolveCMTServerVersions] No stable releases parsed; using default CMT versions")
@@ -1060,11 +1138,7 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 
 	// All stable minor lines, sorted descending (newest first).
-	minors := make([]cmtVersion, 0, len(latestStable))
-	for _, v := range latestStable {
-		minors = append(minors, v)
-	}
-	sort.Slice(minors, func(i, j int) bool { return minors[j].less(minors[i]) })
+	minors := releaseSet.newestStableMinors()
 
 	selected := map[cmtMinorKey]cmtVersion{}
 	for i := 0; i < len(minors) && i < 3; i++ { // latest 3 stable minor lines
@@ -1109,6 +1183,85 @@ func (s *Server) resolveCMTServerVersions() []string {
 	}
 	s.Logger.WithField("versions", versions).Info("[resolveCMTServerVersions] Auto-derived CMT server version set")
 	return versions
+}
+
+// fetchCMTReleaseSet fetches Mattermost releases and classifies them into the newest patch
+// per stable minor line, which lines are ESR, and the current RC. Shared by the desktop and
+// mobile selectors so both see the same view of releases.
+func (s *Server) fetchCMTReleaseSet() (cmtReleaseSet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	// githubAPIBase is only set in tests to redirect to a mock server.
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Body       string `json:"body"`
+	}
+	const perPage = 100
+	for page := 1; ; page++ {
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
+		if err != nil {
+			return cmtReleaseSet{}, fmt.Errorf("failed to build releases request: %w", err)
+		}
+		var pageReleases []struct {
+			TagName    string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+			Body       string `json:"body"`
+		}
+		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
+			return cmtReleaseSet{}, fmt.Errorf("failed to fetch releases: %w", err)
+		}
+		releases = append(releases, pageReleases...)
+		if len(pageReleases) < perPage {
+			break
+		}
+	}
+
+	latestStable := map[cmtMinorKey]cmtVersion{}
+	esrMinors := map[cmtMinorKey]bool{}
+	var bestRC cmtVersion
+	haveRC := false
+
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		v, ok := parseCMTVersion(r.TagName)
+		if !ok {
+			continue
+		}
+		key := cmtMinorKey{v.major, v.minor}
+		if v.rc > 0 {
+			if !haveRC || bestRC.less(v) {
+				bestRC = v
+				haveRC = true
+			}
+			continue
+		}
+		if cur, exists := latestStable[key]; !exists || cur.less(v) {
+			latestStable[key] = v
+		}
+		if strings.Contains(strings.ToLower(r.Body), "extended support release") {
+			esrMinors[key] = true
+		}
+	}
+
+	return cmtReleaseSet{
+		latestStable: latestStable,
+		esrMinors:    esrMinors,
+		bestRC:       bestRC,
+		haveRC:       haveRC,
+	}, nil
 }
 
 // capCMTVersionsPreferringESR keeps at most maxN versions from an ascending list, dropping
