@@ -267,7 +267,12 @@ func TestDryRun_MobileDispatch(t *testing.T) {
 			require.Len(t, *captures, 1)
 
 			capture := (*captures)[0]
-			assert.Equal(t, prRef, capture.Ref)
+			assert.Equal(t, "main", capture.Ref,
+				"mobile PR E2E must dispatch against default-branch workflow YAML")
+			assert.Equal(t, prRef, capture.Inputs["version_name"],
+				"version_name keeps the PR head branch for TSIO reporting")
+			assert.Equal(t, "42", capture.Inputs["pr_number"])
+			assert.Equal(t, "PR", capture.Inputs["run_type"])
 			assert.Equal(t, tt.platform, capture.Inputs["PLATFORM"])
 			assert.Equal(t, prSha, capture.Inputs["MOBILE_VERSION"])
 			assert.Equal(t, "https://android-site1.test.example.com", capture.Inputs["ANDROID_SITE_1_URL"])

@@ -701,18 +701,30 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		"MOBILE_VERSION": pr.Sha,
 		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
 		"pr_number":      fmt.Sprintf("%d", pr.Number),
+		"version_name":   pr.Ref,
+		"run_type":       "PR",
 	}
 	for inputKey, url := range mobileInputs {
 		inputs[inputKey] = url
 	}
 
-	// Use the github REST API to trigger the workflow_dispatch event
+	// Dispatch against the default branch workflow YAML so release-* / cherry-pick
+	// PR heads (which may lack five-server inputs) still accept this payload.
+	// MOBILE_VERSION remains the PR head SHA under test; concurrency + run-name
+	// on e2e-detox-pr.yml are keyed by pr_number so sibling PRs do not cancel
+	// each other when they share ref=main.
+	workflowRef := mobileE2EWorkflowRef()
+
 	body := map[string]interface{}{
-		"ref":    pr.Ref,
+		"ref":    workflowRef,
 		"inputs": inputs,
 	}
 
-	logger.WithField("workflow", "e2e-detox-pr.yml").Debug("Triggering mobile E2E workflow")
+	logger.WithFields(logrus.Fields{
+		"workflow":     "e2e-detox-pr.yml",
+		"workflow_ref": workflowRef,
+		"pr_ref":       pr.Ref,
+	}).Debug("Triggering mobile E2E workflow")
 
 	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", pr.RepoOwner, pr.RepoName), body)
 	if err != nil {
@@ -726,6 +738,13 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 
 	logger.Info("Successfully triggered mobile E2E workflow")
 	return nil
+}
+
+// mobileE2EWorkflowRef is the git ref whose e2e-detox-pr.yml is used for PR
+// dispatches. Always the mobile default branch so outdated release cherry-pick
+// heads still get current workflow inputs (ANDROID_SITE_* / e2e-test/*).
+func mobileE2EWorkflowRef() string {
+	return "main"
 }
 
 // handleE2ECleanup destroys tracked E2E instances, then queries the cloud API by DNS pattern to catch orphans.
@@ -1687,9 +1706,10 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 
 	var workflowRuns struct {
 		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			HeadBranch string `json:"head_branch"`
-			Status     string `json:"status"`
+			ID           int64  `json:"id"`
+			HeadBranch   string `json:"head_branch"`
+			DisplayTitle string `json:"display_title"`
+			Status       string `json:"status"`
 		} `json:"workflow_runs"`
 	}
 
@@ -1699,29 +1719,39 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 		return
 	}
 
-	// Cancel workflow runs that match this PR's branch
+	// Mobile PR runs are dispatched with ref=main and run-name "E2E PR <n>", so
+	// match display_title (not head_branch == pr.Ref). Desktop still matches branch.
+	prTitlePrefix := fmt.Sprintf("E2E PR %d", pr.Number)
 	cancelCount := 0
 	for _, run := range workflowRuns.WorkflowRuns {
-		// Check if this run is for the PR's branch
-		if run.HeadBranch == pr.Ref && run.Status == "in_progress" {
-			cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
-				pr.RepoOwner, pr.RepoName, run.ID)
-
-			cancelReq, err := client.NewRequest("POST", cancelURL, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
-				continue
-			}
-
-			_, err = client.Do(ctx, cancelReq, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
-				continue
-			}
-
-			logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
-			cancelCount++
+		if run.Status != "in_progress" {
+			continue
 		}
+		matches := run.HeadBranch == pr.Ref
+		if strings.Contains(pr.RepoName, "mobile") {
+			matches = strings.HasPrefix(run.DisplayTitle, prTitlePrefix)
+		}
+		if !matches {
+			continue
+		}
+
+		cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
+			pr.RepoOwner, pr.RepoName, run.ID)
+
+		cancelReq, err := client.NewRequest("POST", cancelURL, nil)
+		if err != nil {
+			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
+			continue
+		}
+
+		_, err = client.Do(ctx, cancelReq, nil)
+		if err != nil {
+			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
+			continue
+		}
+
+		logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
+		cancelCount++
 	}
 
 	if cancelCount > 0 {
