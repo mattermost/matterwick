@@ -10,6 +10,11 @@ import (
 )
 
 func (s *Server) logErrorToMattermost(msg string, args ...interface{}) {
+	s.notifyMattermost(msg, args...)
+}
+
+// notifyMattermost posts a lifecycle/status message to the configured webhook.
+func (s *Server) notifyMattermost(msg string, args ...interface{}) {
 	if s.Config.MattermostWebhookURL == "" {
 		s.Logger.Warn("No Mattermost webhook URL set: unable to send message")
 		return

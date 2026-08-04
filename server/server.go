@@ -177,11 +177,9 @@ func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
-	overLimit := s.CheckLimitRateAndAbortRequest()
-	if overLimit {
-		return
-	}
-
+	// Do not gate webhook ingest on GitHub API rate reserve. A silent abort here
+	// drops the delivery forever (GitHub does not auto-retry), so main-push E2E
+	// never starts and nothing is logged. Rate limiting belongs on outbound calls.
 	buf, _ := io.ReadAll(r.Body)
 
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)

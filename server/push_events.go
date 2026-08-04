@@ -42,7 +42,14 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	// Release-branch push trigger was removed; release stabilization is covered by PR-label E2E and CMT.
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
-		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
+		sha := ""
+		if event.GetHeadCommit() != nil {
+			sha = event.GetHeadCommit().GetID()
+		}
+		logger.WithFields(logrus.Fields{
+			"type": "master_main",
+			"sha":  sha,
+		}).Info("Master/main branch detected, triggering E2E tests")
 		go s.handlePushEventE2E(event, branch)
 		return
 	}
@@ -94,6 +101,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 	if !isDesktop && !isMobile {
 		logger.Warn("Repository is neither desktop nor mobile, skipping E2E tests")
+		s.notifyMattermost("E2E on %s %s (%s) skipped: repo is neither mobile nor desktop", repoName, branch, sha)
 		return
 	}
 
@@ -104,10 +112,12 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 
 	if sha == "" {
 		logger.Error("Push event has no commit SHA, skipping E2E dispatch")
+		s.notifyMattermost("E2E on %s %s did not run: push event had no commit SHA", repoName, branch)
 		return
 	}
 
 	logger.WithField("instanceType", instanceType).Info("Creating E2E instances for push event")
+	s.notifyMattermost("E2E on %s %s (%s): received push — provisioning %s test servers", repoName, branch, sha, instanceType)
 
 	instances, err := s.createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch)
 	if err != nil {
@@ -125,6 +135,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	}
 
 	logger.WithField("instanceCount", len(instances)).Info("E2E instances created successfully")
+	s.notifyMattermost("E2E on %s %s (%s): provisioned %d test servers — dispatching workflow", repoName, branch, sha, len(instances))
 
 	// Key on the branch HEAD resolved now (just before dispatch), not the push SHA: the
 	// dispatched (ref=branch) run reports its head_sha as the branch HEAD at dispatch time,
@@ -157,6 +168,7 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	}
 
 	logger.Info("E2E workflow triggered successfully and instances tracked for cleanup")
+	s.notifyMattermost("E2E on %s %s (%s): workflow dispatched successfully (%d servers)", repoName, branch, sha, len(instances))
 }
 
 // createMultipleE2EInstancesForPushEvent creates all platform instances in parallel.
