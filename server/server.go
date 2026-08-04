@@ -5,6 +5,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,11 +177,25 @@ func (s *Server) ping(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(msg))
 }
 
+const githubWebhookMaxBodyBytes = 10 << 20 // 10 MiB — GitHub payloads are far smaller; bound memory before signature check.
+
 func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 	// Do not gate webhook ingest on GitHub API rate reserve. A silent abort here
 	// drops the delivery forever (GitHub does not auto-retry), so main-push E2E
 	// never starts and nothing is logged. Rate limiting belongs on outbound calls.
-	buf, _ := io.ReadAll(r.Body)
+	r.Body = http.MaxBytesReader(w, r.Body, githubWebhookMaxBodyBytes)
+	buf, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			s.Logger.WithError(err).Error("GitHub webhook body too large")
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		s.Logger.WithError(err).Error("Failed to read webhook body")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	receivedHash := strings.SplitN(r.Header.Get("X-Hub-Signature"), "=", 2)
 	if receivedHash[0] != "sha1" {
@@ -189,7 +204,7 @@ func (s *Server) githubEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := ValidateSignature(receivedHash, buf, s.Config.GitHubWebhookSecret)
+	err = ValidateSignature(receivedHash, buf, s.Config.GitHubWebhookSecret)
 	if err != nil {
 		s.Logger.Error(err.Error())
 		w.WriteHeader(http.StatusForbidden)

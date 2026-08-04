@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // WebhookRequest defines the message to send to MM
@@ -23,7 +24,7 @@ func (s *Server) sendToWebhook(webhookRequest *WebhookRequest) error {
 		return err
 	}
 
-	client := http.Client{}
+	client := http.Client{Timeout: 10 * time.Second}
 	request, err := http.NewRequest("POST", s.Config.MattermostWebhookURL, bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -34,6 +35,7 @@ func (s *Server) sendToWebhook(webhookRequest *WebhookRequest) error {
 	if err != nil {
 		return err
 	}
+	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
 		contents, _ := io.ReadAll(response.Body)
