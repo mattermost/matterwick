@@ -149,8 +149,7 @@ type MatterwickConfig struct {
 	CMTServerVersions []string
 }
 
-// defaultCMTServerVersions is the fallback CMT version set used only when auto-resolution
-// fails (GitHub API error) and no manual override is configured.
+// defaultCMTServerVersions is the fallback when auto-resolution fails (see cmt_versions.go).
 var defaultCMTServerVersions = []string{"10.11.22", "11.7.7"}
 
 func findConfigFile(fileName string) string {
