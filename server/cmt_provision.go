@@ -534,7 +534,7 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 	if err != nil {
 		return 0, fmt.Errorf("failed to dispatch compatibility-matrix-testing.yml: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return 0, fmt.Errorf("unexpected status %d from compatibility-matrix-testing.yml dispatch: %s",
