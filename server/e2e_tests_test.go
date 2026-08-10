@@ -924,7 +924,7 @@ func TestCMTVersionCapFor(t *testing.T) {
 	assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor(""))
 
 	// Peak mobile CMT installs: full suite on latest + one smoke each on the other slots.
-	assert.Equal(t, len(mobileE2EPlatforms)+(maxMobileCMTServerVersions-1), 7,
+	assert.Equal(t, 7, len(mobileE2EPlatforms)+(maxMobileCMTServerVersions-1),
 		"a mobile CMT run must not ask the provisioner for more than 7 installations")
 }
 
@@ -1452,10 +1452,6 @@ func TestRetryDroppedCMTVersionsRefusesSmokeOnlyWithoutFullSuite(t *testing.T) {
 // TestRetryDroppedCMTVersionsStillFails covers the terminal path: after the delayed
 // retry also fails, nothing is dispatched and Mattermost is told coverage is incomplete.
 func TestRetryDroppedCMTVersionsStillFails(t *testing.T) {
-	originalDelay := cmtDroppedVersionRetryDelay
-	cmtDroppedVersionRetryDelay = 0
-	t.Cleanup(func() { cmtDroppedVersionRetryDelay = originalDelay })
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))

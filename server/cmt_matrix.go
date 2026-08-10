@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // cmtServer is one entry in CMT_MATRIX. Mobile entries carry a five-server topology.
@@ -39,10 +40,10 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 			{OS: "windows", Runner: "windows-2022"},
 		},
 	}
+	if len(instances) < len(versions) {
+		return "", fmt.Errorf("desktop CMT: %d versions but only %d instances", len(versions), len(instances))
+	}
 	for i, version := range versions {
-		if i >= len(instances) {
-			break
-		}
 		matrix.Server = append(matrix.Server, cmtServer{Version: version, URL: instances[i].URL})
 	}
 
@@ -51,6 +52,18 @@ func buildDesktopCMTMatrixJSON(versions []string, instances []*E2EInstance) (str
 		return "", fmt.Errorf("failed to marshal desktop CMT matrix: %w", err)
 	}
 	return string(b), nil
+}
+
+// mobileCMTBlockMatchesVersion requires every instance in block to carry the expected server version.
+func mobileCMTBlockMatchesVersion(block []*E2EInstance, version string) error {
+	want := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	for _, inst := range block {
+		got := strings.TrimPrefix(strings.TrimSpace(inst.ServerVersion), "v")
+		if got != want {
+			return fmt.Errorf("mobile CMT instance version mismatch: want %s, got %s (platform %s)", want, got, inst.Platform)
+		}
+	}
+	return nil
 }
 
 // expandMobileSmokeURLs replicates a smoke-server URL into every mobile CMT_MATRIX site field.
@@ -142,12 +155,19 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 
 		if isLatest {
 			if mobileCMTBlockHasFullTopology(remaining) {
-				if err := fillMobileCMTFullSuiteEntry(&entry, remaining[:len(mobileE2EPlatforms)], version); err != nil {
+				block := remaining[:len(mobileE2EPlatforms)]
+				if err := mobileCMTBlockMatchesVersion(block, version); err != nil {
+					return "", err
+				}
+				if err := fillMobileCMTFullSuiteEntry(&entry, block, version); err != nil {
 					return "", err
 				}
 				offset += len(mobileE2EPlatforms)
 				entry.Latest = true
 			} else if len(remaining) >= 1 {
+				if err := mobileCMTBlockMatchesVersion(remaining[:1], version); err != nil {
+					return "", err
+				}
 				// Highest semver was provisioned as smoke only — expand URLs but do not set Latest.
 				expandMobileSmokeURLs(&entry, remaining[0].URL)
 				offset++
@@ -157,6 +177,9 @@ func buildMobileCMTMatrixJSON(versions []string, instances []*E2EInstance) (stri
 		} else {
 			if len(remaining) < 1 {
 				return "", fmt.Errorf("mobile CMT smoke version %s requires 1 instance, got 0 remaining", version)
+			}
+			if err := mobileCMTBlockMatchesVersion(remaining[:1], version); err != nil {
+				return "", err
 			}
 			expandMobileSmokeURLs(&entry, remaining[0].URL)
 			offset++

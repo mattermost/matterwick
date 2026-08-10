@@ -102,19 +102,6 @@ func TestDesktopCMTMatrix(t *testing.T) {
 		key := cmtInstanceKey(repoName, testRunID)
 		assert.Equal(t, "mattermost-desktop-cmt-999", key)
 	})
-
-	t.Run("CMT workflow name detection", func(t *testing.T) {
-		isCMT := func(name string) bool {
-			return strings.Contains(name, "cmt") || strings.Contains(name, "CMT")
-		}
-		assert.True(t, isCMT("CMT Provisioner"))
-		assert.True(t, isCMT("CMT Mobile"))
-		assert.True(t, isCMT("cmt-workflow"))
-		// The actual test workflow must NOT match — its completion is handled via
-		// isE2ETestWorkflow ("Compatibility Matrix Testing" in E2ETestWorkflowNames)
-		assert.False(t, isCMT("Compatibility Matrix Testing"))
-		assert.False(t, isCMT("E2E Desktop"))
-	})
 }
 
 
@@ -331,8 +318,8 @@ func TestCMTVersionNormalization(t *testing.T) {
 	})
 
 	t.Run("CMT matrix JSON contains stripped versions", func(t *testing.T) {
-		// buildDesktopCMTMatrixJSON uses instance.ServerVersion directly.
-		// With stripped versions, the matrix has Docker Hub compatible version strings.
+		// buildDesktopCMTMatrixJSON uses each versions slice entry for the matrix version and
+		// pairs it positionally with the corresponding instance (URL only).
 		versions := []string{"11.0.1", "11.1.0"} // already stripped
 		instances := []*E2EInstance{
 			{URL: "https://11-0-1.example.com", ServerVersion: "11.0.1"},

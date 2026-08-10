@@ -88,7 +88,7 @@ func capCMTServerVersions(serverVersions []string, limit int) []string {
 		limit = 1
 	}
 	if len(serverVersions) <= limit {
-		return serverVersions
+		return append([]string(nil), serverVersions...)
 	}
 	sorted := append([]string(nil), serverVersions...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -201,7 +201,7 @@ func (s *Server) resolveMobileCMTServerVersions() []string {
 
 	seen := map[cmtMinorKey]bool{}
 	chosen := make([]cmtVersion, 0, maxMobileCMTServerVersions)
-	add := func(v cmtVersion) {
+	addStable := func(v cmtVersion) {
 		key := cmtMinorKey{v.major, v.minor}
 		if seen[key] {
 			return
@@ -212,25 +212,26 @@ func (s *Server) resolveMobileCMTServerVersions() []string {
 
 	for _, v := range minors {
 		if releaseSet.isESRLine(v) {
-			add(v)
+			addStable(v)
 			break
 		}
 	}
 	for _, v := range minors {
 		if !releaseSet.isESRLine(v) {
-			add(v)
+			addStable(v)
 			break
 		}
 	}
+	// RC keeps its own slot even when it shares major/minor with a selected stable.
 	if releaseSet.haveRC && minors[0].less(releaseSet.bestRC) {
-		add(releaseSet.bestRC)
+		chosen = append(chosen, releaseSet.bestRC)
 	}
 
 	for _, v := range minors {
 		if len(chosen) >= maxMobileCMTServerVersions {
 			break
 		}
-		add(v)
+		addStable(v)
 	}
 
 	sort.Slice(chosen, func(i, j int) bool { return chosen[i].less(chosen[j]) })

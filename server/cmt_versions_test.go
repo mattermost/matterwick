@@ -134,7 +134,7 @@ func TestResolveCMTServerVersions(t *testing.T) {
 	})
 }
 
-// TestDryRun_MobileCMTVersionSelection covers the mobile version set: newest ESR, latest
+// TestMobileCMTVersionSelection covers the mobile version set: newest ESR, latest
 // production (newest non-ESR stable), and the current RC — full suite on latest, smoke on others.
 func TestMobileCMTVersionSelection(t *testing.T) {
 	releasesBody := `[
@@ -197,6 +197,22 @@ func TestMobileCMTVersionSelection(t *testing.T) {
 		assert.NotContains(t, got, "11.6.0-rc1", "a stale RC must not take the RC slot")
 		assert.Contains(t, got, "11.7.2")
 		assert.Contains(t, got, "11.8.1")
+	})
+
+	t.Run("same-minor RC keeps its own slot beside stable", func(t *testing.T) {
+		body := `[
+			{"tag_name":"v11.8.2-rc1","draft":false,"prerelease":true,"body":"rc"},
+			{"tag_name":"v11.8.1","draft":false,"prerelease":false,"body":"Mattermost Platform Release 11.8.1"},
+			{"tag_name":"v11.7.2","draft":false,"prerelease":false,"body":"Mattermost Platform Extended Support Release 11.7.2"}
+		]`
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.githubAPIBase = srv.URL + "/"
+
+		got := s.resolveMobileCMTServerVersions()
+		assert.Contains(t, got, "11.8.2-rc1", "newer patch-level RC on the newest stable minor must keep a slot")
+		assert.Contains(t, got, "11.8.1")
+		assert.Contains(t, got, "11.7.2")
 	})
 
 	t.Run("no ESR flagged still fills the budget from stable lines", func(t *testing.T) {

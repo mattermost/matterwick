@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"sync"
@@ -36,14 +37,67 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // cmtDroppedVersionRetryDelay waits for provisioner capacity before retrying failed versions. Var so tests can zero it.
 var cmtDroppedVersionRetryDelay = 5 * time.Minute
 
-// cmtMobileProvisionMu serializes mobile CMT provisioning so primary + retry (or concurrent
-// triggers) cannot overlap CreateInstallation storms.
-var cmtMobileProvisionMu sync.Mutex
+// cmtMobileProvisionAcquireTimeout bounds how long a trigger waits for the mobile provision slot.
+var cmtMobileProvisionAcquireTimeout = 10 * time.Minute
+
+// cmtMobileProvisionSem is a single-slot semaphore so primary + retry (or concurrent triggers)
+// cannot overlap CreateInstallation storms. Prefer this over a mutex so waiters honor context cancel.
+var cmtMobileProvisionSem = make(chan struct{}, 1)
+
+func acquireCMTMobileProvision(ctx context.Context) error {
+	select {
+	case cmtMobileProvisionSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseCMTMobileProvision() {
+	select {
+	case <-cmtMobileProvisionSem:
+	default:
+	}
+}
+
+// cmtContextWithStop returns a context cancelled when timeout elapses (if >0) or s.stopCh closes.
+func (s *Server) cmtContextWithStop(timeout time.Duration) (context.Context, context.CancelFunc) {
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	if s == nil || s.stopCh == nil {
+		return ctx, cancel
+	}
+	stopCtx, stopCancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-s.stopCh:
+			stopCancel()
+		case <-stopCtx.Done():
+		}
+	}()
+	return stopCtx, func() {
+		stopCancel()
+		cancel()
+		<-done
+	}
+}
 
 // cmtRunDroppedRetry schedules delayed re-provision + follow-up CMT dispatch. Var so tests can capture without sleeping.
 // Owns the retry delay (retryDroppedCMTVersions does not sleep). Honors s.stopCh when set.
 var cmtRunDroppedRetry = func(s *Server, repoOwner, repoName, instanceType, branch, sha string, runID int64, dropped []string, fullSuiteVersion string, logger logrus.FieldLogger) {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.WithField("panic", r).Error("CMT dropped-version retry goroutine panicked")
+			}
+		}()
 		timer := time.NewTimer(cmtDroppedVersionRetryDelay)
 		defer timer.Stop()
 		if s.stopCh != nil {
@@ -167,17 +221,37 @@ func (s *Server) handleCMTWithServerVersions(repoOwner, repoName, instanceType, 
 // Smoke provisioning never starts until the full-suite attempt has finished (success or fail).
 func (s *Server) provisionCMTVersions(repoName, instanceType string, serverVersions []string, fullSuiteVersion string, logger logrus.FieldLogger) (allInstances []*E2EInstance, validVersions, droppedVersions []string) {
 	if instanceType == "mobile" {
-		cmtMobileProvisionMu.Lock()
-		defer cmtMobileProvisionMu.Unlock()
+		acquireCtx, acquireCancel := s.cmtContextWithStop(cmtMobileProvisionAcquireTimeout)
+		defer acquireCancel()
+		if err := acquireCMTMobileProvision(acquireCtx); err != nil {
+			logger.WithError(err).Error("Failed to acquire mobile CMT provision slot; dropping version set for later retry")
+			dropped := make([]string, 0, len(serverVersions))
+			for _, version := range serverVersions {
+				version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+				if version != "" {
+					dropped = append(dropped, version)
+				}
+			}
+			return nil, nil, dropped
+		}
+		defer releaseCMTMobileProvision()
 	}
+
+	provisionCtx, provisionCancel := s.cmtContextWithStop(0)
+	defer provisionCancel()
 
 	fullSuiteVersion = strings.TrimPrefix(strings.TrimSpace(fullSuiteVersion), "v")
 
 	ordered := make([]string, 0, len(serverVersions))
 	if instanceType == "mobile" && fullSuiteVersion != "" {
+		seen := make(map[string]bool, len(serverVersions))
 		var rest []string
 		for _, version := range serverVersions {
 			normalized := strings.TrimPrefix(strings.TrimSpace(version), "v")
+			if normalized == "" || seen[normalized] {
+				continue
+			}
+			seen[normalized] = true
 			if normalized == fullSuiteVersion {
 				ordered = append(ordered, version)
 			} else {
@@ -186,7 +260,15 @@ func (s *Server) provisionCMTVersions(repoName, instanceType string, serverVersi
 		}
 		ordered = append(ordered, rest...)
 	} else {
-		ordered = serverVersions
+		seen := make(map[string]bool, len(serverVersions))
+		for _, version := range serverVersions {
+			normalized := strings.TrimPrefix(strings.TrimSpace(version), "v")
+			if normalized == "" || seen[normalized] {
+				continue
+			}
+			seen[normalized] = true
+			ordered = append(ordered, version)
+		}
 	}
 
 	startedSmokeBatch := false
@@ -212,14 +294,14 @@ func (s *Server) provisionCMTVersions(repoName, instanceType string, serverVersi
 		var versionInstances []*E2EInstance
 		if instanceType == "mobile" {
 			var err error
-			versionInstances, err = s.createMobileCMTInstances(context.Background(), repoName, version, fullSuite, logger)
+			versionInstances, err = s.createMobileCMTInstances(provisionCtx, repoName, version, fullSuite, logger)
 			if err != nil {
 				logger.WithError(err).Errorf("Failed to create topology for version %s; dropping this version from the CMT matrix", version)
 				droppedVersions = append(droppedVersions, version)
 				continue
 			}
 		} else {
-			instance, err := s.createSingleCMTInstance(context.Background(), repoName, instanceType, version, "", logger)
+			instance, err := s.createSingleCMTInstance(provisionCtx, repoName, instanceType, version, "", logger)
 			if err != nil {
 				logger.WithError(err).Errorf("Failed to create instance for version %s; dropping this version from the CMT matrix", version)
 				droppedVersions = append(droppedVersions, version)
@@ -409,12 +491,9 @@ func (s *Server) createMobileCMTInstances(ctx context.Context, repoName, version
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml and polls for the run id used to key cleanup.
 func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON, instanceType string, logger logrus.FieldLogger) (int64, error) {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
+	client, err := s.newCMTGithubClient(logger)
+	if err != nil {
+		return 0, err
 	}
 
 	preDispatchRunIDs, snapErr := s.listExistingCMTRunIDs(repoOwner, repoName, branch, logger)
@@ -437,8 +516,12 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 		"instanceType": instanceType,
 	}).Debug("Dispatching compatibility-matrix-testing.yml")
 
+	dispatchCtx, dispatchCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dispatchCancel()
+
 	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/compatibility-matrix-testing.yml/dispatches", repoOwner, repoName),
+		fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches",
+			url.PathEscape(repoOwner), url.PathEscape(repoName), url.PathEscape("compatibility-matrix-testing.yml")),
 		map[string]interface{}{
 			"ref":    branch,
 			"inputs": workflowInputs,
@@ -447,12 +530,15 @@ func (s *Server) dispatchCMTWorkflow(repoOwner, repoName, branch, cmtMatrixJSON,
 		return 0, fmt.Errorf("failed to create CMT workflow dispatch request: %w", err)
 	}
 
-	resp, err := client.Do(ctx, req, nil)
+	resp, err := client.Do(dispatchCtx, req, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to dispatch compatibility-matrix-testing.yml: %w", err)
 	}
-	if resp.StatusCode != 204 {
-		return 0, fmt.Errorf("unexpected status %d from compatibility-matrix-testing.yml dispatch", resp.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return 0, fmt.Errorf("unexpected status %d from compatibility-matrix-testing.yml dispatch: %s",
+			resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	testRunID, err := s.pollDispatchedWorkflowRun(repoOwner, repoName, "compatibility-matrix-testing.yml", branch, preDispatchRunIDs, logger)
@@ -487,18 +573,16 @@ type cmtWorkflowRun struct {
 
 // listCMTRuns fetches up to the 10 most-recent workflow_dispatch runs for workflowFile on branch.
 func (s *Server) listCMTRuns(repoOwner, repoName, workflowFile, branch string) ([]cmtWorkflowRun, error) {
-	client := newGithubClient(s.Config.GithubAccessToken)
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
+	client, err := s.newCMTGithubClient(s.Logger)
+	if err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?event=workflow_dispatch&branch=%s&per_page=10",
-		repoOwner, repoName, workflowFile, url.QueryEscape(branch))
+		url.PathEscape(repoOwner), url.PathEscape(repoName), url.PathEscape(workflowFile), url.QueryEscape(branch))
 	req, err := client.NewRequest("GET", listURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow runs list request: %w", err)

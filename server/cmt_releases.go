@@ -12,7 +12,26 @@ import (
 	"time"
 
 	"github.com/google/go-github/v32/github"
+	"github.com/sirupsen/logrus"
 )
+
+// newCMTGithubClient builds a GitHub API client for CMT calls. Invalid githubAPIBase fails
+// loudly instead of silently falling back to api.github.com.
+func (s *Server) newCMTGithubClient(logger logrus.FieldLogger) (*github.Client, error) {
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase == "" {
+		return client, nil
+	}
+	baseURL, err := url.Parse(s.githubAPIBase)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("githubAPIBase", s.githubAPIBase).Error("Invalid githubAPIBase for CMT GitHub client")
+		}
+		return nil, fmt.Errorf("invalid githubAPIBase %q: %w", s.githubAPIBase, err)
+	}
+	client.BaseURL = baseURL
+	return client, nil
+}
 
 // cmtReleaseSet is classified Mattermost release data: newest patch per stable minor, ESR lines, and current RC.
 type cmtReleaseSet struct {
@@ -128,14 +147,9 @@ func (s *Server) resolveMattermostTagCommitSHA(ctx context.Context, client *gith
 // fetchCMTReleaseSet classifies Mattermost releases into newest stable per minor, ESR lines, and current RC.
 // GA: not draft, prerelease==false, not -rcN. RC channel: prerelease==true OR tag is -rcN.
 func (s *Server) fetchCMTReleaseSet() (cmtReleaseSet, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	client := newGithubClient(s.Config.GithubAccessToken)
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
+	client, err := s.newCMTGithubClient(s.Logger)
+	if err != nil {
+		return cmtReleaseSet{}, err
 	}
 
 	type ghRelease struct {
@@ -147,14 +161,19 @@ func (s *Server) fetchCMTReleaseSet() (cmtReleaseSet, error) {
 	}
 	var releases []ghRelease
 	const perPage = 100
-	for page := 1; ; page++ {
-		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
-		if err != nil {
-			return cmtReleaseSet{}, fmt.Errorf("failed to build releases request: %w", err)
+	const maxCMTReleasePages = 10
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer listCancel()
+
+	for page := 1; page <= maxCMTReleasePages; page++ {
+		req, reqErr := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
+		if reqErr != nil {
+			return cmtReleaseSet{}, fmt.Errorf("failed to build releases request: %w", reqErr)
 		}
 		var pageReleases []ghRelease
-		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
-			return cmtReleaseSet{}, fmt.Errorf("failed to fetch releases: %w", err)
+		if _, doErr := client.Do(listCtx, req, &pageReleases); doErr != nil {
+			return cmtReleaseSet{}, fmt.Errorf("failed to fetch releases: %w", doErr)
 		}
 		releases = append(releases, pageReleases...)
 		if len(pageReleases) < perPage {
@@ -198,6 +217,9 @@ func (s *Server) fetchCMTReleaseSet() (cmtReleaseSet, error) {
 		}
 	}
 
+	shaCtx, shaCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer shaCancel()
+
 	var bestRC cmtVersion
 	haveRC := false
 	for _, tags := range rcByPatch {
@@ -211,7 +233,7 @@ func (s *Server) fetchCMTReleaseSet() (cmtReleaseSet, error) {
 		}
 		if hasBare && hasRCN {
 			for i := range tags {
-				sha, shaErr := s.resolveMattermostTagCommitSHA(ctx, client, tags[i].Version.raw)
+				sha, shaErr := s.resolveMattermostTagCommitSHA(shaCtx, client, tags[i].Version.raw)
 				if shaErr != nil {
 					s.Logger.WithError(shaErr).WithField("tag", tags[i].Version.raw).
 						Warn("[fetchCMTReleaseSet] Failed to resolve tag SHA; continuing without it")
