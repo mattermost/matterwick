@@ -69,7 +69,8 @@
     "TokenEndpoint": "https://matterwick.auth.mattermost.com/oauth/token"
   },
   "PluginRepoToIDMapping": {
-    "mattermost-plugin-boards": "focalboard"
+    "mattermost-plugin-boards": "focalboard",
+    "mattermost-plugin-docs": "com.mattermost.docs"
   },
   "E2ELabel": "E2E/Run",
   "E2EMobileIOSLabel": "E2E/Run-iOS",
