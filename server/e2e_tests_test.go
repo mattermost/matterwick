@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -916,16 +917,15 @@ func TestCreateCloudInstallationWithRetry(t *testing.T) {
 }
 
 // TestCMTVersionCapFor pins the mobile-vs-desktop CMT version caps. Mobile provisions a
-// full topology per version, so its cap governs whether CMT can provision at all.
+// full topology only on the latest version, so its peak install count is 5+1+1=7.
 func TestCMTVersionCapFor(t *testing.T) {
 	assert.Equal(t, maxMobileCMTServerVersions, cmtVersionCapFor("mobile"))
 	assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor("desktop"))
 	assert.Equal(t, maxCMTServerVersions, cmtVersionCapFor(""))
 
-	// The mobile cap exists to bound instance count: versions × platforms. Fifteen is the
-	// ceiling a mobile CMT run may ask the provisioner for; #92 asked for 25.
-	assert.LessOrEqual(t, maxMobileCMTServerVersions*len(mobileE2EPlatforms), 15,
-		"a mobile CMT run must not ask the provisioner for more than 15 installations")
+	// Peak mobile CMT installs: full suite on latest + one smoke each on the other slots.
+	assert.Equal(t, 7, len(mobileE2EPlatforms)+(maxMobileCMTServerVersions-1),
+		"a mobile CMT run must not ask the provisioner for more than 7 installations")
 }
 
 // TestCapCMTServerVersionsRespectsMax covers the per-instance-type cap argument.
@@ -1181,3 +1181,384 @@ func TestCleanupOfPartiallyCreatedInstallation(t *testing.T) {
 			"each attempt's installation must be deleted, not leaked when the next attempt starts")
 	})
 }
+
+// TestProvisionCMTVersionsDropsFailures covers the per-version drop path: a provisioner
+// failure for one version must not abort provisioning of the others, and must surface
+// the failed version for the delayed retry path.
+func TestProvisionCMTVersionsDropsFailures(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer: "test.example.com",
+			E2EUsername:       "admin",
+			E2EPassword:       "pw",
+		},
+		CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:      logrus.New(),
+	}
+
+	instances, valid, dropped := s.provisionCMTVersions(
+		"mattermost-desktop", "desktop", []string{"10.11.22", "v11.7.7"}, "", s.Logger)
+
+	assert.Empty(t, instances)
+	assert.Empty(t, valid)
+	assert.Equal(t, []string{"10.11.22", "11.7.7"}, dropped, "v-prefix stripped; both versions dropped")
+}
+
+// TestHandleCMTSchedulesDroppedRetry verifies that dropped versions are handed to the
+// targeted re-dispatch path instead of being abandoned after the primary matrix runs.
+func TestHandleCMTSchedulesDroppedRetry(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	var webhookBodies []string
+	var webhookMu sync.Mutex
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		webhookMu.Lock()
+		webhookBodies = append(webhookBodies, payload.Text)
+		webhookMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(webhook.Close)
+
+	originalScheduler := cmtRunDroppedRetry
+	t.Cleanup(func() { cmtRunDroppedRetry = originalScheduler })
+
+	var gotDropped []string
+	var gotBranch, gotRepo string
+	cmtRunDroppedRetry = func(_ *Server, _, repoName, _, branch, _ string, _ int64, dropped []string, _ string, _ logrus.FieldLogger) {
+		gotDropped = append([]string(nil), dropped...)
+		gotBranch = branch
+		gotRepo = repoName
+	}
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:     "test.example.com",
+			E2EUsername:           "admin",
+			E2EPassword:           "pw",
+			MattermostWebhookURL:  webhook.URL,
+			GithubAccessToken:     "test-token",
+		},
+		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+	}
+
+	s.handleCMTWithServerVersions(
+		"mattermost", "mattermost-desktop", "desktop",
+		"v6.2.0-rc.1", "abc123", []string{"10.11.22", "11.7.7"}, 42, s.Logger)
+
+	assert.Equal(t, []string{"10.11.22", "11.7.7"}, gotDropped, "retry must receive every dropped version")
+	assert.Equal(t, "v6.2.0-rc.1", gotBranch)
+	assert.Equal(t, "mattermost-desktop", gotRepo)
+	webhookMu.Lock()
+	bodies := append([]string(nil), webhookBodies...)
+	webhookMu.Unlock()
+	require.NotEmpty(t, bodies)
+	assert.Contains(t, bodies[0], "Will retry")
+	assert.Contains(t, bodies[0], "10.11.22")
+}
+
+// TestHandleCMTMobileRefusesDispatchWithoutFullSuite verifies mobile will not dispatch a
+// primary matrix of smoke-only survivors when the full-suite version failed to provision.
+func TestHandleCMTMobileRefusesDispatchWithoutFullSuite(t *testing.T) {
+	var deletes int
+	var deleteMu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleteMu.Lock()
+			deletes++
+			deleteMu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	var webhookBodies []string
+	var webhookMu sync.Mutex
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		webhookMu.Lock()
+		webhookBodies = append(webhookBodies, payload.Text)
+		webhookMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(webhook.Close)
+
+	originalScheduler := cmtRunDroppedRetry
+	originalProvision := cmtProvisionVersions
+	originalDispatch := cmtDispatchAndTrack
+	t.Cleanup(func() {
+		cmtRunDroppedRetry = originalScheduler
+		cmtProvisionVersions = originalProvision
+		cmtDispatchAndTrack = originalDispatch
+	})
+
+	smokeInstances := []*E2EInstance{
+		{URL: "https://smoke-11-6-4.example.com", ServerVersion: "11.6.4", InstallationID: "inst-smoke-1", Platform: "site-3"},
+		{URL: "https://smoke-11-7-2.example.com", ServerVersion: "11.7.2", InstallationID: "inst-smoke-2", Platform: "site-3"},
+	}
+	cmtProvisionVersions = func(_ *Server, _, _ string, _ []string, _ string, _ logrus.FieldLogger) ([]*E2EInstance, []string, []string) {
+		// Full-suite RC dropped; only smoke survivors remain.
+		return smokeInstances, []string{"11.6.4", "11.7.2"}, []string{"11.8.0-rc3"}
+	}
+
+	dispatchCalled := false
+	cmtDispatchAndTrack = func(_ *Server, _, _, _, _ string, _ int64, _ []string, _ []*E2EInstance, _ logrus.FieldLogger) {
+		dispatchCalled = true
+	}
+
+	var gotDropped []string
+	var gotFullSuite string
+	cmtRunDroppedRetry = func(_ *Server, _, _, _, _, _ string, _ int64, dropped []string, fullSuite string, _ logrus.FieldLogger) {
+		gotDropped = append([]string(nil), dropped...)
+		gotFullSuite = fullSuite
+	}
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:    "test.example.com",
+			E2EUsername:          "admin",
+			E2EPassword:          "pw",
+			MattermostWebhookURL: webhook.URL,
+			GithubAccessToken:    "test-token",
+		},
+		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+	}
+
+	requested := []string{"11.6.4", "11.7.2", "11.8.0-rc3"}
+	s.handleCMTWithServerVersions(
+		"mattermost", "mattermost-mobile", "mobile",
+		"v2.30.0", "abc123", requested, 42, s.Logger)
+
+	assert.False(t, dispatchCalled, "primary must not dispatch without full-suite version")
+	assert.Empty(t, s.e2eInstances, "primary must not track e2eInstances when aborting")
+	assert.Equal(t, requested, gotDropped, "retry must re-attempt all originally requested versions")
+	assert.Equal(t, "11.8.0-rc3", gotFullSuite)
+
+	deleteMu.Lock()
+	gotDeletes := deletes
+	deleteMu.Unlock()
+	assert.Equal(t, len(smokeInstances), gotDeletes, "smoke survivors must be destroyed to free capacity")
+
+	webhookMu.Lock()
+	bodies := append([]string(nil), webhookBodies...)
+	webhookMu.Unlock()
+	require.NotEmpty(t, bodies)
+	assert.Contains(t, bodies[0], "refusing to dispatch mobile CMT without full-suite version 11.8.0-rc3")
+}
+
+// TestRetryDroppedCMTVersionsRefusesSmokeOnlyWithoutFullSuite verifies that when the
+// retry was responsible for the full-suite version and it still fails, smoke survivors
+// are destroyed and no follow-up matrix is dispatched.
+func TestRetryDroppedCMTVersionsRefusesSmokeOnlyWithoutFullSuite(t *testing.T) {
+	var deletes int
+	var deleteMu sync.Mutex
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleteMu.Lock()
+			deletes++
+			deleteMu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	var webhookBodies []string
+	var webhookMu sync.Mutex
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		webhookMu.Lock()
+		webhookBodies = append(webhookBodies, payload.Text)
+		webhookMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(webhook.Close)
+
+	originalProvision := cmtProvisionVersions
+	originalDispatch := cmtDispatchAndTrack
+	t.Cleanup(func() {
+		cmtProvisionVersions = originalProvision
+		cmtDispatchAndTrack = originalDispatch
+	})
+
+	smokeInstances := []*E2EInstance{
+		{URL: "https://smoke-11-6-4.example.com", ServerVersion: "11.6.4", InstallationID: "inst-smoke-1", Platform: "site-3"},
+	}
+	cmtProvisionVersions = func(_ *Server, _, _ string, _ []string, _ string, _ logrus.FieldLogger) ([]*E2EInstance, []string, []string) {
+		return smokeInstances, []string{"11.6.4"}, []string{"11.8.0-rc3"}
+	}
+	dispatchCalled := false
+	cmtDispatchAndTrack = func(_ *Server, _, _, _, _ string, _ int64, _ []string, _ []*E2EInstance, _ logrus.FieldLogger) {
+		dispatchCalled = true
+	}
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:    "test.example.com",
+			E2EUsername:          "admin",
+			E2EPassword:          "pw",
+			MattermostWebhookURL: webhook.URL,
+			GithubAccessToken:    "test-token",
+		},
+		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+	}
+
+	s.retryDroppedCMTVersions(
+		"mattermost", "mattermost-mobile", "mobile",
+		"v2.30.0", "abc123", 42,
+		[]string{"11.6.4", "11.8.0-rc3"}, "11.8.0-rc3", s.Logger)
+
+	assert.False(t, dispatchCalled, "retry must not dispatch smoke-only when full-suite was required and failed")
+	assert.Empty(t, s.e2eInstances)
+	deleteMu.Lock()
+	gotDeletes := deletes
+	deleteMu.Unlock()
+	assert.Equal(t, len(smokeInstances), gotDeletes)
+
+	webhookMu.Lock()
+	bodies := append([]string(nil), webhookBodies...)
+	webhookMu.Unlock()
+	require.NotEmpty(t, bodies)
+	joined := strings.Join(bodies, "\n")
+	assert.Contains(t, joined, "refusing to dispatch mobile CMT retry without full-suite version 11.8.0-rc3")
+}
+
+// TestRetryDroppedCMTVersionsStillFails covers the terminal path: after the delayed
+// retry also fails, nothing is dispatched and Mattermost is told coverage is incomplete.
+func TestRetryDroppedCMTVersionsStillFails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	var webhookBodies []string
+	var webhookMu sync.Mutex
+	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		webhookMu.Lock()
+		webhookBodies = append(webhookBodies, payload.Text)
+		webhookMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(webhook.Close)
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:    "test.example.com",
+			E2EUsername:          "admin",
+			E2EPassword:          "pw",
+			MattermostWebhookURL: webhook.URL,
+			GithubAccessToken:    "test-token",
+		},
+		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:       logrus.New(),
+		e2eInstances: make(map[string][]*E2EInstance),
+	}
+
+	s.retryDroppedCMTVersions(
+		"mattermost", "mattermost-desktop", "desktop",
+		"v6.2.0-rc.1", "abc123", 42, []string{"11.7.7"}, "", s.Logger)
+
+	assert.Empty(t, s.e2eInstances, "failed retry must not track instances")
+	webhookMu.Lock()
+	bodies := append([]string(nil), webhookBodies...)
+	webhookMu.Unlock()
+	require.NotEmpty(t, bodies)
+	assert.Contains(t, bodies[0], "still failed")
+	assert.Contains(t, bodies[0], "11.7.7")
+}
+
+// TestDispatchAndTrackCMTFollowUpMatrix covers the recovered-version path: a follow-up
+// CMT_MATRIX containing only the recovered versions is dispatched and tracked under its
+// own test run id (so cleanup of the primary matrix cannot orphan the retry instances).
+func TestDispatchAndTrackCMTFollowUpMatrix(t *testing.T) {
+	var dispatches []string
+	var listCalls int
+	var ghMu sync.Mutex
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ghMu.Lock()
+		defer ghMu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/dispatches"):
+			var payload struct {
+				Inputs map[string]interface{} `json:"inputs"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if matrix, ok := payload.Inputs["CMT_MATRIX"].(string); ok {
+				dispatches = append(dispatches, matrix)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/runs"):
+			listCalls++
+			// First list is the pre-dispatch snapshot (empty). After dispatch, report a new run.
+			runs := `{"workflow_runs":[]}`
+			if listCalls > 1 {
+				runs = `{"workflow_runs":[{"id":9001,"created_at":"2026-08-03T00:00:00Z"}]}`
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(runs))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer: "test.example.com",
+			GithubAccessToken: "test-token",
+		},
+		Logger:        logrus.New(),
+		e2eInstances:  make(map[string][]*E2EInstance),
+		githubAPIBase: gh.URL + "/",
+	}
+
+	recovered := []string{"11.7.7"}
+	instances := []*E2EInstance{{URL: "https://retry.example.com", ServerVersion: "11.7.7"}}
+	s.dispatchAndTrackCMT("mattermost", "mattermost-desktop", "desktop", "v6.2.0-rc.1", 42, recovered, instances, s.Logger)
+
+	ghMu.Lock()
+	gotDispatches := append([]string(nil), dispatches...)
+	ghMu.Unlock()
+	require.Len(t, gotDispatches, 1)
+	assert.Contains(t, gotDispatches[0], `"version":"11.7.7"`)
+	assert.Contains(t, gotDispatches[0], "https://retry.example.com")
+	assert.NotContains(t, gotDispatches[0], "10.11.22", "follow-up matrix must only carry recovered versions")
+
+	key := cmtInstanceKey("mattermost-desktop", 9001)
+	s.e2eInstancesLock.Lock()
+	tracked := s.e2eInstances[key]
+	s.e2eInstancesLock.Unlock()
+	require.Len(t, tracked, 1)
+	assert.Equal(t, "https://retry.example.com", tracked[0].URL)
+}
+
