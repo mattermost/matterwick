@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blang/semver"
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/matterwick/internal/spinwick"
 	"github.com/mattermost/matterwick/model"
@@ -27,6 +28,20 @@ const (
 // isPluginRepository checks if the repository is a plugin repository
 func (s *Server) isPluginRepository(repoName string) bool {
 	return strings.HasPrefix(repoName, pluginRepoPrefix)
+}
+
+// pluginSpinwickImageTag maps a resolved Mattermost version to the Docker tag
+// published on mattermostdevelopment/mattermost-enterprise-edition.
+func pluginSpinwickImageTag(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" || version == "master" || strings.HasPrefix(version, "release-") {
+		return version
+	}
+	v, err := semver.ParseTolerant(version)
+	if err != nil {
+		return version
+	}
+	return fmt.Sprintf("release-%d.%d", v.Major, v.Minor)
 }
 
 // createPluginSpinWick creates a SpinWick for a plugin repository
@@ -59,9 +74,10 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("No plugin SpinWick found for this PR. Creating a new one.")
 
-	// Create the Mattermost installation using the highest available server version (including RCs)
+	// Create the Mattermost installation using the highest available server version (including RCs).
+	// mattermostdevelopment/ publishes branch tags (release-X.Y), not bare semver.
 	cloudClient := s.CloudClient
-	serverVersion := s.resolveMattermostServerVersion()
+	serverVersion := pluginSpinwickImageTag(s.resolveMattermostServerVersion())
 	logger.WithField("server_version", serverVersion).Info("Resolved Mattermost server version for plugin SpinWick")
 	installationRequest := s.createInstallationRequest(
 		ownerID,

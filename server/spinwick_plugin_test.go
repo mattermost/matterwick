@@ -304,3 +304,26 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "mattermost-plugin-pr-builds", pluginS3Bucket)
 	assert.Equal(t, "us-east-1", pluginS3Region)
 }
+
+func TestPluginSpinwickImageTag(t *testing.T) {
+	tests := []struct {
+		name     string
+		version  string
+		expected string
+	}{
+		{name: "full semver", version: "11.10.0", expected: "release-11.10"},
+		{name: "rc semver", version: "11.10.0-rc3", expected: "release-11.10"},
+		{name: "major.minor", version: "11.10", expected: "release-11.10"},
+		{name: "master", version: "master", expected: "master"},
+		{name: "already release tag", version: "release-11.10", expected: "release-11.10"},
+		{name: "empty", version: "", expected: ""},
+		{name: "whitespace master", version: "  master  ", expected: "master"},
+		{name: "unparseable", version: "latest", expected: "latest"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, pluginSpinwickImageTag(tc.version))
+		})
+	}
+}
