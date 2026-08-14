@@ -74,7 +74,7 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("No plugin SpinWick found for this PR. Creating a new one.")
 
-	// Create the Mattermost installation using the highest available server version (including RCs).
+	// Create the Mattermost installation using the resolved server version.
 	// mattermostdevelopment/ publishes branch tags (release-X.Y), not bare semver.
 	cloudClient := s.CloudClient
 	serverVersion := pluginSpinwickImageTag(s.resolveMattermostServerVersion())
