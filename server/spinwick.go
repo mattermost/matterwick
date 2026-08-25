@@ -218,7 +218,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		request = s.createCWSSpinWick(pr, logger)
 	} else if s.isPluginRepository(pr.RepoName) {
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Creating a Plugin SpinWick test server")
-		request = s.createPluginSpinWick(pr, logger)
+		request = s.createPluginSpinWick(pr, envVars, logger)
 	} else if withCloudInfra {
 		s.sendGitHubComment(
 			pr.RepoOwner,
@@ -700,7 +700,7 @@ func (s *Server) handleUpdateSpinWick(pr *model.PullRequest, withLicense, withCl
 	if pr.RepoName == cwsRepoName {
 		request = s.updateKubeSpinWick(pr, logger)
 	} else if s.isPluginRepository(pr.RepoName) {
-		request = s.updatePluginSpinWick(pr, logger)
+		request = s.updatePluginSpinWick(pr, envVars, logger)
 	} else {
 		request = s.updateSpinWick(pr, withLicense, withCloudInfra, noBuildChanges, envVars, logger)
 	}

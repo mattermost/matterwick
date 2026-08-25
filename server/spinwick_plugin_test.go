@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -326,4 +327,48 @@ func TestPluginSpinwickImageTag(t *testing.T) {
 			assert.Equal(t, tc.expected, pluginSpinwickImageTag(tc.version))
 		})
 	}
+}
+
+func TestEnvVarNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVars  cloudModel.EnvVarMap
+		expected []string
+	}{
+		{name: "nil", envVars: nil, expected: []string{}},
+		{name: "empty", envVars: cloudModel.EnvVarMap{}, expected: []string{}},
+		{
+			name:     "single",
+			envVars:  cloudModel.EnvVarMap{"MM_FEATUREFLAGS_DOCS": {Value: "true"}},
+			expected: []string{"MM_FEATUREFLAGS_DOCS"},
+		},
+		{
+			name: "sorted regardless of map order",
+			envVars: cloudModel.EnvVarMap{
+				"MM_SERVICESETTINGS_ENABLEDOCS": {Value: "true"},
+				"MM_FEATUREFLAGS_DOCS":          {Value: "true"},
+				"MM_LOGSETTINGS_ENABLEDEBUG":    {Value: "false"},
+			},
+			expected: []string{
+				"MM_FEATUREFLAGS_DOCS",
+				"MM_LOGSETTINGS_ENABLEDEBUG",
+				"MM_SERVICESETTINGS_ENABLEDOCS",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, envVarNames(tc.envVars))
+		})
+	}
+}
+
+func TestEnvVarNamesOmitsValues(t *testing.T) {
+	envVars := cloudModel.EnvVarMap{"MM_SECRET_TOKEN": {Value: "hunter2"}}
+
+	names := envVarNames(envVars)
+
+	require.Equal(t, []string{"MM_SECRET_TOKEN"}, names)
+	assert.NotContains(t, fmt.Sprint(names), "hunter2")
 }
