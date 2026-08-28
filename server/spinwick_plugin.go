@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,7 +47,7 @@ func pluginSpinwickImageTag(version string) string {
 }
 
 // createPluginSpinWick creates a SpinWick for a plugin repository
-func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
+func (s *Server) createPluginSpinWick(pr *model.PullRequest, envVars cloudModel.EnvVarMap, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -86,8 +88,11 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, logger logrus.Field
 		spinwick.DNS(s.Config.DNSNameTestServer),
 		"miniSingleton",
 		false, // no license needed for plugins
-		nil,   // no env vars for plugins
+		envVars,
 	)
+	if len(envVars) > 0 {
+		logger.WithField("env_vars", envVarNames(envVars)).Info("Applying environment variables to plugin SpinWick")
+	}
 
 	installation, err = cloudClient.CreateInstallation(installationRequest)
 	if err != nil {
@@ -259,7 +264,7 @@ func (s *Server) waitForS3Artifact(ctx context.Context, url string, logger logru
 }
 
 // updatePluginSpinWick updates a SpinWick for a plugin repository
-func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.FieldLogger) *spinwick.Request {
+func (s *Server) updatePluginSpinWick(pr *model.PullRequest, envVars cloudModel.EnvVarMap, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
 		InstallationID: "n/a",
 		Error:          nil,
@@ -294,6 +299,14 @@ func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.Field
 		s.removeCommentsWithSpecificMessages(comments, serverNewCommitMessages, pr, logger)
 	}
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "New commit detected. SpinWick will update the plugin if a new artifact is available.")
+
+	// Patch before the plugin is reinstalled: applying env vars restarts the
+	// installation, which would otherwise race the install.
+	if len(envVars) > 0 {
+		if err := s.applyPluginSpinWickEnv(pr, request, envVars, logger); err != nil {
+			return request.WithError(err).ShouldReportError()
+		}
+	}
 
 	// Get ClusterInstallation ID
 	cloudClient := s.CloudClient
@@ -357,6 +370,45 @@ func (s *Server) updatePluginSpinWick(pr *model.PullRequest, logger logrus.Field
 	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, updateMessage)
 
 	return request
+}
+
+// applyPluginSpinWickEnv patches the installation's priority env vars and waits
+// for it to become stable again.
+func (s *Server) applyPluginSpinWickEnv(pr *model.PullRequest, request *spinwick.Request, envVars cloudModel.EnvVarMap, logger logrus.FieldLogger) error {
+	logger.WithField("env_vars", envVarNames(envVars)).Info("Patching plugin SpinWick environment variables")
+
+	_, err := s.CloudClient.UpdateInstallation(request.InstallationID, &cloudModel.PatchInstallationRequest{
+		PriorityEnv: envVars,
+	})
+	if err != nil {
+		return errors.Wrap(err, "unable to patch installation environment variables")
+	}
+
+	wait := 600
+	logger.Infof("Waiting %d seconds for mattermost installation to become stable", wait)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
+	defer cancel()
+
+	if os.Getenv("MATTERWICK_LOCAL_TESTING") == "true" {
+		s.waitForInstallationStablePoll(ctx, pr, request, logger)
+	} else {
+		s.waitForInstallationStable(ctx, pr, request, logger)
+	}
+	if request.Error != nil {
+		return errors.Wrap(request.Error, "error waiting for installation to become stable")
+	}
+
+	return nil
+}
+
+func envVarNames(envVars cloudModel.EnvVarMap) []string {
+	names := make([]string, 0, len(envVars))
+	for name := range envVars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	return names
 }
 
 // destroyPluginSpinWick destroys a SpinWick for a plugin repository
