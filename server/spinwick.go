@@ -953,6 +953,18 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 	return request
 }
 
+// sendDestroyedComment announces that a test server was destroyed, unless the
+// PR is already closed or merged. Test servers are always torn down on close,
+// so the announcement there is noise on a PR nobody is watching anymore.
+func (s *Server) sendDestroyedComment(pr *model.PullRequest, message string, logger logrus.FieldLogger) {
+	if pr.State == "closed" {
+		logger.Info("PR is closed/merged, not commenting that the test server was destroyed")
+		return
+	}
+
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, message)
+}
+
 func (s *Server) handleDestroySpinWick(pr *model.PullRequest, withCloud bool) {
 	logger := s.Logger.WithFields(logrus.Fields{"repo_name": pr.RepoName, "pr": pr.Number})
 
@@ -1066,7 +1078,7 @@ func (s *Server) destroyKubeSpinWick(pr *model.PullRequest, logger logrus.FieldL
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
 	s.removeOldComments(comments, pr, logger)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, "Spinwick CWS test server has been destroyed.")
+	s.sendDestroyedComment(pr, "Spinwick CWS test server has been destroyed.", logger)
 	return request
 }
 
@@ -1123,7 +1135,7 @@ func (s *Server) destroyCloudSpinWickWithCWS(pr *model.PullRequest, logger logru
 		return request.WithError(errors.Wrap(err, "unable to get list of old comments")).ShouldReportError()
 	}
 	s.removeOldComments(comments, pr, logger)
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.DestroyedSpinmintMessage)
+	s.sendDestroyedComment(pr, s.Config.DestroyedSpinmintMessage, logger)
 	return request
 }
 
@@ -1169,7 +1181,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 	}
 	s.removeOldComments(comments, pr, logger)
 
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, s.Config.DestroyedSpinmintMessage)
+	s.sendDestroyedComment(pr, s.Config.DestroyedSpinmintMessage, logger)
 
 	return request
 }
