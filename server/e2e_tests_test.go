@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1244,11 +1247,11 @@ func TestHandleCMTSchedulesDroppedRetry(t *testing.T) {
 
 	s := &Server{
 		Config: &MatterwickConfig{
-			DNSNameTestServer:     "test.example.com",
-			E2EUsername:           "admin",
-			E2EPassword:           "pw",
-			MattermostWebhookURL:  webhook.URL,
-			GithubAccessToken:     "test-token",
+			DNSNameTestServer:    "test.example.com",
+			E2EUsername:          "admin",
+			E2EPassword:          "pw",
+			MattermostWebhookURL: webhook.URL,
+			GithubAccessToken:    "test-token",
 		},
 		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
 		Logger:       logrus.New(),
@@ -1562,3 +1565,388 @@ func TestDispatchAndTrackCMTFollowUpMatrix(t *testing.T) {
 	assert.Equal(t, "https://retry.example.com", tracked[0].URL)
 }
 
+func TestE2EInstallationImage(t *testing.T) {
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage("master"))
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage("main"))
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage(" MASTER "))
+	assert.Empty(t, e2eInstallationImage("11.11.0"))
+	assert.Empty(t, e2eInstallationImage("11.7.7"))
+	assert.Empty(t, e2eInstallationImage("latest"))
+	assert.Empty(t, e2eInstallationImage(""))
+}
+
+func TestE2EInstancesMatchVersion(t *testing.T) {
+	t.Run("empty set does not match", func(t *testing.T) {
+		assert.False(t, e2eInstancesMatchVersion(nil, "master"))
+		assert.False(t, e2eInstancesMatchVersion([]*E2EInstance{}, "master"))
+		assert.Empty(t, e2eFirstInstanceVersion(nil))
+		assert.Empty(t, e2eFirstInstanceVersion([]*E2EInstance{}))
+	})
+
+	t.Run("all instances match desired version", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "master"},
+			{ServerVersion: "master"},
+		}
+		assert.True(t, e2eInstancesMatchVersion(instances, "master"))
+		assert.Equal(t, "master", e2eFirstInstanceVersion(instances))
+	})
+
+	t.Run("mismatch against desired version", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "11.11.0"},
+			{ServerVersion: "11.11.0"},
+		}
+		assert.False(t, e2eInstancesMatchVersion(instances, "master"))
+		assert.Equal(t, "11.11.0", e2eFirstInstanceVersion(instances))
+	})
+
+	t.Run("mixed versions do not match", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "master"},
+			{ServerVersion: "11.11.0"},
+		}
+		assert.False(t, e2eInstancesMatchVersion(instances, "master"))
+	})
+
+	t.Run("nil instance does not match", func(t *testing.T) {
+		assert.False(t, e2eInstancesMatchVersion([]*E2EInstance{nil}, "master"))
+	})
+}
+
+func TestDefaultConfigUsesMasterForPRE2E(t *testing.T) {
+	path := filepath.Join("..", "config", "config-matterwick.default.json")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	cfg, err := GetConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, "master", cfg.E2EServerVersion)
+	assert.Empty(t, cfg.CMTServerVersions)
+
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	_, hasCMT := decoded["CMTServerVersions"]
+	assert.False(t, hasCMT, "default config must leave CMTServerVersions absent so CMT auto-derives")
+}
+
+func TestCreateCloudInstallationImageAndFlags(t *testing.T) {
+	captureCreate := func(t *testing.T, version, instanceType string) map[string]any {
+		t.Helper()
+		var posted map[string]any
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/installations":
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&posted))
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(`{"ID":"install-abc","State":"creation-requested","OwnerID":"e2e-test"}`))
+			case r.Method == http.MethodDelete:
+				w.WriteHeader(http.StatusAccepted)
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		t.Cleanup(ts.Close)
+
+		s := &Server{
+			Config: &MatterwickConfig{
+				DNSNameTestServer: "test.example.com",
+				E2EUsername:       "admin",
+			},
+			CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+			Logger:      logrus.New(),
+		}
+		_, err := s.createCloudInstallation(
+			context.Background(), "e2e-test-uid", version, "admin", "pw", instanceType, s.Logger)
+		require.Error(t, err, "status poll is expected to fail so we can inspect the create payload")
+		require.NotEmpty(t, posted, "create payload must be captured")
+		return posted
+	}
+
+	priorityEnvKeys := func(posted map[string]any) map[string]bool {
+		t.Helper()
+		rawEnv, ok := posted["PriorityEnv"].(map[string]any)
+		require.True(t, ok, "PriorityEnv must be present")
+		keys := make(map[string]bool, len(rawEnv))
+		for k := range rawEnv {
+			keys[k] = true
+		}
+		return keys
+	}
+
+	t.Run("master + mobile uses development EE image and ChannelAttributes", func(t *testing.T) {
+		posted := captureCreate(t, "master", "mobile")
+		assert.Equal(t, "master", posted["Version"])
+		assert.Equal(t, mattermostEEImage, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.True(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.True(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.True(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"])
+	})
+
+	t.Run("11.7.7 + mobile keeps Image empty for CMT", func(t *testing.T) {
+		posted := captureCreate(t, "11.7.7", "mobile")
+		assert.Equal(t, "11.7.7", posted["Version"])
+		assert.Empty(t, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.True(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.True(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.True(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"])
+	})
+
+	t.Run("desktop master does not get ChannelAttributes", func(t *testing.T) {
+		posted := captureCreate(t, "master", "desktop")
+		assert.Equal(t, "master", posted["Version"])
+		assert.Equal(t, mattermostEEImage, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.False(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+	})
+}
+
+func TestHandleE2ETestRequestSerializesReplacement(t *testing.T) {
+	originalCreate := e2eCreatePRInstances
+	originalDispatch := e2eDispatchPRWorkflow
+	t.Cleanup(func() {
+		e2eCreatePRInstances = originalCreate
+		e2eDispatchPRWorkflow = originalDispatch
+	})
+
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/installations":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("[]"))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ID":"inst","State":"stable"}`))
+		}
+	}))
+	t.Cleanup(cloud.Close)
+
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"state":"open"}`))
+		case strings.Contains(r.URL.Path, "/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	var creates atomic.Int32
+	e2eCreatePRInstances = func(_ *Server, _ *model.PullRequest, _ string, _ []string) ([]*E2EInstance, error) {
+		time.Sleep(80 * time.Millisecond)
+		creates.Add(1)
+		return makeMobileInstances(), nil
+	}
+
+	var dispatched []string
+	var dispatchMu sync.Mutex
+	e2eDispatchPRWorkflow = func(_ *Server, _ *model.PullRequest, instances []*E2EInstance, _, testPlatform string) error {
+		require.Len(t, instances, len(mobileE2EPlatforms))
+		dispatchMu.Lock()
+		dispatched = append(dispatched, testPlatform)
+		dispatchMu.Unlock()
+		return nil
+	}
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:     "test.example.com",
+			GithubAccessToken:     "test-token",
+			E2EServerVersion:      "master",
+			E2ELabel:              "E2E/Run",
+			E2EMobileIOSLabel:     "E2E/Run-iOS",
+			E2EMobileAndroidLabel: "E2E/Run-Android",
+		},
+		Logger:                 logrus.New(),
+		CloudClient:            model.NewCloudClient(cloud.URL, "", "", "", ""),
+		e2eInstances:           make(map[string][]*E2EInstance),
+		e2eInProgress:          make(map[string]bool),
+		e2ePRCleanupGeneration: make(map[string]int64),
+		githubAPIBase:          gh.URL + "/",
+	}
+
+	stale := makeMobileInstances()
+	for _, inst := range stale {
+		inst.ServerVersion = "11.11.0"
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-mobile",
+		Number:    42,
+		Ref:       "feature",
+		Sha:       "abc123",
+	}
+	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+	s.e2eInstances[key] = stale
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.handleE2ETestRequest(pr, "E2E/Run-iOS")
+	}()
+	go func() {
+		defer wg.Done()
+		s.handleE2ETestRequest(pr, "E2E/Run-Android")
+	}()
+	wg.Wait()
+
+	assert.Equal(t, int32(1), creates.Load(), "only one replacement set may be created")
+	dispatchMu.Lock()
+	got := append([]string(nil), dispatched...)
+	dispatchMu.Unlock()
+	assert.ElementsMatch(t, []string{"ios", "android"}, got)
+
+	s.e2eInstancesLock.Lock()
+	tracked := s.e2eInstances[key]
+	s.e2eInstancesLock.Unlock()
+	require.Len(t, tracked, len(mobileE2EPlatforms))
+	assert.True(t, e2eInstancesMatchVersion(tracked, "master"))
+}
+
+func TestE2EPlatformFromWorkflowJobs(t *testing.T) {
+	assert.Equal(t, "ios", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "compute-build-fingerprints", Conclusion: ""},
+		{Name: "build-ios-simulator", Conclusion: ""},
+		{Name: "build-android-apk", Conclusion: "skipped"},
+	}))
+	assert.Equal(t, "android", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "build-ios-simulator", Conclusion: "skipped"},
+		{Name: "build-android-apk", Conclusion: "in_progress"},
+	}))
+	assert.Equal(t, "both", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "build-ios-simulator", Conclusion: ""},
+		{Name: "build-android-apk", Conclusion: ""},
+	}))
+	assert.Empty(t, e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "compute-build-fingerprints", Conclusion: ""},
+	}))
+}
+
+func TestE2EShouldCancelRun(t *testing.T) {
+	assert.True(t, e2eShouldCancelRun("ios", "all"), "desktop cancels every matching run")
+	assert.True(t, e2eShouldCancelRun("ios", "ios"))
+	assert.False(t, e2eShouldCancelRun("android", "ios"))
+	assert.False(t, e2eShouldCancelRun("ios", "android"))
+	assert.False(t, e2eShouldCancelRun("both", "ios"), "iOS reuse must not cancel a both/android-inclusive run")
+	assert.True(t, e2eShouldCancelRun("ios", "both"))
+	assert.True(t, e2eShouldCancelRun("android", "both"))
+	assert.False(t, e2eShouldCancelRun("", "ios"), "unknown PLATFORM is left running")
+}
+
+func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
+	var cancelled []string
+	var mu sync.Mutex
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-detox-pr.yml/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[
+				{"id":101,"head_branch":"feature","status":"in_progress"},
+				{"id":102,"head_branch":"feature","status":"in_progress"}
+			]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/101/jobs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[
+				{"name":"build-ios-simulator","status":"in_progress","conclusion":""},
+				{"name":"build-android-apk","status":"completed","conclusion":"skipped"}
+			]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/102/jobs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[
+				{"name":"build-ios-simulator","status":"completed","conclusion":"skipped"},
+				{"name":"build-android-apk","status":"in_progress","conclusion":""}
+			]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
+			mu.Lock()
+			cancelled = append(cancelled, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	s := &Server{
+		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:        logrus.New(),
+		githubAPIBase: gh.URL + "/",
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-mobile",
+		Number:    42,
+		Ref:       "feature",
+	}
+
+	s.cancelPRWorkflowRuns(pr, s.Logger, "ios")
+
+	mu.Lock()
+	got := append([]string(nil), cancelled...)
+	mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "/actions/runs/101/cancel")
+	assert.NotContains(t, strings.Join(got, ","), "/actions/runs/102/cancel")
+}
+
+func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
+	var cancelled []string
+	var mu sync.Mutex
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-functional.yml/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[
+				{"id":201,"head_branch":"feature","status":"in_progress"}
+			]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
+			mu.Lock()
+			cancelled = append(cancelled, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	s := &Server{
+		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:        logrus.New(),
+		githubAPIBase: gh.URL + "/",
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-desktop",
+		Number:    7,
+		Ref:       "feature",
+	}
+
+	s.cancelPRWorkflowRuns(pr, s.Logger, "all")
+
+	mu.Lock()
+	got := append([]string(nil), cancelled...)
+	mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "/actions/runs/201/cancel")
+}

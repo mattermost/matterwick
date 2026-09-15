@@ -46,6 +46,12 @@ func pluginSpinwickImageTag(version string) string {
 	return fmt.Sprintf("release-%d.%d", v.Major, v.Minor)
 }
 
+// pluginSpinwickServerVersion is the Docker tag for plugin SpinWicks.
+// Always the latest GitHub release mapped to release-X.Y; ignores E2EServerVersion.
+func (s *Server) pluginSpinwickServerVersion() string {
+	return pluginSpinwickImageTag(s.resolveLatestMattermostRelease())
+}
+
 // createPluginSpinWick creates a SpinWick for a plugin repository
 func (s *Server) createPluginSpinWick(pr *model.PullRequest, envVars cloudModel.EnvVarMap, logger logrus.FieldLogger) *spinwick.Request {
 	request := &spinwick.Request{
@@ -76,10 +82,11 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, envVars cloudModel.
 
 	logger.Info("No plugin SpinWick found for this PR. Creating a new one.")
 
-	// Create the Mattermost installation using the resolved server version.
-	// mattermostdevelopment/ publishes branch tags (release-X.Y), not bare semver.
+	// Create the Mattermost installation using the latest GitHub release.
+	// Independent of E2EServerVersion (PR/main E2E). mattermostdevelopment/
+	// publishes branch tags (release-X.Y), not bare semver.
 	cloudClient := s.CloudClient
-	serverVersion := pluginSpinwickImageTag(s.resolveMattermostServerVersion())
+	serverVersion := s.pluginSpinwickServerVersion()
 	logger.WithField("server_version", serverVersion).Info("Resolved Mattermost server version for plugin SpinWick")
 	installationRequest := s.createInstallationRequest(
 		ownerID,

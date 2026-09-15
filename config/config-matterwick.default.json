@@ -77,7 +77,7 @@
   "E2EResetServersLabel": "E2E/Reset-Servers",
   "E2EUsername": "admin",
   "E2EPassword": "",
-  "E2EServerVersion": "latest",
+  "E2EServerVersion": "master",
   "E2EAutoTriggerOnMaster": true,
   "E2EReleasePatternPrefix": "release-",
   "E2ETestWorkflowNames": ["Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"],

@@ -50,6 +50,10 @@ type Server struct {
 	cmtDispatchLocks   map[string]*sync.Mutex
 	cmtDispatchLocksMu sync.Mutex
 
+	// e2ePRProvisionLocks serialize create/recreate of the shared PR instance set.
+	e2ePRProvisionLocks   map[string]*sync.Mutex
+	e2ePRProvisionLocksMu sync.Mutex
+
 	// e2eInProgress prevents duplicate provisioning for the same PR+platform (duplicate webhooks).
 	e2eInProgress     map[string]bool
 	e2eInProgressLock sync.Mutex
@@ -100,6 +104,7 @@ func New(config *MatterwickConfig) *Server {
 		e2eInProgress:          make(map[string]bool),
 		e2ePRCleanupGeneration: make(map[string]int64),
 		cmtDispatchLocks:       make(map[string]*sync.Mutex),
+		e2ePRProvisionLocks:    make(map[string]*sync.Mutex),
 		stopCh:                 make(chan struct{}),
 	}
 
