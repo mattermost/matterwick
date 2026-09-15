@@ -72,6 +72,40 @@ func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
 	return inputs, nil
 }
 
+// e2eInstallationImage returns the Cloud image for an E2E/CMT installation.
+// master/main uses the development EE image so unreleased flags exist; released
+// semver (CMT) leaves Image empty so Cloud keeps its default released image.
+func e2eInstallationImage(version string) string {
+	switch strings.ToLower(strings.TrimSpace(version)) {
+	case "master", "main":
+		return mattermostEEImage
+	default:
+		return ""
+	}
+}
+
+// e2eInstancesMatchVersion reports whether every instance is on the desired version.
+func e2eInstancesMatchVersion(instances []*E2EInstance, version string) bool {
+	if len(instances) == 0 {
+		return false
+	}
+	want := strings.TrimSpace(version)
+	for _, inst := range instances {
+		if inst == nil || strings.TrimSpace(inst.ServerVersion) != want {
+			return false
+		}
+	}
+	return true
+}
+
+// e2eFirstInstanceVersion returns the first instance's ServerVersion, or empty.
+func e2eFirstInstanceVersion(instances []*E2EInstance) string {
+	if len(instances) == 0 || instances[0] == nil {
+		return ""
+	}
+	return instances[0].ServerVersion
+}
+
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
 func e2eUniqueSuffix() string {
 	return cloudModel.NewID()[:8]
@@ -130,6 +164,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+	desiredVersion := s.resolveMattermostServerVersion()
+	logger = logger.WithField("desired_version", desiredVersion)
 
 	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
 	s.e2ePRCleanupGenerationLock.Lock()
@@ -171,31 +207,42 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	s.e2eInstancesLock.Unlock()
 
 	if len(existingInstances) > 0 {
-		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
-		s.wakeUpHibernatingInstances(existingInstances, logger)
-		if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
-			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
-			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+		if e2eInstancesMatchVersion(existingInstances, desiredVersion) {
+			logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
+			s.cancelPRWorkflowRuns(pr, logger)
+			s.wakeUpHibernatingInstances(existingInstances, logger)
+			if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
+				logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
+				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+			}
+			return
 		}
-		return
+		logger.WithField("existing_version", e2eFirstInstanceVersion(existingInstances)).Info("Existing in-memory E2E instances do not match desired server version; recreating")
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
+		s.destroyE2EInstances(existingInstances, logger)
 	}
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
-		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
-		s.wakeUpHibernatingInstances(cloudInstances, logger)
-		if !storeIfCurrent(cloudInstances) {
-			logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
-			s.destroyE2EInstances(cloudInstances, logger)
+		if e2eInstancesMatchVersion(cloudInstances, desiredVersion) {
+			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
+			s.cancelPRWorkflowRuns(pr, logger)
+			s.wakeUpHibernatingInstances(cloudInstances, logger)
+			if !storeIfCurrent(cloudInstances) {
+				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
+				s.destroyE2EInstances(cloudInstances, logger)
+				return
+			}
+			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
+				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+			}
 			return
 		}
-		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
-			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
-			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
-		}
-		return
+		logger.WithField("existing_version", e2eFirstInstanceVersion(cloudInstances)).Info("Existing cloud E2E instances do not match desired server version; recreating")
+		s.destroyE2EInstances(cloudInstances, logger)
 	}
 
 	// 3. No existing instances — create fresh ones.
@@ -417,9 +464,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
 	if instanceType == "mobile" {
-		envVars["MM_FEATUREFLAGS_CHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
-		envVars["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
-		envVars["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"] = cloudModel.EnvVar{Value: "true"}
+		envVars["MM_FEATUREFLAGS_CHANNELATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_MMBLOCKSENABLED"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FILESETTINGS_ENABLEPUBLICLINK"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_PASSWORDSETTINGS_MINIMUMLENGTH"] = cloudModel.EnvVar{Value: "8"}
@@ -443,6 +488,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	installationRequest := &cloudModel.CreateInstallationRequest{
 		OwnerID:     name,
 		Version:     version,
+		Image:       e2eInstallationImage(version),
 		DNS:         fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer),
 		Size:        "miniSingleton",
 		Affinity:    cloudModel.InstallationAffinityMultiTenant,

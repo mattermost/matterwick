@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -1244,11 +1246,11 @@ func TestHandleCMTSchedulesDroppedRetry(t *testing.T) {
 
 	s := &Server{
 		Config: &MatterwickConfig{
-			DNSNameTestServer:     "test.example.com",
-			E2EUsername:           "admin",
-			E2EPassword:           "pw",
-			MattermostWebhookURL:  webhook.URL,
-			GithubAccessToken:     "test-token",
+			DNSNameTestServer:    "test.example.com",
+			E2EUsername:          "admin",
+			E2EPassword:          "pw",
+			MattermostWebhookURL: webhook.URL,
+			GithubAccessToken:    "test-token",
 		},
 		CloudClient:  model.NewCloudClient(ts.URL, "", "", "", ""),
 		Logger:       logrus.New(),
@@ -1562,3 +1564,151 @@ func TestDispatchAndTrackCMTFollowUpMatrix(t *testing.T) {
 	assert.Equal(t, "https://retry.example.com", tracked[0].URL)
 }
 
+func TestE2EInstallationImage(t *testing.T) {
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage("master"))
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage("main"))
+	assert.Equal(t, mattermostEEImage, e2eInstallationImage(" MASTER "))
+	assert.Empty(t, e2eInstallationImage("11.11.0"))
+	assert.Empty(t, e2eInstallationImage("11.7.7"))
+	assert.Empty(t, e2eInstallationImage("latest"))
+	assert.Empty(t, e2eInstallationImage(""))
+}
+
+func TestE2EInstancesMatchVersion(t *testing.T) {
+	t.Run("empty set does not match", func(t *testing.T) {
+		assert.False(t, e2eInstancesMatchVersion(nil, "master"))
+		assert.False(t, e2eInstancesMatchVersion([]*E2EInstance{}, "master"))
+		assert.Empty(t, e2eFirstInstanceVersion(nil))
+		assert.Empty(t, e2eFirstInstanceVersion([]*E2EInstance{}))
+	})
+
+	t.Run("all instances match desired version", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "master"},
+			{ServerVersion: "master"},
+		}
+		assert.True(t, e2eInstancesMatchVersion(instances, "master"))
+		assert.Equal(t, "master", e2eFirstInstanceVersion(instances))
+	})
+
+	t.Run("mismatch against desired version", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "11.11.0"},
+			{ServerVersion: "11.11.0"},
+		}
+		assert.False(t, e2eInstancesMatchVersion(instances, "master"))
+		assert.Equal(t, "11.11.0", e2eFirstInstanceVersion(instances))
+	})
+
+	t.Run("mixed versions do not match", func(t *testing.T) {
+		instances := []*E2EInstance{
+			{ServerVersion: "master"},
+			{ServerVersion: "11.11.0"},
+		}
+		assert.False(t, e2eInstancesMatchVersion(instances, "master"))
+	})
+
+	t.Run("nil instance does not match", func(t *testing.T) {
+		assert.False(t, e2eInstancesMatchVersion([]*E2EInstance{nil}, "master"))
+	})
+}
+
+func TestDefaultConfigUsesMasterForPRE2E(t *testing.T) {
+	path := filepath.Join("..", "config", "config-matterwick.default.json")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	cfg, err := GetConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, "master", cfg.E2EServerVersion)
+	assert.Empty(t, cfg.CMTServerVersions)
+
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	_, hasCMT := decoded["CMTServerVersions"]
+	assert.False(t, hasCMT, "default config must leave CMTServerVersions absent so CMT auto-derives")
+}
+
+func TestCreateCloudInstallationImageAndFlags(t *testing.T) {
+	captureCreate := func(t *testing.T, version, instanceType string) map[string]any {
+		t.Helper()
+		var posted map[string]any
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/installations":
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&posted))
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(`{"ID":"install-abc","State":"creation-requested","OwnerID":"e2e-test"}`))
+			case r.Method == http.MethodDelete:
+				w.WriteHeader(http.StatusAccepted)
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		t.Cleanup(ts.Close)
+
+		s := &Server{
+			Config: &MatterwickConfig{
+				DNSNameTestServer: "test.example.com",
+				E2EUsername:       "admin",
+			},
+			CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+			Logger:      logrus.New(),
+		}
+		_, err := s.createCloudInstallation(
+			context.Background(), "e2e-test-uid", version, "admin", "pw", instanceType, s.Logger)
+		require.Error(t, err, "status poll is expected to fail so we can inspect the create payload")
+		require.NotEmpty(t, posted, "create payload must be captured")
+		return posted
+	}
+
+	priorityEnvKeys := func(posted map[string]any) map[string]bool {
+		t.Helper()
+		rawEnv, ok := posted["PriorityEnv"].(map[string]any)
+		require.True(t, ok, "PriorityEnv must be present")
+		keys := make(map[string]bool, len(rawEnv))
+		for k := range rawEnv {
+			keys[k] = true
+		}
+		return keys
+	}
+
+	t.Run("master + mobile uses development EE image and ChannelAttributes", func(t *testing.T) {
+		posted := captureCreate(t, "master", "mobile")
+		assert.Equal(t, "master", posted["Version"])
+		assert.Equal(t, mattermostEEImage, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.True(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.True(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.True(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"])
+	})
+
+	t.Run("11.7.7 + mobile keeps Image empty for CMT", func(t *testing.T) {
+		posted := captureCreate(t, "11.7.7", "mobile")
+		assert.Equal(t, "11.7.7", posted["Version"])
+		assert.Empty(t, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.True(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.True(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.True(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELBOOKMARKS"])
+		assert.False(t, keys["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"])
+	})
+
+	t.Run("desktop master does not get ChannelAttributes", func(t *testing.T) {
+		posted := captureCreate(t, "master", "desktop")
+		assert.Equal(t, "master", posted["Version"])
+		assert.Equal(t, mattermostEEImage, posted["Image"])
+
+		keys := priorityEnvKeys(posted)
+		assert.False(t, keys["MM_FEATUREFLAGS_CHANNELATTRIBUTES"])
+		assert.False(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
+		assert.False(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
+	})
+}

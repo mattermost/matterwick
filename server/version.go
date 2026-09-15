@@ -14,8 +14,12 @@ import (
 	"github.com/blang/semver"
 )
 
-// resolveMattermostServerVersion returns the highest non-alpha/beta release (stable or RC)
-// from mattermost/mattermost, cached for 1 hour. Falls back to the last cached version on error.
+// resolveMattermostServerVersion returns the Mattermost version for PR/main E2E.
+// CMT does not use this; it goes through cmtServerVersions().
+// "master" (or any explicit non-latest value) is returned unchanged so Cloud can
+// pull mattermostdevelopment/mattermost-enterprise-edition:master.
+// "latest" or empty looks up the highest non-alpha/beta GitHub release (stable or RC),
+// cached for 1 hour, falling back to the last cached version on error.
 func (s *Server) resolveMattermostServerVersion() string {
 	cfg := strings.TrimSpace(s.Config.E2EServerVersion)
 	if cfg == "" {
