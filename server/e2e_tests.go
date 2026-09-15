@@ -134,6 +134,42 @@ func e2eInstanceName(dnsSuffix string, parts ...string) string {
 	return name
 }
 
+// e2eCreatePRInstances provisions the shared PR instance set. Var so tests can count
+// concurrent iOS/Android replacement without hitting the provisioner.
+var e2eCreatePRInstances = func(s *Server, pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
+	return s.createMultipleE2EInstances(pr, instanceType, platforms)
+}
+
+// e2eDispatchPRWorkflow triggers the requesting platform's workflow after instances exist.
+var e2eDispatchPRWorkflow = func(s *Server, pr *model.PullRequest, instances []*E2EInstance, instanceType, testPlatform string) error {
+	return s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform)
+}
+
+// e2ePRProvisionMutex serializes create/recreate of one PR's shared instance set.
+func (s *Server) e2ePRProvisionMutex(key string) *sync.Mutex {
+	s.e2ePRProvisionLocksMu.Lock()
+	defer s.e2ePRProvisionLocksMu.Unlock()
+	if s.e2ePRProvisionLocks == nil {
+		s.e2ePRProvisionLocks = make(map[string]*sync.Mutex)
+	}
+	if m, ok := s.e2ePRProvisionLocks[key]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	s.e2ePRProvisionLocks[key] = m
+	return m
+}
+
+func (s *Server) e2eGithubClient() *github.Client {
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+	return client
+}
+
 // handleE2ETestRequest is the main orchestrator for E2E test requests
 func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -201,6 +237,13 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		s.e2eInProgressLock.Unlock()
 	}()
 
+	// Serialize lookup/destroy/create/store so iOS and Android cannot each provision a
+	// replacement set. After waiting, re-read and reuse a matching set; then dispatch
+	// only this request's platform workflow.
+	provisionMu := s.e2ePRProvisionMutex(key)
+	provisionMu.Lock()
+	defer provisionMu.Unlock()
+
 	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
 	s.e2eInstancesLock.Lock()
 	existingInstances := s.e2eInstances[key]
@@ -211,7 +254,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 			logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
 			s.cancelPRWorkflowRuns(pr, logger)
 			s.wakeUpHibernatingInstances(existingInstances, logger)
-			if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
+			if err := e2eDispatchPRWorkflow(s, pr, existingInstances, instanceType, testPlatform); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 			}
@@ -235,7 +278,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 				s.destroyE2EInstances(cloudInstances, logger)
 				return
 			}
-			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+			if err := e2eDispatchPRWorkflow(s, pr, cloudInstances, instanceType, testPlatform); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 			}
@@ -246,7 +289,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	// 3. No existing instances — create fresh ones.
-	instances, err := s.createMultipleE2EInstances(pr, instanceType, platforms)
+	instances, err := e2eCreatePRInstances(s, pr, instanceType, platforms)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to create E2E test instances: %v", err))
@@ -260,7 +303,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	// Check if PR closed during provisioning (~30 min) — cleanup events don't fire for closed PRs.
-	prInfo, _, prErr := newGithubClient(s.Config.GithubAccessToken).PullRequests.Get(
+	prInfo, _, prErr := s.e2eGithubClient().PullRequests.Get(
 		context.Background(), pr.RepoOwner, pr.RepoName, pr.Number)
 	if prErr != nil {
 		logger.WithError(prErr).Warn("Failed to check PR state after instance creation; proceeding")
@@ -278,7 +321,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
-	if err = s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform); err != nil {
+	if err = e2eDispatchPRWorkflow(s, pr, instances, instanceType, testPlatform); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 		// Remove from tracking before cleanup to avoid double-destroy on later cleanup.
@@ -1178,7 +1221,7 @@ Tests will run against these servers. Please monitor the workflow run for progre
 // postE2EErrorComment posts an error comment
 func (s *Server) postE2EErrorComment(pr *model.PullRequest, errorMsg string) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	comment := fmt.Sprintf("❌ E2E Test Setup Failed\n\n%s", errorMsg)
 
@@ -1341,7 +1384,7 @@ func (s *Server) dispatchMobileE2EWorkflow(
 // This is called when a new E2E run is triggered for the same PR
 func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	logger = logger.WithFields(logrus.Fields{
 		"repo": pr.RepoName,

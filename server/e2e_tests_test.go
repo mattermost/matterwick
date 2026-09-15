@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1711,4 +1712,113 @@ func TestCreateCloudInstallationImageAndFlags(t *testing.T) {
 		assert.False(t, keys["MM_FEATUREFLAGS_MMBLOCKSENABLED"])
 		assert.False(t, keys["MM_SERVICESETTINGS_ENABLECHANNELBOOKMARKS"])
 	})
+}
+
+func TestHandleE2ETestRequestSerializesReplacement(t *testing.T) {
+	originalCreate := e2eCreatePRInstances
+	originalDispatch := e2eDispatchPRWorkflow
+	t.Cleanup(func() {
+		e2eCreatePRInstances = originalCreate
+		e2eDispatchPRWorkflow = originalDispatch
+	})
+
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/installations":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("[]"))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ID":"inst","State":"stable"}`))
+		}
+	}))
+	t.Cleanup(cloud.Close)
+
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"state":"open"}`))
+		case strings.Contains(r.URL.Path, "/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	var creates atomic.Int32
+	e2eCreatePRInstances = func(_ *Server, _ *model.PullRequest, _ string, _ []string) ([]*E2EInstance, error) {
+		time.Sleep(80 * time.Millisecond)
+		creates.Add(1)
+		return makeMobileInstances(), nil
+	}
+
+	var dispatched []string
+	var dispatchMu sync.Mutex
+	e2eDispatchPRWorkflow = func(_ *Server, _ *model.PullRequest, instances []*E2EInstance, _, testPlatform string) error {
+		require.Len(t, instances, len(mobileE2EPlatforms))
+		dispatchMu.Lock()
+		dispatched = append(dispatched, testPlatform)
+		dispatchMu.Unlock()
+		return nil
+	}
+
+	s := &Server{
+		Config: &MatterwickConfig{
+			DNSNameTestServer:     "test.example.com",
+			GithubAccessToken:     "test-token",
+			E2EServerVersion:      "master",
+			E2ELabel:              "E2E/Run",
+			E2EMobileIOSLabel:     "E2E/Run-iOS",
+			E2EMobileAndroidLabel: "E2E/Run-Android",
+		},
+		Logger:                 logrus.New(),
+		CloudClient:            model.NewCloudClient(cloud.URL, "", "", "", ""),
+		e2eInstances:           make(map[string][]*E2EInstance),
+		e2eInProgress:          make(map[string]bool),
+		e2ePRCleanupGeneration: make(map[string]int64),
+		githubAPIBase:          gh.URL + "/",
+	}
+
+	stale := makeMobileInstances()
+	for _, inst := range stale {
+		inst.ServerVersion = "11.11.0"
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-mobile",
+		Number:    42,
+		Ref:       "feature",
+		Sha:       "abc123",
+	}
+	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+	s.e2eInstances[key] = stale
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		s.handleE2ETestRequest(pr, "E2E/Run-iOS")
+	}()
+	go func() {
+		defer wg.Done()
+		s.handleE2ETestRequest(pr, "E2E/Run-Android")
+	}()
+	wg.Wait()
+
+	assert.Equal(t, int32(1), creates.Load(), "only one replacement set may be created")
+	dispatchMu.Lock()
+	got := append([]string(nil), dispatched...)
+	dispatchMu.Unlock()
+	assert.ElementsMatch(t, []string{"ios", "android"}, got)
+
+	s.e2eInstancesLock.Lock()
+	tracked := s.e2eInstances[key]
+	s.e2eInstancesLock.Unlock()
+	require.Len(t, tracked, len(mobileE2EPlatforms))
+	assert.True(t, e2eInstancesMatchVersion(tracked, "master"))
 }
