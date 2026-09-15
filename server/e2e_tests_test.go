@@ -1822,3 +1822,131 @@ func TestHandleE2ETestRequestSerializesReplacement(t *testing.T) {
 	require.Len(t, tracked, len(mobileE2EPlatforms))
 	assert.True(t, e2eInstancesMatchVersion(tracked, "master"))
 }
+
+func TestE2EPlatformFromWorkflowJobs(t *testing.T) {
+	assert.Equal(t, "ios", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "compute-build-fingerprints", Conclusion: ""},
+		{Name: "build-ios-simulator", Conclusion: ""},
+		{Name: "build-android-apk", Conclusion: "skipped"},
+	}))
+	assert.Equal(t, "android", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "build-ios-simulator", Conclusion: "skipped"},
+		{Name: "build-android-apk", Conclusion: "in_progress"},
+	}))
+	assert.Equal(t, "both", e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "build-ios-simulator", Conclusion: ""},
+		{Name: "build-android-apk", Conclusion: ""},
+	}))
+	assert.Empty(t, e2ePlatformFromWorkflowJobs([]e2eWorkflowJob{
+		{Name: "compute-build-fingerprints", Conclusion: ""},
+	}))
+}
+
+func TestE2EShouldCancelRun(t *testing.T) {
+	assert.True(t, e2eShouldCancelRun("ios", "all"), "desktop cancels every matching run")
+	assert.True(t, e2eShouldCancelRun("ios", "ios"))
+	assert.False(t, e2eShouldCancelRun("android", "ios"))
+	assert.False(t, e2eShouldCancelRun("ios", "android"))
+	assert.False(t, e2eShouldCancelRun("both", "ios"), "iOS reuse must not cancel a both/android-inclusive run")
+	assert.True(t, e2eShouldCancelRun("ios", "both"))
+	assert.True(t, e2eShouldCancelRun("android", "both"))
+	assert.False(t, e2eShouldCancelRun("", "ios"), "unknown PLATFORM is left running")
+}
+
+func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
+	var cancelled []string
+	var mu sync.Mutex
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-detox-pr.yml/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[
+				{"id":101,"head_branch":"feature","status":"in_progress"},
+				{"id":102,"head_branch":"feature","status":"in_progress"}
+			]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/101/jobs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[
+				{"name":"build-ios-simulator","status":"in_progress","conclusion":""},
+				{"name":"build-android-apk","status":"completed","conclusion":"skipped"}
+			]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/102/jobs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[
+				{"name":"build-ios-simulator","status":"completed","conclusion":"skipped"},
+				{"name":"build-android-apk","status":"in_progress","conclusion":""}
+			]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
+			mu.Lock()
+			cancelled = append(cancelled, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	s := &Server{
+		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:        logrus.New(),
+		githubAPIBase: gh.URL + "/",
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-mobile",
+		Number:    42,
+		Ref:       "feature",
+	}
+
+	s.cancelPRWorkflowRuns(pr, s.Logger, "ios")
+
+	mu.Lock()
+	got := append([]string(nil), cancelled...)
+	mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "/actions/runs/101/cancel")
+	assert.NotContains(t, strings.Join(got, ","), "/actions/runs/102/cancel")
+}
+
+func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
+	var cancelled []string
+	var mu sync.Mutex
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-functional.yml/runs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[
+				{"id":201,"head_branch":"feature","status":"in_progress"}
+			]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
+			mu.Lock()
+			cancelled = append(cancelled, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(gh.Close)
+
+	s := &Server{
+		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:        logrus.New(),
+		githubAPIBase: gh.URL + "/",
+	}
+	pr := &model.PullRequest{
+		RepoOwner: "mattermost",
+		RepoName:  "mattermost-desktop",
+		Number:    7,
+		Ref:       "feature",
+	}
+
+	s.cancelPRWorkflowRuns(pr, s.Logger, "all")
+
+	mu.Lock()
+	got := append([]string(nil), cancelled...)
+	mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "/actions/runs/201/cancel")
+}

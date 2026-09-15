@@ -160,6 +160,56 @@ func (s *Server) e2ePRProvisionMutex(key string) *sync.Mutex {
 	return m
 }
 
+type e2eWorkflowJob struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+}
+
+// e2ePlatformFromWorkflowJobs infers the detox PLATFORM input from non-skipped jobs.
+// GitHub does not expose workflow_dispatch inputs on the runs list API.
+func e2ePlatformFromWorkflowJobs(jobs []e2eWorkflowJob) string {
+	hasIOS, hasAndroid := false, false
+	for _, job := range jobs {
+		if strings.EqualFold(job.Conclusion, "skipped") {
+			continue
+		}
+		name := strings.ToLower(job.Name)
+		if strings.Contains(name, "ios") {
+			hasIOS = true
+		}
+		if strings.Contains(name, "android") {
+			hasAndroid = true
+		}
+	}
+	switch {
+	case hasIOS && hasAndroid:
+		return "both"
+	case hasIOS:
+		return "ios"
+	case hasAndroid:
+		return "android"
+	default:
+		return ""
+	}
+}
+
+// e2eShouldCancelRun reports whether a detox run with runPlatform should be cancelled
+// for a reuse of requestedPlatform. Desktop uses requestedPlatform "all".
+func e2eShouldCancelRun(runPlatform, requestedPlatform string) bool {
+	requested := strings.ToLower(strings.TrimSpace(requestedPlatform))
+	if requested == "" || requested == "all" {
+		return true
+	}
+	if runPlatform == "" {
+		return false
+	}
+	if requested == "both" {
+		return true
+	}
+	return runPlatform == requested
+}
+
 func (s *Server) e2eGithubClient() *github.Client {
 	client := newGithubClient(s.Config.GithubAccessToken)
 	if s.githubAPIBase != "" {
@@ -252,7 +302,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	if len(existingInstances) > 0 {
 		if e2eInstancesMatchVersion(existingInstances, desiredVersion) {
 			logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-			s.cancelPRWorkflowRuns(pr, logger)
+			s.cancelPRWorkflowRuns(pr, logger, testPlatform)
 			s.wakeUpHibernatingInstances(existingInstances, logger)
 			if err := e2eDispatchPRWorkflow(s, pr, existingInstances, instanceType, testPlatform); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
@@ -271,7 +321,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
 		if e2eInstancesMatchVersion(cloudInstances, desiredVersion) {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-			s.cancelPRWorkflowRuns(pr, logger)
+			s.cancelPRWorkflowRuns(pr, logger, testPlatform)
 			s.wakeUpHibernatingInstances(cloudInstances, logger)
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
@@ -1380,20 +1430,22 @@ func (s *Server) dispatchMobileE2EWorkflow(
 	return nil
 }
 
-// cancelPRWorkflowRuns cancels any in-progress E2E workflow runs for a PR
-// This is called when a new E2E run is triggered for the same PR
-func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
+// cancelPRWorkflowRuns cancels in-progress E2E workflow_dispatch runs for this PR's branch.
+// Desktop cancels all matching e2e-functional.yml runs. Mobile cancels only e2e-detox-pr.yml
+// runs whose PLATFORM input matches testPlatform (ios/android), so an iOS reuse does not
+// cancel Android and vice versa. testPlatform "both" cancels every in-flight detox run.
+func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger, testPlatform string) {
 	ctx := context.Background()
 	client := s.e2eGithubClient()
 
 	logger = logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
+		"repo":          pr.RepoName,
+		"pr":            pr.Number,
+		"test_platform": testPlatform,
 	})
 
 	logger.Info("Attempting to cancel in-progress E2E workflow runs")
 
-	// Determine which workflow file to cancel based on repository type
 	var workflowFile string
 	if strings.Contains(pr.RepoName, "desktop") {
 		workflowFile = "e2e-functional.yml"
@@ -1404,8 +1456,6 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 		return
 	}
 
-	// List workflow runs for this workflow file
-	// GitHub API v32 limitation: we need to use REST API directly
 	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?status=in_progress&event=workflow_dispatch",
 		pr.RepoOwner, pr.RepoName, workflowFile)
 
@@ -1429,29 +1479,44 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 		return
 	}
 
-	// Cancel workflow runs that match this PR's branch
+	filterByPlatform := workflowFile == "e2e-detox-pr.yml"
 	cancelCount := 0
 	for _, run := range workflowRuns.WorkflowRuns {
-		// Check if this run is for the PR's branch
-		if run.HeadBranch == pr.Ref && run.Status == "in_progress" {
-			cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
-				pr.RepoOwner, pr.RepoName, run.ID)
-
-			cancelReq, err := client.NewRequest("POST", cancelURL, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
-				continue
-			}
-
-			_, err = client.Do(ctx, cancelReq, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
-				continue
-			}
-
-			logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
-			cancelCount++
+		if run.HeadBranch != pr.Ref || run.Status != "in_progress" {
+			continue
 		}
+		if filterByPlatform {
+			runPlatform, platErr := s.e2eDetoxRunPlatform(ctx, client, pr, run.ID, logger)
+			if platErr != nil {
+				logger.WithError(platErr).WithField("run_id", run.ID).Warn("Skipping cancel; could not determine PLATFORM for workflow run")
+				continue
+			}
+			if !e2eShouldCancelRun(runPlatform, testPlatform) {
+				logger.WithFields(logrus.Fields{
+					"run_id":       run.ID,
+					"run_platform": runPlatform,
+				}).Debug("Leaving in-progress E2E run on a different PLATFORM")
+				continue
+			}
+		}
+
+		cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
+			pr.RepoOwner, pr.RepoName, run.ID)
+
+		cancelReq, err := client.NewRequest("POST", cancelURL, nil)
+		if err != nil {
+			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
+			continue
+		}
+
+		_, err = client.Do(ctx, cancelReq, nil)
+		if err != nil {
+			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
+			continue
+		}
+
+		logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
+		cancelCount++
 	}
 
 	if cancelCount > 0 {
@@ -1459,4 +1524,25 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 	} else {
 		logger.Debug("No in-progress workflow runs found to cancel")
 	}
+}
+
+func (s *Server) e2eDetoxRunPlatform(ctx context.Context, client *github.Client, pr *model.PullRequest, runID int64, logger logrus.FieldLogger) (string, error) {
+	jobsURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs", pr.RepoOwner, pr.RepoName, runID)
+	req, err := client.NewRequest("GET", jobsURL, nil)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Jobs []e2eWorkflowJob `json:"jobs"`
+	}
+	if _, err := client.Do(ctx, req, &payload); err != nil {
+		return "", err
+	}
+	platform := e2ePlatformFromWorkflowJobs(payload.Jobs)
+	logger.WithFields(logrus.Fields{
+		"run_id":   runID,
+		"platform": platform,
+		"jobs":     len(payload.Jobs),
+	}).Debug("Inferred detox PLATFORM from workflow jobs")
+	return platform, nil
 }
