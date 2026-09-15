@@ -329,6 +329,40 @@ func TestPluginSpinwickImageTag(t *testing.T) {
 	}
 }
 
+func TestPluginSpinwickServerVersion(t *testing.T) {
+	body := `[{"tag_name":"v11.11.0","draft":false,"prerelease":false}]`
+
+	t.Run("ignores E2EServerVersion master", func(t *testing.T) {
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = "master"
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, "master", s.resolveMattermostServerVersion())
+		assert.Equal(t, "release-11.11", s.pluginSpinwickServerVersion())
+	})
+
+	t.Run("ignores pinned E2EServerVersion", func(t *testing.T) {
+		srv := mockReleasesServer(t, body, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = "10.0.0"
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, "10.0.0", s.resolveMattermostServerVersion())
+		assert.Equal(t, "release-11.11", s.pluginSpinwickServerVersion())
+	})
+
+	t.Run("maps latest RC to release-X.Y", func(t *testing.T) {
+		rcBody := `[{"tag_name":"v11.12.0-rc2","draft":false,"prerelease":true}]`
+		srv := mockReleasesServer(t, rcBody, http.StatusOK)
+		s := newDryRunServer(t, "", "mattermost")
+		s.Config.E2EServerVersion = "master"
+		s.githubAPIBase = srv.URL + "/"
+
+		assert.Equal(t, "release-11.12", s.pluginSpinwickServerVersion())
+	})
+}
+
 func TestEnvVarNames(t *testing.T) {
 	tests := []struct {
 		name     string

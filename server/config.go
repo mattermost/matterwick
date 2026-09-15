@@ -115,6 +115,7 @@ type MatterwickConfig struct {
 	// "master" provisions mattermostdevelopment/mattermost-enterprise-edition:master.
 	// "latest" or empty resolves to the highest GitHub release (stable or RC).
 	// CMT is independent and uses cmtServerVersions(); it does not read this field.
+	// Plugin SpinWicks are independent and use pluginSpinwickServerVersion().
 	E2EServerVersion        string
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string

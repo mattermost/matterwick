@@ -16,6 +16,7 @@ import (
 
 // resolveMattermostServerVersion returns the Mattermost version for PR/main E2E.
 // CMT does not use this; it goes through cmtServerVersions().
+// Plugin SpinWicks do not use this; they go through pluginSpinwickServerVersion().
 // "master" (or any explicit non-latest value) is returned unchanged so Cloud can
 // pull mattermostdevelopment/mattermost-enterprise-edition:master.
 // "latest" or empty looks up the highest non-alpha/beta GitHub release (stable or RC),
@@ -29,7 +30,12 @@ func (s *Server) resolveMattermostServerVersion() string {
 	if cfg != "latest" {
 		return cfg
 	}
+	return s.resolveLatestMattermostRelease()
+}
 
+// resolveLatestMattermostRelease looks up the highest non-alpha/beta GitHub
+// release (stable or RC), cached for 1 hour. Ignores E2EServerVersion.
+func (s *Server) resolveLatestMattermostRelease() string {
 	const cacheTTL = 1 * time.Hour
 
 	// Fast path: return the cached version if still fresh.
@@ -37,7 +43,7 @@ func (s *Server) resolveMattermostServerVersion() string {
 	if s.e2eVersionCache != "" && time.Since(s.e2eVersionCacheTime) < cacheTTL {
 		v := s.e2eVersionCache
 		s.e2eVersionCacheLock.Unlock()
-		s.Logger.WithField("version", v).Debug("[resolveMattermostServerVersion] Returning cached version")
+		s.Logger.WithField("version", v).Debug("[resolveLatestMattermostRelease] Returning cached version")
 		return v
 	}
 	s.e2eVersionCacheLock.Unlock()
@@ -63,12 +69,12 @@ func (s *Server) resolveMattermostServerVersion() string {
 	for page := 1; ; page++ {
 		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/mattermost/mattermost/releases?per_page=%d&page=%d", perPage, page), nil)
 		if err != nil {
-			s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to build request")
+			s.Logger.WithError(err).Warn("[resolveLatestMattermostRelease] Failed to build request")
 			return s.cachedVersionOrMaster()
 		}
 		var pageReleases []releaseEntry
 		if _, err = client.Do(ctx, req, &pageReleases); err != nil {
-			s.Logger.WithError(err).Warn("[resolveMattermostServerVersion] Failed to fetch releases")
+			s.Logger.WithError(err).Warn("[resolveLatestMattermostRelease] Failed to fetch releases")
 			return s.cachedVersionOrMaster()
 		}
 		releases = append(releases, pageReleases...)
@@ -103,7 +109,7 @@ func (s *Server) resolveMattermostServerVersion() string {
 	}
 
 	if len(candidates) == 0 {
-		s.Logger.Warn("[resolveMattermostServerVersion] No release found")
+		s.Logger.Warn("[resolveLatestMattermostRelease] No release found")
 		return s.cachedVersionOrMaster()
 	}
 
@@ -112,7 +118,7 @@ func (s *Server) resolveMattermostServerVersion() string {
 	})
 
 	version := candidates[0].tag
-	s.Logger.WithField("version", version).Info("[resolveMattermostServerVersion] Resolved latest Mattermost server version")
+	s.Logger.WithField("version", version).Info("[resolveLatestMattermostRelease] Resolved latest Mattermost server version")
 
 	s.e2eVersionCacheLock.Lock()
 	s.e2eVersionCache = version
@@ -128,7 +134,7 @@ func (s *Server) cachedVersionOrMaster() string {
 	v := s.e2eVersionCache
 	s.e2eVersionCacheLock.Unlock()
 	if v != "" {
-		s.Logger.WithField("version", v).Warn("[resolveMattermostServerVersion] Using last known version")
+		s.Logger.WithField("version", v).Warn("[resolveLatestMattermostRelease] Using last known version")
 		return v
 	}
 	return "master"
