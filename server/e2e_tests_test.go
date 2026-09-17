@@ -1740,7 +1740,7 @@ func TestHandleE2ETestRequestSerializesReplacement(t *testing.T) {
 		switch {
 		case strings.Contains(r.URL.Path, "/pulls/"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"state":"open"}`))
+			_, _ = w.Write([]byte(`{"state":"open","labels":[{"name":"E2E/Run-iOS"},{"name":"E2E/Run-Android"}]}`))
 		case strings.Contains(r.URL.Path, "/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
@@ -1861,8 +1861,8 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-detox-pr.yml/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[
-				{"id":101,"head_branch":"feature","status":"in_progress"},
-				{"id":102,"head_branch":"feature","status":"in_progress"}
+				{"id":101,"head_branch":"main","display_title":"E2E PR #42 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"},
+				{"id":102,"head_branch":"main","display_title":"E2E PR #42 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"}
 			]}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/101/jobs"):
 			w.WriteHeader(http.StatusOK)
@@ -1888,9 +1888,10 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 	t.Cleanup(gh.Close)
 
 	s := &Server{
-		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
-		Logger:        logrus.New(),
-		githubAPIBase: gh.URL + "/",
+		Config:           &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:           logrus.New(),
+		githubAPIBase:    gh.URL + "/",
+		e2eDefaultBranch: "main",
 	}
 	pr := &model.PullRequest{
 		RepoOwner: "mattermost",
@@ -1909,7 +1910,7 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 	assert.NotContains(t, strings.Join(got, ","), "/actions/runs/102/cancel")
 }
 
-func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
+func TestCancelPRWorkflowRunsDesktopCancelsIdentifiedRuns(t *testing.T) {
 	var cancelled []string
 	var mu sync.Mutex
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1917,7 +1918,7 @@ func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-functional.yml/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[
-				{"id":201,"head_branch":"feature","status":"in_progress"}
+				{"id":201,"head_branch":"master","display_title":"E2E PR #7 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"}
 			]}`))
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
 			mu.Lock()
@@ -1931,9 +1932,10 @@ func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
 	t.Cleanup(gh.Close)
 
 	s := &Server{
-		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
-		Logger:        logrus.New(),
-		githubAPIBase: gh.URL + "/",
+		Config:           &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:           logrus.New(),
+		githubAPIBase:    gh.URL + "/",
+		e2eDefaultBranch: "master",
 	}
 	pr := &model.PullRequest{
 		RepoOwner: "mattermost",

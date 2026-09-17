@@ -120,6 +120,9 @@ type MatterwickConfig struct {
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string
 	E2ETestWorkflowNames    []string // workflow names of the actual test workflows (for completion-based cleanup)
+	// E2ETrustedForkDispatch allows workflow_dispatch of fork PRs from the origin
+	// default branch. Keep false until default-branch workflows emit PR/MASTER run identity.
+	E2ETrustedForkDispatch bool
 	// E2EInstanceMaxAge is the minimum age (in hours) a non-PR E2E instance must reach
 	// before the periodic orphan-cleanup scan will delete it. This prevents the scan
 	// from destroying instances that are still being used by a currently-running test.

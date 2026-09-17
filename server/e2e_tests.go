@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +232,10 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	})
 	logger.Info("Handling E2E test request")
 
+	if s.rejectIfE2EApprovalGone(pr, label, logger) {
+		return
+	}
+
 	// Determine instance type and platforms first — needed for both reuse lookup and creation.
 	var instanceType string
 	var platforms []string
@@ -304,6 +310,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 			logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
 			s.cancelPRWorkflowRuns(pr, logger, testPlatform)
 			s.wakeUpHibernatingInstances(existingInstances, logger)
+			if s.rejectIfE2EApprovalGone(pr, label, logger) {
+				return
+			}
 			if err := e2eDispatchPRWorkflow(s, pr, existingInstances, instanceType, testPlatform); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -326,6 +335,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
 				s.destroyE2EInstances(cloudInstances, logger)
+				return
+			}
+			if s.rejectIfE2EApprovalGone(pr, label, logger) {
 				return
 			}
 			if err := e2eDispatchPRWorkflow(s, pr, cloudInstances, instanceType, testPlatform); err != nil {
@@ -370,6 +382,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
+
+	if s.rejectIfE2EApprovalGone(pr, label, logger) {
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
 
 	if err = e2eDispatchPRWorkflow(s, pr, instances, instanceType, testPlatform); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
@@ -759,7 +779,7 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 //   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
 func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	if instanceType == "desktop" {
 		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
@@ -786,12 +806,17 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 		return fmt.Errorf("failed to marshal instance details: %w", err)
 	}
 
-	// Use the github REST API to trigger the workflow_dispatch event
+	workflowRef, err := s.e2ePRWorkflowRef(ctx, client, pr)
+	if err != nil {
+		return err
+	}
+	// Workflow code comes from the trusted dispatch ref. Desktop already accepts
+	// a SHA as version_name; never resolve a mutable fork branch after approval.
 	body := map[string]interface{}{
-		"ref": pr.Ref,
+		"ref": workflowRef,
 		"inputs": map[string]interface{}{
 			"instance_details":  instanceDetailsJSON,
-			"version_name":      pr.Ref,
+			"version_name":      pr.Sha,
 			"MM_TEST_USER_NAME": s.Config.E2EUsername,
 			"MM_SERVER_VERSION": instances[0].ServerVersion,
 			"pr_number":         fmt.Sprintf("%d", pr.Number),
@@ -814,7 +839,61 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 	return nil
 }
 
-// triggerMobileE2EWorkflow triggers the mobile E2E workflow
+// e2ePRWorkflowRef selects trusted origin workflow code for fork PRs. The PR
+// branch remains usable for same-repository workflow development and display.
+// Fork dispatch stays disabled until E2ETrustedForkDispatch is explicitly enabled.
+func (s *Server) e2ePRWorkflowRef(ctx context.Context, client *github.Client, pr *model.PullRequest) (string, error) {
+	if pr.Sha == "" {
+		return "", fmt.Errorf("cannot dispatch E2E PR without the approved head SHA")
+	}
+	if pr.FullName == "" {
+		return "", fmt.Errorf("cannot select E2E workflow without the PR head repository")
+	}
+	if strings.EqualFold(pr.FullName, pr.RepoOwner+"/"+pr.RepoName) {
+		return pr.Ref, nil
+	}
+	if s == nil || s.Config == nil || !s.Config.E2ETrustedForkDispatch {
+		return "", fmt.Errorf("trusted fork E2E dispatch is disabled")
+	}
+	repo, _, err := client.Repositories.Get(ctx, pr.RepoOwner, pr.RepoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get E2E origin default branch: %w", err)
+	}
+	if repo.GetDefaultBranch() == "" {
+		return "", fmt.Errorf("E2E origin repository has no default branch")
+	}
+	return repo.GetDefaultBranch(), nil
+}
+
+func (s *Server) rejectIfE2EApprovalGone(pr *model.PullRequest, label string, logger logrus.FieldLogger) bool {
+	if err := s.confirmE2EApproval(pr, label); err != nil {
+		logger.WithError(err).Warn("Rejecting E2E request; approval is no longer present")
+		return true
+	}
+	return false
+}
+
+func (s *Server) confirmE2EApproval(pr *model.PullRequest, label string) error {
+	if pr == nil || pr.Number == 0 {
+		return fmt.Errorf("cannot confirm E2E approval without a PR number")
+	}
+	live, _, err := s.e2eGithubClient().PullRequests.Get(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number)
+	if err != nil {
+		return fmt.Errorf("unable to re-fetch E2E PR: %w", err)
+	}
+	if live.GetState() != "open" {
+		return fmt.Errorf("E2E PR is %s", live.GetState())
+	}
+	for _, present := range live.Labels {
+		if present.GetName() == label {
+			return nil
+		}
+	}
+	return fmt.Errorf("E2E label %s is no longer present", label)
+}
+
+// triggerMobileE2EWorkflow triggers the mobile E2E workflow for both newly
+// provisioned and reused PR servers, always testing the labeled event's SHA.
 // testPlatform specifies which mobile OS to test: "ios", "android", or "both"
 func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance, testPlatform string) error {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -843,9 +922,14 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		inputs[inputKey] = url
 	}
 
+	workflowRef, err := s.e2ePRWorkflowRef(ctx, client, pr)
+	if err != nil {
+		return err
+	}
+
 	// Use the github REST API to trigger the workflow_dispatch event
 	body := map[string]interface{}{
-		"ref":    pr.Ref,
+		"ref":    workflowRef,
 		"inputs": inputs,
 	}
 
@@ -1430,7 +1514,47 @@ func (s *Server) dispatchMobileE2EWorkflow(
 	return nil
 }
 
-// cancelPRWorkflowRuns cancels in-progress E2E workflow_dispatch runs for this PR's branch.
+var e2ePRRunTitle = regexp.MustCompile(`^E2E PR #([1-9][0-9]*) @ [0-9a-f]{40}$`)
+
+var e2eActiveRunStatuses = []string{"queued", "waiting", "pending", "requested", "in_progress"}
+
+// e2eRunBelongsToPR deliberately ignores head_branch and head_sha: fork
+// dispatches share the origin default branch, and different PRs can share a SHA.
+// Runs predating the explicit PR identity contract must be left alone unless
+// they are a legacy same-repo feature-branch dispatch.
+func e2eRunBelongsToPR(title string, prNumber int) bool {
+	match := e2ePRRunTitle.FindStringSubmatch(title)
+	return len(match) == 2 && match[1] == strconv.Itoa(prNumber)
+}
+
+func e2eRunIdentifiesPR(displayTitle, name string, prNumber int) bool {
+	return e2eRunBelongsToPR(displayTitle, prNumber) || e2eRunBelongsToPR(name, prNumber)
+}
+
+func e2eRunIsActive(status string) bool {
+	switch strings.ToLower(status) {
+	case "queued", "waiting", "pending", "requested", "in_progress":
+		return true
+	default:
+		return false
+	}
+}
+
+func e2ePRIsSameRepository(pr *model.PullRequest) bool {
+	if pr == nil || pr.FullName == "" {
+		return false
+	}
+	return strings.EqualFold(pr.FullName, pr.RepoOwner+"/"+pr.RepoName)
+}
+
+func e2eRunIsLegacySameRepo(headBranch, prRef, defaultBranch string) bool {
+	if headBranch == "" || prRef == "" || strings.EqualFold(prRef, defaultBranch) {
+		return false
+	}
+	return headBranch == prRef
+}
+
+// cancelPRWorkflowRuns cancels active E2E workflow_dispatch runs for this PR.
 // Desktop cancels all matching e2e-functional.yml runs. Mobile cancels only e2e-detox-pr.yml
 // runs whose PLATFORM input matches testPlatform (ios/android), so an iOS reuse does not
 // cancel Android and vice versa. testPlatform "both" cancels every in-flight detox run.
@@ -1456,67 +1580,86 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 		return
 	}
 
-	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?status=in_progress&event=workflow_dispatch",
-		pr.RepoOwner, pr.RepoName, workflowFile)
-
-	req, err := client.NewRequest("GET", listURL, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow runs list request")
-		return
-	}
-
-	var workflowRuns struct {
-		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			HeadBranch string `json:"head_branch"`
-			Status     string `json:"status"`
-		} `json:"workflow_runs"`
-	}
-
-	_, err = client.Do(ctx, req, &workflowRuns)
-	if err != nil {
-		logger.WithError(err).Error("Failed to list workflow runs")
-		return
+	defaultBranch := s.e2eDefaultBranch
+	if defaultBranch == "" {
+		if repo, _, err := client.Repositories.Get(ctx, pr.RepoOwner, pr.RepoName); err == nil && repo != nil {
+			defaultBranch = repo.GetDefaultBranch()
+		}
 	}
 
 	filterByPlatform := workflowFile == "e2e-detox-pr.yml"
+	seen := map[int64]bool{}
 	cancelCount := 0
-	for _, run := range workflowRuns.WorkflowRuns {
-		if run.HeadBranch != pr.Ref || run.Status != "in_progress" {
-			continue
-		}
-		if filterByPlatform {
-			runPlatform, platErr := s.e2eDetoxRunPlatform(ctx, client, pr, run.ID, logger)
-			if platErr != nil {
-				logger.WithError(platErr).WithField("run_id", run.ID).Warn("Skipping cancel; could not determine PLATFORM for workflow run")
-				continue
+	for _, status := range e2eActiveRunStatuses {
+		for page := 1; ; page++ {
+			listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?event=workflow_dispatch&status=%s&per_page=100&page=%d",
+				pr.RepoOwner, pr.RepoName, workflowFile, status, page)
+			req, err := client.NewRequest("GET", listURL, nil)
+			if err != nil {
+				logger.WithError(err).Error("Failed to create workflow runs list request")
+				return
 			}
-			if !e2eShouldCancelRun(runPlatform, testPlatform) {
-				logger.WithFields(logrus.Fields{
-					"run_id":       run.ID,
-					"run_platform": runPlatform,
-				}).Debug("Leaving in-progress E2E run on a different PLATFORM")
-				continue
+
+			var workflowRuns struct {
+				WorkflowRuns []struct {
+					ID           int64  `json:"id"`
+					Name         string `json:"name"`
+					DisplayTitle string `json:"display_title"`
+					HeadBranch   string `json:"head_branch"`
+					Status       string `json:"status"`
+				} `json:"workflow_runs"`
+			}
+			if _, err = client.Do(ctx, req, &workflowRuns); err != nil {
+				logger.WithError(err).Error("Failed to list workflow runs")
+				return
+			}
+			if len(workflowRuns.WorkflowRuns) == 0 {
+				break
+			}
+
+			for _, run := range workflowRuns.WorkflowRuns {
+				if seen[run.ID] || !e2eRunIsActive(run.Status) {
+					continue
+				}
+				identified := e2eRunIdentifiesPR(run.DisplayTitle, run.Name, pr.Number)
+				legacy := e2ePRIsSameRepository(pr) && e2eRunIsLegacySameRepo(run.HeadBranch, pr.Ref, defaultBranch)
+				if !identified && !legacy {
+					continue
+				}
+				if filterByPlatform {
+					runPlatform, platErr := s.e2eDetoxRunPlatform(ctx, client, pr, run.ID, logger)
+					if platErr != nil {
+						logger.WithError(platErr).WithField("run_id", run.ID).Warn("Skipping cancel; could not determine PLATFORM for workflow run")
+						continue
+					}
+					if !e2eShouldCancelRun(runPlatform, testPlatform) {
+						logger.WithFields(logrus.Fields{
+							"run_id":       run.ID,
+							"run_platform": runPlatform,
+						}).Debug("Leaving in-progress E2E run on a different PLATFORM")
+						continue
+					}
+				}
+
+				cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
+					pr.RepoOwner, pr.RepoName, run.ID)
+				cancelReq, err := client.NewRequest("POST", cancelURL, nil)
+				if err != nil {
+					logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
+					continue
+				}
+				seen[run.ID] = true
+				if _, err = client.Do(ctx, cancelReq, nil); err != nil {
+					// GitHub returns 202 Accepted for cancel; go-github surfaces that as an error.
+					logger.WithError(err).WithField("run_id", run.ID).Debug("Cancel request returned a non-204 status")
+				}
+				logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
+				cancelCount++
+			}
+			if len(workflowRuns.WorkflowRuns) < 100 {
+				break
 			}
 		}
-
-		cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
-			pr.RepoOwner, pr.RepoName, run.ID)
-
-		cancelReq, err := client.NewRequest("POST", cancelURL, nil)
-		if err != nil {
-			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
-			continue
-		}
-
-		_, err = client.Do(ctx, cancelReq, nil)
-		if err != nil {
-			logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
-			continue
-		}
-
-		logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
-		cancelCount++
 	}
 
 	if cancelCount > 0 {

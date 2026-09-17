@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/mattermost/matterwick/model"
@@ -20,6 +21,13 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 
 	logger := s.Logger.WithFields(logrus.Fields{"repo": repoName, "pr": prNumber, "action": event.GetAction()})
 	logger.Info("PR-Event")
+
+	if event.GetAction() == "labeled" && s.isE2ELabel(label) && (strings.Contains(repoName, "mobile") || strings.Contains(repoName, "desktop")) {
+		if err := s.authorizeE2ELabel(event); err != nil {
+			logger.WithError(err).Warn("Rejecting E2E label request")
+			return
+		}
+	}
 
 	pr, err := s.GetPullRequestFromGithub(event.PullRequest)
 	if err != nil {
@@ -104,6 +112,53 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			}
 		}
 	}
+}
+
+// authorizeE2ELabel requires repository write permission to approve fork
+// code for a workflow with secrets. Triage permission permits labeling but is
+// insufficient for this approval. Only the sender of this labeled webhook can
+// approve its captured head SHA; a label inherited across pushes is not approval.
+func (s *Server) authorizeE2ELabel(event *github.PullRequestEvent) error {
+	head := event.GetPullRequest().GetHead().GetRepo().GetFullName()
+	base := event.GetPullRequest().GetBase().GetRepo()
+	if head == "" || base.GetFullName() == "" {
+		return fmt.Errorf("missing E2E PR repository identity")
+	}
+	if strings.EqualFold(head, base.GetFullName()) {
+		return s.confirmE2ELabelStillPresent(event)
+	}
+	sender := event.GetSender().GetLogin()
+	if sender == "" {
+		return fmt.Errorf("missing fork E2E label sender")
+	}
+	permission, _, err := s.e2eGithubClient().Repositories.GetPermissionLevel(
+		context.Background(), base.GetOwner().GetLogin(), base.GetName(), sender)
+	if err != nil {
+		return fmt.Errorf("unable to verify fork E2E label sender: %w", err)
+	}
+	switch permission.GetPermission() {
+	case "write", "maintain", "admin":
+	default:
+		return fmt.Errorf("fork E2E label sender requires repository write permission")
+	}
+	return s.confirmE2ELabelStillPresent(event)
+}
+
+func (s *Server) confirmE2ELabelStillPresent(event *github.PullRequestEvent) error {
+	number := event.GetNumber()
+	if number == 0 {
+		number = event.GetPullRequest().GetNumber()
+	}
+	base := event.GetPullRequest().GetBase().GetRepo()
+	label := event.GetLabel().GetName()
+	if number == 0 || base.GetFullName() == "" || label == "" {
+		return fmt.Errorf("cannot confirm E2E label without PR identity")
+	}
+	return s.confirmE2EApproval(&model.PullRequest{
+		RepoOwner: base.GetOwner().GetLogin(),
+		RepoName:  base.GetName(),
+		Number:    number,
+	}, label)
 }
 
 // handleSynchronizeSpinwick processes PR synchronization for SpinWick environments.
