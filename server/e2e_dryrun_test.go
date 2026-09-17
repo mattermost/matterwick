@@ -197,6 +197,7 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		pr := &model.PullRequest{
 			RepoOwner: "mattermost",
 			RepoName:  "mattermost-desktop",
+			FullName:  "mattermost/mattermost-desktop",
 			Number:    42,
 			Ref:       "feature-branch",
 			Sha:       "abc123",
@@ -212,7 +213,7 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		assert.Equal(t, instances[0].ServerVersion, c.Inputs["MM_SERVER_VERSION"],
 			"MM_SERVER_VERSION must come from instances[0].ServerVersion, not from config")
 		assert.Equal(t, s.Config.E2EUsername, c.Inputs["MM_TEST_USER_NAME"])
-		assert.Equal(t, pr.Ref, c.Inputs["version_name"])
+		assert.Equal(t, pr.Sha, c.Inputs["version_name"])
 		assert.NotEmpty(t, c.Inputs["instance_details"])
 	})
 
@@ -1030,6 +1031,7 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 		pr := &model.PullRequest{
 			RepoOwner: "mattermost",
 			RepoName:  "mattermost-desktop",
+			FullName:  "mattermost/mattermost-desktop",
 			Number:    99,
 			Ref:       "feature-branch",
 			Sha:       "abc123",

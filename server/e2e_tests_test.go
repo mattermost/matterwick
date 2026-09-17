@@ -1909,7 +1909,7 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 	assert.NotContains(t, strings.Join(got, ","), "/actions/runs/102/cancel")
 }
 
-func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
+func TestCancelPRWorkflowRunsDesktopCancelsIdentifiedRuns(t *testing.T) {
 	var cancelled []string
 	var mu sync.Mutex
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1917,7 +1917,7 @@ func TestCancelPRWorkflowRunsDesktopCancelsBranchRuns(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-functional.yml/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[
-				{"id":201,"head_branch":"feature","status":"in_progress"}
+				{"id":201,"head_branch":"master","display_title":"E2E PR #7 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"}
 			]}`))
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/cancel"):
 			mu.Lock()

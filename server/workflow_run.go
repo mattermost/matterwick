@@ -25,12 +25,13 @@ type WorkflowRunWebhookPayload struct {
 
 // WorkflowRunWithInputs is the workflow_run object extended with the workflow_dispatch inputs field.
 type WorkflowRunWithInputs struct {
-	ID         int64             `json:"id"`
-	Name       string            `json:"name"`
-	HeadBranch string            `json:"head_branch"`
-	HeadSHA    string            `json:"head_sha"`
-	Event      string            `json:"event"` // triggering event: "push", "schedule", "workflow_dispatch", etc.
-	Inputs     map[string]string `json:"inputs"`
+	ID           int64             `json:"id"`
+	Name         string            `json:"name"`
+	DisplayTitle string            `json:"display_title"`
+	HeadBranch   string            `json:"head_branch"`
+	HeadSHA      string            `json:"head_sha"`
+	Event        string            `json:"event"` // triggering event: "push", "schedule", "workflow_dispatch", etc.
+	Inputs       map[string]string `json:"inputs"`
 }
 
 // ParseWorkflowRunEventWithInputs decodes a workflow_run webhook payload from r.
@@ -104,6 +105,12 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		if workflowName == s.cmtTestWorkflowName() {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
 			s.findAndDestroyInstancesByRunID(repoName, runID, logger)
+		} else if e2ePRRunTitle.MatchString(payload.WorkflowRun.DisplayTitle) {
+			// Fork PR runs use the origin default branch as their workflow ref.
+			// Their head_sha is the workflow source, not the approved PR commit;
+			// using it here can destroy servers belonging to a concurrent main run.
+			// PR servers stay available for reuse and are cleaned up on PR close.
+			logger.Info("PR E2E completed; retaining PR servers until PR cleanup")
 		} else {
 			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
 			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
