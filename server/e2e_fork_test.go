@@ -298,7 +298,7 @@ func TestCancelRunsUsesPRIdentity(t *testing.T) {
 			s := newDryRunServer(t, "", "mattermost")
 			s.githubAPIBase = gh.URL + "/"
 			s.e2eDefaultBranch = app.defaultBranch
-			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, Number: 42, Ref: "feature", Sha: sha}
+			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, FullName: "mattermost/" + app.repo, Number: 42, Ref: "feature", Sha: sha}
 			s.cancelPRWorkflowRuns(pr, s.Logger, app.platform)
 			var wantCancelled, wantInspected []string
 			for _, id := range []int{1, 3, 4, 5, 8} {
@@ -592,6 +592,90 @@ func TestStrippedE2ELabelDoesNotDispatch(t *testing.T) {
 	}
 }
 
+func TestStrippedE2ELabelAfterProvisionDoesNotDispatch(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			originalCreate := e2eCreatePRInstances
+			t.Cleanup(func() { e2eCreatePRInstances = originalCreate })
+			e2eCreatePRInstances = func(_ *Server, _ *model.PullRequest, _ string, _ []string) ([]*E2EInstance, error) {
+				return app.instances(), nil
+			}
+			for _, reuse := range []bool{false, true} {
+				t.Run(fmt.Sprintf("reuse=%t", reuse), func(t *testing.T) {
+					var captures []dispatchCapture
+					pullGets := 0
+					var deleted []string
+					gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						switch {
+						case r.Method == http.MethodGet && r.URL.Path == "/repos/mattermost/"+app.repo:
+							_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": app.defaultBranch})
+						case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls/42"):
+							pullGets++
+							labels := []map[string]string{}
+							if pullGets == 1 {
+								labels = []map[string]string{{"name": app.label}}
+							}
+							_ = json.NewEncoder(w).Encode(map[string]interface{}{
+								"state":  "open",
+								"head":   map[string]string{"sha": strings.Repeat("b", 40)},
+								"labels": labels,
+							})
+						case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/runs"):
+							_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+						case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dispatches"):
+							var capture dispatchCapture
+							assert.NoError(t, json.NewDecoder(r.Body).Decode(&capture))
+							captures = append(captures, capture)
+							w.WriteHeader(http.StatusNoContent)
+						default:
+							t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+							w.WriteHeader(http.StatusNotFound)
+						}
+					}))
+					t.Cleanup(gh.Close)
+					cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/installation/") {
+							deleted = append(deleted, r.URL.Path)
+							w.WriteHeader(http.StatusAccepted)
+							return
+						}
+						if r.URL.Path == "/api/installations" {
+							_, _ = w.Write([]byte(`[]`))
+							return
+						}
+						_, _ = w.Write([]byte(`{"ID":"inst","State":"stable"}`))
+					}))
+					t.Cleanup(cloud.Close)
+					s := newDryRunServer(t, "", "mattermost")
+					s.Config.E2ETrustedForkDispatch = true
+					s.githubAPIBase = gh.URL + "/"
+					s.e2eDefaultBranch = app.defaultBranch
+					s.CloudClient = model.NewCloudClient(cloud.URL, "", "", "", "")
+					s.e2eInProgress = make(map[string]bool)
+					pr := &model.PullRequest{
+						RepoOwner: "mattermost", RepoName: app.repo, FullName: "contributor/" + app.repo,
+						Number: 42, Ref: "feature", Sha: strings.Repeat("a", 40),
+					}
+					key := app.repo + "-pr-42"
+					if reuse {
+						s.e2eInstances[key] = app.instances()
+					}
+					s.handleE2ETestRequest(pr, app.label)
+					assert.Empty(t, captures, "approval removed during provisioning must not dispatch")
+					_, tracked := s.e2eInstances[key]
+					if reuse {
+						assert.True(t, tracked, "reused instances stay tracked when the label is stripped before dispatch")
+						assert.Empty(t, deleted, "reused instances must not be destroyed when the label is stripped before dispatch")
+					} else {
+						assert.False(t, tracked, "fresh instances must be untracked when the label is stripped before dispatch")
+						assert.NotEmpty(t, deleted, "fresh instances must be destroyed when the label is stripped before dispatch")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestCancelMatchesNameOrLegacyNonDefaultBranch(t *testing.T) {
 	for _, app := range forkE2EApps {
 		t.Run(app.repo, func(t *testing.T) {
@@ -620,11 +704,57 @@ func TestCancelMatchesNameOrLegacyNonDefaultBranch(t *testing.T) {
 			s := newDryRunServer(t, "", "mattermost")
 			s.githubAPIBase = gh.URL + "/"
 			s.e2eDefaultBranch = app.defaultBranch
-			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, Number: 42, Ref: "feature", Sha: sha}
+			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, FullName: "mattermost/" + app.repo, Number: 42, Ref: "feature", Sha: sha}
 			s.cancelPRWorkflowRuns(pr, s.Logger, app.platform)
 			assert.Contains(t, strings.Join(cancelled, ","), "/actions/runs/11/cancel", "identity on name must cancel queued runs")
 			assert.Contains(t, strings.Join(cancelled, ","), "/actions/runs/12/cancel", "legacy same-repo feature-branch runs remain cancellable")
 			assert.NotContains(t, strings.Join(cancelled, ","), "/actions/runs/13/cancel", "unidentified default-branch runs must never be cancelled")
 		})
 	}
+}
+
+func TestCancelDoesNotUseLegacyBranchForForkPRs(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			sha := strings.Repeat("a", 40)
+			title := "E2E PR #42 @ " + sha
+			runs := []map[string]interface{}{
+				{"id": 11, "name": title, "display_title": app.defaultBranch, "head_branch": app.defaultBranch, "status": "queued"},
+				{"id": 12, "name": "E2E", "display_title": "E2E", "head_branch": "feature", "status": "in_progress"},
+			}
+			var cancelled []string
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workflows/"+app.workflow+"/runs"):
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"workflow_runs": runs})
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/jobs"):
+					_, _ = w.Write([]byte(`{"jobs":[{"name":"build-ios-simulator","status":"in_progress"}]}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
+					cancelled = append(cancelled, r.URL.Path)
+					w.WriteHeader(http.StatusAccepted)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(gh.Close)
+			s := newDryRunServer(t, "", "mattermost")
+			s.githubAPIBase = gh.URL + "/"
+			s.e2eDefaultBranch = app.defaultBranch
+			pr := &model.PullRequest{
+				RepoOwner: "mattermost", RepoName: app.repo, FullName: "contributor/" + app.repo,
+				Number: 42, Ref: "feature", Sha: sha,
+			}
+			s.cancelPRWorkflowRuns(pr, s.Logger, app.platform)
+			assert.Contains(t, strings.Join(cancelled, ","), "/actions/runs/11/cancel", "fork PRs still cancel titled runs")
+			assert.NotContains(t, strings.Join(cancelled, ","), "/actions/runs/12/cancel", "fork PRs must not cancel untitled same-repo feature-branch runs")
+		})
+	}
+}
+
+func TestE2EPRIsSameRepository(t *testing.T) {
+	assert.False(t, e2ePRIsSameRepository(nil))
+	assert.False(t, e2ePRIsSameRepository(&model.PullRequest{RepoOwner: "mattermost", RepoName: "desktop"}))
+	assert.False(t, e2ePRIsSameRepository(&model.PullRequest{RepoOwner: "mattermost", RepoName: "desktop", FullName: "contributor/desktop"}))
+	assert.True(t, e2ePRIsSameRepository(&model.PullRequest{RepoOwner: "mattermost", RepoName: "desktop", FullName: "mattermost/desktop"}))
+	assert.True(t, e2ePRIsSameRepository(&model.PullRequest{RepoOwner: "mattermost", RepoName: "desktop", FullName: "Mattermost/Desktop"}))
 }

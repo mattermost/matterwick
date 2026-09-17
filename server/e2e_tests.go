@@ -232,8 +232,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	})
 	logger.Info("Handling E2E test request")
 
-	if err := s.confirmE2EApproval(pr, label); err != nil {
-		logger.WithError(err).Warn("Rejecting E2E request; approval is no longer present")
+	if s.rejectIfE2EApprovalGone(pr, label, logger) {
 		return
 	}
 
@@ -311,6 +310,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 			logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
 			s.cancelPRWorkflowRuns(pr, logger, testPlatform)
 			s.wakeUpHibernatingInstances(existingInstances, logger)
+			if s.rejectIfE2EApprovalGone(pr, label, logger) {
+				return
+			}
 			if err := e2eDispatchPRWorkflow(s, pr, existingInstances, instanceType, testPlatform); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -333,6 +335,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
 				s.destroyE2EInstances(cloudInstances, logger)
+				return
+			}
+			if s.rejectIfE2EApprovalGone(pr, label, logger) {
 				return
 			}
 			if err := e2eDispatchPRWorkflow(s, pr, cloudInstances, instanceType, testPlatform); err != nil {
@@ -377,6 +382,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
+
+	if s.rejectIfE2EApprovalGone(pr, label, logger) {
+		s.e2eInstancesLock.Lock()
+		delete(s.e2eInstances, key)
+		s.e2eInstancesLock.Unlock()
+		s.destroyE2EInstances(instances, logger)
+		return
+	}
 
 	if err = e2eDispatchPRWorkflow(s, pr, instances, instanceType, testPlatform); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
@@ -850,6 +863,14 @@ func (s *Server) e2ePRWorkflowRef(ctx context.Context, client *github.Client, pr
 		return "", fmt.Errorf("E2E origin repository has no default branch")
 	}
 	return repo.GetDefaultBranch(), nil
+}
+
+func (s *Server) rejectIfE2EApprovalGone(pr *model.PullRequest, label string, logger logrus.FieldLogger) bool {
+	if err := s.confirmE2EApproval(pr, label); err != nil {
+		logger.WithError(err).Warn("Rejecting E2E request; approval is no longer present")
+		return true
+	}
+	return false
 }
 
 func (s *Server) confirmE2EApproval(pr *model.PullRequest, label string) error {
@@ -1519,6 +1540,13 @@ func e2eRunIsActive(status string) bool {
 	}
 }
 
+func e2ePRIsSameRepository(pr *model.PullRequest) bool {
+	if pr == nil || pr.FullName == "" {
+		return false
+	}
+	return strings.EqualFold(pr.FullName, pr.RepoOwner+"/"+pr.RepoName)
+}
+
 func e2eRunIsLegacySameRepo(headBranch, prRef, defaultBranch string) bool {
 	if headBranch == "" || prRef == "" || strings.EqualFold(prRef, defaultBranch) {
 		return false
@@ -1594,7 +1622,7 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 					continue
 				}
 				identified := e2eRunIdentifiesPR(run.DisplayTitle, run.Name, pr.Number)
-				legacy := e2eRunIsLegacySameRepo(run.HeadBranch, pr.Ref, defaultBranch)
+				legacy := e2ePRIsSameRepository(pr) && e2eRunIsLegacySameRepo(run.HeadBranch, pr.Ref, defaultBranch)
 				if !identified && !legacy {
 					continue
 				}
