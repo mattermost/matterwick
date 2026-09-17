@@ -384,6 +384,40 @@ func TestUnidentifiedDefaultBranchCompletionRetainsPushServers(t *testing.T) {
 	}
 }
 
+func TestUnidentifiedDefaultBranchUnknownLookupRetainsPushServers(t *testing.T) {
+	pushSHA := strings.Repeat("a", 40)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/mattermost/desktop" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(gh.Close)
+
+	s := newDryRunServer(t, "", "mattermost")
+	s.Config.E2ETestWorkflowNames = []string{"Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"}
+	s.githubAPIBase = gh.URL + "/"
+	require.Empty(t, s.e2eDefaultBranch)
+
+	pushKey := "desktop-push-master-" + pushSHA
+	s.e2eInstances[pushKey] = nil
+
+	payload, err := ParseWorkflowRunEventWithInputs(strings.NewReader(fmt.Sprintf(`{
+		"action":"completed",
+		"workflow":{"name":"Electron Playwright Tests"},
+		"workflow_run":{"id":123,"name":"E2E","event":"workflow_dispatch","head_branch":"master","head_sha":%q,"display_title":"E2E"},
+		"repository":{"name":"desktop","owner":{"login":"mattermost"}}
+	}`, pushSHA)))
+	require.NoError(t, err)
+	_, hasDefault := payload.Repository["default_branch"]
+	require.False(t, hasDefault, "payload must omit default_branch so lookup is the only source")
+
+	s.handleWorkflowRunEventWithInputs(payload)
+	assert.Contains(t, s.e2eInstances, pushKey, "unknown default-branch lookup must not SHA-destroy push servers")
+}
+
 func TestIdentifiedMasterCompletionDestroysPushServers(t *testing.T) {
 	pushSHA := strings.Repeat("a", 40)
 	for _, app := range productionE2EWorkflows {

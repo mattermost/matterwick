@@ -122,9 +122,14 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		} else if e2eHasPushIdentity(displayTitle, runName) {
 			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
 			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
-		} else if payload.WorkflowRun.Event == "workflow_dispatch" &&
-			strings.EqualFold(headBranch, s.originDefaultBranch(payload, owner, repoName)) {
-			logger.Info("Unidentified default-branch E2E completion; leaving SHA-tracked servers in place")
+		} else if payload.WorkflowRun.Event == "workflow_dispatch" {
+			defaultBranch := s.originDefaultBranch(payload, owner, repoName)
+			if defaultBranch != "" && !strings.EqualFold(headBranch, defaultBranch) {
+				logger.Info("Test workflow completed, cleaning up matching instances by SHA")
+				s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
+			} else {
+				logger.Info("Unidentified default-branch E2E completion; leaving SHA-tracked servers in place")
+			}
 		} else {
 			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
 			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
