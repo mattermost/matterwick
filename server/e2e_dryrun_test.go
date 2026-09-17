@@ -245,6 +245,7 @@ func TestDryRun_MobileDispatch(t *testing.T) {
 			pr := &model.PullRequest{
 				RepoOwner: "mattermost",
 				RepoName:  "mattermost-mobile",
+				FullName:  "mattermost/mattermost-mobile",
 				Number:    42,
 				Ref:       prRef,
 				Sha:       prSha,
@@ -1058,6 +1059,7 @@ func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
 		pr := &model.PullRequest{
 			RepoOwner: "mattermost",
 			RepoName:  "mattermost-mobile",
+			FullName:  "mattermost/mattermost-mobile",
 			Number:    99,
 			Ref:       "feature-branch",
 			Sha:       "feature-sha",
@@ -1289,4 +1291,3 @@ func TestIsBuildReleaseBranch(t *testing.T) {
 		assert.False(t, isBuildReleaseBranch(ref), "must not match: %q", ref)
 	}
 }
-

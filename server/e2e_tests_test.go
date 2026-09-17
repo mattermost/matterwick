@@ -1861,8 +1861,8 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/workflows/e2e-detox-pr.yml/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[
-				{"id":101,"head_branch":"feature","status":"in_progress"},
-				{"id":102,"head_branch":"feature","status":"in_progress"}
+				{"id":101,"head_branch":"main","display_title":"E2E PR #42 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"},
+				{"id":102,"head_branch":"main","display_title":"E2E PR #42 @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"in_progress"}
 			]}`))
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/actions/runs/101/jobs"):
 			w.WriteHeader(http.StatusOK)

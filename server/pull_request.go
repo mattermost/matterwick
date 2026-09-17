@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/mattermost/matterwick/model"
@@ -20,6 +21,13 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 
 	logger := s.Logger.WithFields(logrus.Fields{"repo": repoName, "pr": prNumber, "action": event.GetAction()})
 	logger.Info("PR-Event")
+
+	if event.GetAction() == "labeled" && s.isE2ELabel(label) && strings.Contains(repoName, "mobile") {
+		if err := s.authorizeMobileE2ELabel(event); err != nil {
+			logger.WithError(err).Warn("Rejecting mobile E2E label request")
+			return
+		}
+	}
 
 	pr, err := s.GetPullRequestFromGithub(event.PullRequest)
 	if err != nil {
@@ -103,6 +111,36 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 				s.handleDestroySpinWick(pr, false)
 			}
 		}
+	}
+}
+
+// authorizeMobileE2ELabel requires repository write permission to approve fork
+// code for a workflow with secrets. Triage permission permits labeling but is
+// insufficient for this approval. Only the sender of this labeled webhook can
+// approve its captured head SHA; a label inherited across pushes is not approval.
+func (s *Server) authorizeMobileE2ELabel(event *github.PullRequestEvent) error {
+	head := event.GetPullRequest().GetHead().GetRepo().GetFullName()
+	base := event.GetPullRequest().GetBase().GetRepo()
+	if head == "" || base.GetFullName() == "" {
+		return fmt.Errorf("missing mobile PR repository identity")
+	}
+	if strings.EqualFold(head, base.GetFullName()) {
+		return nil
+	}
+	sender := event.GetSender().GetLogin()
+	if sender == "" {
+		return fmt.Errorf("missing fork mobile E2E label sender")
+	}
+	permission, _, err := s.e2eGithubClient().Repositories.GetPermissionLevel(
+		context.Background(), base.GetOwner().GetLogin(), base.GetName(), sender)
+	if err != nil {
+		return fmt.Errorf("unable to verify fork mobile E2E label sender: %w", err)
+	}
+	switch permission.GetPermission() {
+	case "write", "maintain", "admin":
+		return nil
+	default:
+		return fmt.Errorf("fork mobile E2E label sender requires repository write permission")
 	}
 }
 

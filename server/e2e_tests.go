@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -759,7 +761,7 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 //   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
 func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	if instanceType == "desktop" {
 		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
@@ -814,7 +816,27 @@ func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.C
 	return nil
 }
 
-// triggerMobileE2EWorkflow triggers the mobile E2E workflow
+// mobilePRWorkflowRef selects trusted origin workflow code for fork PRs. The PR
+// branch remains usable for same-repository workflow development and display.
+func mobilePRWorkflowRef(ctx context.Context, client *github.Client, pr *model.PullRequest) (string, error) {
+	if pr.FullName == "" {
+		return "", fmt.Errorf("cannot select mobile workflow without the PR head repository")
+	}
+	if strings.EqualFold(pr.FullName, pr.RepoOwner+"/"+pr.RepoName) {
+		return pr.Ref, nil
+	}
+	repo, _, err := client.Repositories.Get(ctx, pr.RepoOwner, pr.RepoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get mobile origin default branch: %w", err)
+	}
+	if repo.GetDefaultBranch() == "" {
+		return "", fmt.Errorf("mobile origin repository has no default branch")
+	}
+	return repo.GetDefaultBranch(), nil
+}
+
+// triggerMobileE2EWorkflow triggers the mobile E2E workflow for both newly
+// provisioned and reused PR servers, always testing the labeled event's SHA.
 // testPlatform specifies which mobile OS to test: "ios", "android", or "both"
 func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance, testPlatform string) error {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -843,9 +865,14 @@ func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Cl
 		inputs[inputKey] = url
 	}
 
+	workflowRef, err := mobilePRWorkflowRef(ctx, client, pr)
+	if err != nil {
+		return err
+	}
+
 	// Use the github REST API to trigger the workflow_dispatch event
 	body := map[string]interface{}{
-		"ref":    pr.Ref,
+		"ref":    workflowRef,
 		"inputs": inputs,
 	}
 
@@ -1430,7 +1457,17 @@ func (s *Server) dispatchMobileE2EWorkflow(
 	return nil
 }
 
-// cancelPRWorkflowRuns cancels in-progress E2E workflow_dispatch runs for this PR's branch.
+var mobilePRRunTitle = regexp.MustCompile(`^E2E PR #([1-9][0-9]*) @ [0-9a-f]{40}$`)
+
+// mobileRunBelongsToPR deliberately ignores head_branch and head_sha: fork
+// dispatches share the origin default branch, and different PRs can share a SHA.
+// Runs predating the explicit PR identity contract must be left alone.
+func mobileRunBelongsToPR(title string, prNumber int) bool {
+	match := mobilePRRunTitle.FindStringSubmatch(title)
+	return len(match) == 2 && match[1] == strconv.Itoa(prNumber)
+}
+
+// cancelPRWorkflowRuns cancels in-progress E2E workflow_dispatch runs for this PR.
 // Desktop cancels all matching e2e-functional.yml runs. Mobile cancels only e2e-detox-pr.yml
 // runs whose PLATFORM input matches testPlatform (ios/android), so an iOS reuse does not
 // cancel Android and vice versa. testPlatform "both" cancels every in-flight detox run.
@@ -1467,9 +1504,10 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 
 	var workflowRuns struct {
 		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			HeadBranch string `json:"head_branch"`
-			Status     string `json:"status"`
+			ID           int64  `json:"id"`
+			HeadBranch   string `json:"head_branch"`
+			DisplayTitle string `json:"display_title"`
+			Status       string `json:"status"`
 		} `json:"workflow_runs"`
 	}
 
@@ -1482,10 +1520,13 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 	filterByPlatform := workflowFile == "e2e-detox-pr.yml"
 	cancelCount := 0
 	for _, run := range workflowRuns.WorkflowRuns {
-		if run.HeadBranch != pr.Ref || run.Status != "in_progress" {
+		if run.Status != "in_progress" {
 			continue
 		}
 		if filterByPlatform {
+			if !mobileRunBelongsToPR(run.DisplayTitle, pr.Number) {
+				continue
+			}
 			runPlatform, platErr := s.e2eDetoxRunPlatform(ctx, client, pr, run.ID, logger)
 			if platErr != nil {
 				logger.WithError(platErr).WithField("run_id", run.ID).Warn("Skipping cancel; could not determine PLATFORM for workflow run")
@@ -1498,6 +1539,8 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 				}).Debug("Leaving in-progress E2E run on a different PLATFORM")
 				continue
 			}
+		} else if run.HeadBranch != pr.Ref {
+			continue
 		}
 
 		cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
