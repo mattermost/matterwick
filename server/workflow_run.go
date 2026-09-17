@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,22 +67,27 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	workflowName := payload.WorkflowRun.Name
+	yamlName := workflowYAMLName(payload)
+	runName := payload.WorkflowRun.Name
+	displayTitle := payload.WorkflowRun.DisplayTitle
 	headBranch := payload.WorkflowRun.HeadBranch
 	headSHA := payload.WorkflowRun.HeadSHA
 	runID := payload.WorkflowRun.ID
 
 	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":     repoName,
-		"owner":    owner,
-		"workflow": workflowName,
-		"action":   payload.Action,
-		"run_id":   runID,
-		"head_sha": headSHA,
+		"repo":          repoName,
+		"owner":         owner,
+		"workflow":      yamlName,
+		"run_name":      runName,
+		"display_title": displayTitle,
+		"action":        payload.Action,
+		"run_id":        runID,
+		"head_sha":      headSHA,
 	})
 
 	// CMT trigger: provision one server per version in s.cmtServerVersions() and dispatch compatibility-matrix-testing.yml.
-	if s.Config.CMTTriggerWorkflowName != "" && workflowName == s.Config.CMTTriggerWorkflowName {
+	if s.Config.CMTTriggerWorkflowName != "" &&
+		(runName == s.Config.CMTTriggerWorkflowName || yamlName == s.Config.CMTTriggerWorkflowName) {
 		if payload.Action == "requested" {
 			triggerEvent := payload.WorkflowRun.Event
 			if s.shouldTriggerCMT(triggerEvent, headBranch) {
@@ -100,17 +106,25 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// On completion: CMT keys on run id, non-CMT flows key on SHA.
-	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
-		if workflowName == s.cmtTestWorkflowName() {
+	// On completion: CMT keys on run id, identified PR titles retain PR servers,
+	// identified MAIN/MASTER/RELEASE titles SHA-destroy, and unidentified
+	// default-branch dispatches are fail-closed (do not SHA-destroy).
+	if payload.Action == "completed" && s.isE2ELifecycleWorkflow(payload) {
+		if s.isCMTTestWorkflowName(yamlName) || s.isCMTTestWorkflowName(runName) {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
 			s.findAndDestroyInstancesByRunID(repoName, runID, logger)
-		} else if e2ePRRunTitle.MatchString(payload.WorkflowRun.DisplayTitle) {
+		} else if e2eHasPRIdentity(displayTitle, runName) {
 			// Fork PR runs use the origin default branch as their workflow ref.
 			// Their head_sha is the workflow source, not the approved PR commit;
 			// using it here can destroy servers belonging to a concurrent main run.
 			// PR servers stay available for reuse and are cleaned up on PR close.
 			logger.Info("PR E2E completed; retaining PR servers until PR cleanup")
+		} else if e2eHasPushIdentity(displayTitle, runName) {
+			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
+			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
+		} else if payload.WorkflowRun.Event == "workflow_dispatch" &&
+			strings.EqualFold(headBranch, s.originDefaultBranch(payload, owner, repoName)) {
+			logger.Info("Unidentified default-branch E2E completion; leaving SHA-tracked servers in place")
 		} else {
 			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
 			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
@@ -122,14 +136,78 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
+func workflowYAMLName(payload *WorkflowRunWebhookPayload) string {
+	if payload == nil || payload.Workflow == nil {
+		return ""
+	}
+	name, _ := payload.Workflow["name"].(string)
+	return name
+}
+
+func e2eHasPRIdentity(titles ...string) bool {
+	for _, title := range titles {
+		if e2ePRRunTitle.MatchString(title) {
+			return true
+		}
+	}
+	return false
+}
+
+var e2ePushRunTitle = regexp.MustCompile(`^E2E (MASTER|MAIN|RELEASE)\b`)
+
+func e2eHasPushIdentity(titles ...string) bool {
+	for _, title := range titles {
+		if e2ePushRunTitle.MatchString(title) {
+			return true
+		}
+	}
+	return false
+}
+
 // isE2ETestWorkflow reports whether name is in Config.E2ETestWorkflowNames.
 func (s *Server) isE2ETestWorkflow(name string) bool {
+	if name == "" {
+		return false
+	}
 	for _, n := range s.Config.E2ETestWorkflowNames {
 		if n == name {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Server) isCMTTestWorkflowName(name string) bool {
+	return name != "" && name == s.cmtTestWorkflowName()
+}
+
+// isE2ELifecycleWorkflow recognizes completions by YAML name, configured run
+// names, or PR/MASTER identity titles. run-name can overwrite workflow_run.name.
+func (s *Server) isE2ELifecycleWorkflow(payload *WorkflowRunWebhookPayload) bool {
+	if s.isE2ETestWorkflow(workflowYAMLName(payload)) || s.isE2ETestWorkflow(payload.WorkflowRun.Name) {
+		return true
+	}
+	return e2eHasPRIdentity(payload.WorkflowRun.DisplayTitle, payload.WorkflowRun.Name) ||
+		e2eHasPushIdentity(payload.WorkflowRun.DisplayTitle, payload.WorkflowRun.Name)
+}
+
+func (s *Server) originDefaultBranch(payload *WorkflowRunWebhookPayload, owner, repoName string) string {
+	if s.e2eDefaultBranch != "" {
+		return s.e2eDefaultBranch
+	}
+	if payload != nil && payload.Repository != nil {
+		if branch, ok := payload.Repository["default_branch"].(string); ok && branch != "" {
+			return branch
+		}
+	}
+	if owner == "" || repoName == "" {
+		return ""
+	}
+	repo, _, err := s.e2eGithubClient().Repositories.Get(context.Background(), owner, repoName)
+	if err != nil || repo == nil {
+		return ""
+	}
+	return repo.GetDefaultBranch()
 }
 
 // defaultCMTTestWorkflowName is the "name:" of compatibility-matrix-testing.yml in the

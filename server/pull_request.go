@@ -125,7 +125,7 @@ func (s *Server) authorizeE2ELabel(event *github.PullRequestEvent) error {
 		return fmt.Errorf("missing E2E PR repository identity")
 	}
 	if strings.EqualFold(head, base.GetFullName()) {
-		return nil
+		return s.confirmE2ELabelStillPresent(event)
 	}
 	sender := event.GetSender().GetLogin()
 	if sender == "" {
@@ -138,10 +138,27 @@ func (s *Server) authorizeE2ELabel(event *github.PullRequestEvent) error {
 	}
 	switch permission.GetPermission() {
 	case "write", "maintain", "admin":
-		return nil
 	default:
 		return fmt.Errorf("fork E2E label sender requires repository write permission")
 	}
+	return s.confirmE2ELabelStillPresent(event)
+}
+
+func (s *Server) confirmE2ELabelStillPresent(event *github.PullRequestEvent) error {
+	number := event.GetNumber()
+	if number == 0 {
+		number = event.GetPullRequest().GetNumber()
+	}
+	base := event.GetPullRequest().GetBase().GetRepo()
+	label := event.GetLabel().GetName()
+	if number == 0 || base.GetFullName() == "" || label == "" {
+		return fmt.Errorf("cannot confirm E2E label without PR identity")
+	}
+	return s.confirmE2EApproval(&model.PullRequest{
+		RepoOwner: base.GetOwner().GetLogin(),
+		RepoName:  base.GetName(),
+		Number:    number,
+	}, label)
 }
 
 // handleSynchronizeSpinwick processes PR synchronization for SpinWick environments.

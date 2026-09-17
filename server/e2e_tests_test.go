@@ -1740,7 +1740,7 @@ func TestHandleE2ETestRequestSerializesReplacement(t *testing.T) {
 		switch {
 		case strings.Contains(r.URL.Path, "/pulls/"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"state":"open"}`))
+			_, _ = w.Write([]byte(`{"state":"open","labels":[{"name":"E2E/Run-iOS"},{"name":"E2E/Run-Android"}]}`))
 		case strings.Contains(r.URL.Path, "/runs"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
@@ -1888,9 +1888,10 @@ func TestCancelPRWorkflowRunsFiltersMobileByPlatform(t *testing.T) {
 	t.Cleanup(gh.Close)
 
 	s := &Server{
-		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
-		Logger:        logrus.New(),
-		githubAPIBase: gh.URL + "/",
+		Config:           &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:           logrus.New(),
+		githubAPIBase:    gh.URL + "/",
+		e2eDefaultBranch: "main",
 	}
 	pr := &model.PullRequest{
 		RepoOwner: "mattermost",
@@ -1931,9 +1932,10 @@ func TestCancelPRWorkflowRunsDesktopCancelsIdentifiedRuns(t *testing.T) {
 	t.Cleanup(gh.Close)
 
 	s := &Server{
-		Config:        &MatterwickConfig{GithubAccessToken: "test-token"},
-		Logger:        logrus.New(),
-		githubAPIBase: gh.URL + "/",
+		Config:           &MatterwickConfig{GithubAccessToken: "test-token"},
+		Logger:           logrus.New(),
+		githubAPIBase:    gh.URL + "/",
+		e2eDefaultBranch: "master",
 	}
 	pr := &model.PullRequest{
 		RepoOwner: "mattermost",

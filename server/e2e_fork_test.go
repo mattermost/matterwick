@@ -54,6 +54,13 @@ func TestAuthorizeE2ELabel(t *testing.T) {
 					lookups := 0
 					gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						assert.Equal(t, http.MethodGet, r.Method)
+						if strings.HasSuffix(r.URL.Path, "/pulls/42") {
+							_ = json.NewEncoder(w).Encode(map[string]interface{}{
+								"state":  "open",
+								"labels": []map[string]string{{"name": "E2E/Run"}},
+							})
+							return
+						}
 						assert.Equal(t, "/repos/mattermost/"+app.repo+"/collaborators/"+tc.sender+"/permission", r.URL.Path)
 						lookups++
 						if tc.status != 0 {
@@ -72,12 +79,14 @@ func TestAuthorizeE2ELabel(t *testing.T) {
 					}
 					event := &github.PullRequestEvent{
 						Action: github.String("labeled"),
+						Number: github.Int(42),
 						Repo:   base,
 						Label:  &github.Label{Name: github.String("E2E/Run")},
 						Sender: &github.User{Login: github.String(tc.sender)},
 						PullRequest: &github.PullRequest{
-							Head: &github.PullRequestBranch{Repo: &github.Repository{FullName: github.String(tc.headRepo)}},
-							Base: &github.PullRequestBranch{Repo: base},
+							Number: github.Int(42),
+							Head:   &github.PullRequestBranch{Repo: &github.Repository{FullName: github.String(tc.headRepo)}},
+							Base:   &github.PullRequestBranch{Repo: base},
 						},
 					}
 					if tc.wantError {
@@ -146,6 +155,7 @@ func TestPRDispatchWorkflowRef(t *testing.T) {
 					}))
 					t.Cleanup(gh.Close)
 					s := newDryRunServer(t, "", "mattermost")
+					s.Config.E2ETrustedForkDispatch = true
 					pr := &model.PullRequest{
 						RepoOwner: "mattermost",
 						RepoName:  app.repo,
@@ -232,6 +242,7 @@ func TestPRProvisionAndReuseKeepApprovedSHA(t *testing.T) {
 					}))
 					t.Cleanup(cloud.Close)
 					s := newDryRunServer(t, "", "mattermost")
+					s.Config.E2ETrustedForkDispatch = true
 					s.githubAPIBase = gh.URL + "/"
 					s.CloudClient = model.NewCloudClient(cloud.URL, "", "", "", "")
 					s.e2eInProgress = make(map[string]bool)
@@ -286,10 +297,11 @@ func TestCancelRunsUsesPRIdentity(t *testing.T) {
 			t.Cleanup(gh.Close)
 			s := newDryRunServer(t, "", "mattermost")
 			s.githubAPIBase = gh.URL + "/"
+			s.e2eDefaultBranch = app.defaultBranch
 			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, Number: 42, Ref: "feature", Sha: sha}
 			s.cancelPRWorkflowRuns(pr, s.Logger, app.platform)
 			var wantCancelled, wantInspected []string
-			for _, id := range []int{1, 4} {
+			for _, id := range []int{1, 3, 4, 5, 8} {
 				wantCancelled = append(wantCancelled, fmt.Sprintf("/repos/mattermost/%s/actions/runs/%d/cancel", app.repo, id))
 				if app.repo != "desktop" {
 					wantInspected = append(wantInspected, fmt.Sprintf("/repos/mattermost/%s/actions/runs/%d/jobs", app.repo, id))
@@ -329,6 +341,256 @@ func TestPRCompletionDoesNotCleanUpDefaultBranchServers(t *testing.T) {
 					assert.Contains(t, s.e2eInstances, prKey, "PR servers are retained until PR cleanup")
 				})
 			}
+		})
+	}
+}
+
+var productionE2EWorkflows = []struct {
+	repo, yamlName, defaultBranch string
+}{
+	{"desktop", "Electron Playwright Tests", "master"},
+	{"mattermost-mobile", "E2E", "main"},
+}
+
+func completionPayload(t *testing.T, repo, yamlName, runName, displayTitle, headBranch, headSHA string) *WorkflowRunWebhookPayload {
+	t.Helper()
+	payload, err := ParseWorkflowRunEventWithInputs(strings.NewReader(fmt.Sprintf(`{
+		"action":"completed",
+		"workflow":{"name":%q},
+		"workflow_run":{"id":123,"name":%q,"event":"workflow_dispatch","head_branch":%q,"head_sha":%q,"display_title":%q},
+		"repository":{"name":%q,"default_branch":%q,"owner":{"login":"mattermost"}}
+	}`, yamlName, runName, headBranch, headSHA, displayTitle, repo, headBranch)))
+	require.NoError(t, err)
+	return payload
+}
+
+func TestUnidentifiedDefaultBranchCompletionRetainsPushServers(t *testing.T) {
+	pushSHA := strings.Repeat("a", 40)
+	for _, app := range productionE2EWorkflows {
+		for _, title := range []string{app.yamlName, "E2E"} {
+			t.Run(app.repo+"/"+title, func(t *testing.T) {
+				s := newDryRunServer(t, "", "mattermost")
+				s.Config.E2ETestWorkflowNames = []string{"Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"}
+				s.e2eDefaultBranch = app.defaultBranch
+				pushKey := app.repo + "-push-" + app.defaultBranch + "-" + pushSHA
+				prKey := app.repo + "-pr-42"
+				s.e2eInstances[pushKey] = nil
+				s.e2eInstances[prKey] = nil
+				s.handleWorkflowRunEventWithInputs(completionPayload(t, app.repo, app.yamlName, title, title, app.defaultBranch, pushSHA))
+				assert.Contains(t, s.e2eInstances, pushKey, "unidentified default-branch dispatch must not SHA-destroy push servers")
+				assert.Contains(t, s.e2eInstances, prKey)
+			})
+		}
+	}
+}
+
+func TestIdentifiedMasterCompletionDestroysPushServers(t *testing.T) {
+	pushSHA := strings.Repeat("a", 40)
+	for _, app := range productionE2EWorkflows {
+		t.Run(app.repo, func(t *testing.T) {
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2ETestWorkflowNames = []string{"Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"}
+			s.e2eDefaultBranch = app.defaultBranch
+			pushKey := app.repo + "-push-" + app.defaultBranch + "-" + pushSHA
+			prKey := app.repo + "-pr-42"
+			s.e2eInstances[pushKey] = nil
+			s.e2eInstances[prKey] = nil
+			title := "E2E MASTER @ " + pushSHA
+			s.handleWorkflowRunEventWithInputs(completionPayload(t, app.repo, app.yamlName, title, title, app.defaultBranch, pushSHA))
+			assert.NotContains(t, s.e2eInstances, pushKey, "identified MASTER completion still SHA-destroys")
+			assert.Contains(t, s.e2eInstances, prKey)
+		})
+	}
+}
+
+func TestIdentifiedPRCompletionRetainsPushAndPRServers(t *testing.T) {
+	pushSHA := strings.Repeat("a", 40)
+	prSHA := strings.Repeat("b", 40)
+	for _, app := range productionE2EWorkflows {
+		t.Run(app.repo, func(t *testing.T) {
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2ETestWorkflowNames = []string{"Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"}
+			s.e2eDefaultBranch = app.defaultBranch
+			pushKey := app.repo + "-push-" + app.defaultBranch + "-" + pushSHA
+			prKey := app.repo + "-pr-42"
+			s.e2eInstances[pushKey] = nil
+			s.e2eInstances[prKey] = nil
+			title := "E2E PR #42 @ " + prSHA
+			s.handleWorkflowRunEventWithInputs(completionPayload(t, app.repo, app.yamlName, app.yamlName, title, app.defaultBranch, pushSHA))
+			assert.Contains(t, s.e2eInstances, pushKey)
+			assert.Contains(t, s.e2eInstances, prKey)
+		})
+	}
+}
+
+func TestRunNameIdentityUsesWorkflowYAMLName(t *testing.T) {
+	pushSHA := strings.Repeat("a", 40)
+	prSHA := strings.Repeat("b", 40)
+	for _, app := range productionE2EWorkflows {
+		t.Run(app.repo, func(t *testing.T) {
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2ETestWorkflowNames = []string{"Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"}
+			s.e2eDefaultBranch = app.defaultBranch
+			pushKey := app.repo + "-push-" + app.defaultBranch + "-" + pushSHA
+			prKey := app.repo + "-pr-42"
+			s.e2eInstances[pushKey] = nil
+			s.e2eInstances[prKey] = nil
+			title := "E2E PR #42 @ " + prSHA
+			// GitHub may copy run-name onto workflow_run.name while workflow.name stays the YAML name.
+			s.handleWorkflowRunEventWithInputs(completionPayload(t, app.repo, app.yamlName, title, title, app.defaultBranch, pushSHA))
+			assert.Contains(t, s.e2eInstances, pushKey)
+			assert.Contains(t, s.e2eInstances, prKey)
+		})
+	}
+}
+
+func TestTrustedForkDispatchDisabledByDefault(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			var captures []dispatchCapture
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/mattermost/"+app.repo:
+					_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": app.defaultBranch})
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dispatches"):
+					var capture dispatchCapture
+					assert.NoError(t, json.NewDecoder(r.Body).Decode(&capture))
+					captures = append(captures, capture)
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(gh.Close)
+			s := newDryRunServer(t, "", "mattermost")
+			require.False(t, s.Config.E2ETrustedForkDispatch)
+			pr := &model.PullRequest{
+				RepoOwner: "mattermost", RepoName: app.repo, FullName: "contributor/" + app.repo,
+				Number: 42, Ref: "feature", Sha: strings.Repeat("a", 40),
+			}
+			client := newTestGitHubClient(t, gh)
+			var err error
+			if app.repo == "desktop" {
+				err = s.triggerDesktopE2EWorkflow(context.Background(), client, pr, app.instances())
+			} else {
+				err = s.triggerMobileE2EWorkflow(context.Background(), client, pr, app.instances(), app.platform)
+			}
+			require.Error(t, err)
+			assert.Empty(t, captures)
+		})
+	}
+}
+
+func TestTrustedForkDispatchEnabledUsesDefaultBranch(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			var captures []dispatchCapture
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/mattermost/"+app.repo:
+					_ = json.NewEncoder(w).Encode(map[string]string{"default_branch": app.defaultBranch})
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dispatches"):
+					var capture dispatchCapture
+					assert.NoError(t, json.NewDecoder(r.Body).Decode(&capture))
+					captures = append(captures, capture)
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(gh.Close)
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2ETrustedForkDispatch = true
+			pr := &model.PullRequest{
+				RepoOwner: "mattermost", RepoName: app.repo, FullName: "contributor/" + app.repo,
+				Number: 42, Ref: "feature", Sha: strings.Repeat("a", 40),
+			}
+			client := newTestGitHubClient(t, gh)
+			var err error
+			if app.repo == "desktop" {
+				err = s.triggerDesktopE2EWorkflow(context.Background(), client, pr, app.instances())
+			} else {
+				err = s.triggerMobileE2EWorkflow(context.Background(), client, pr, app.instances(), app.platform)
+			}
+			require.NoError(t, err)
+			require.Len(t, captures, 1)
+			assert.Equal(t, app.defaultBranch, captures[0].Ref)
+		})
+	}
+}
+
+func TestStrippedE2ELabelDoesNotDispatch(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			var captures []dispatchCapture
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls/42"):
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"state":  "open",
+						"head":   map[string]string{"sha": strings.Repeat("b", 40)},
+						"labels": []map[string]string{},
+					})
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/runs"):
+					_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/dispatches"):
+					var capture dispatchCapture
+					assert.NoError(t, json.NewDecoder(r.Body).Decode(&capture))
+					captures = append(captures, capture)
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(gh.Close)
+			s := newDryRunServer(t, "", "mattermost")
+			s.Config.E2ETrustedForkDispatch = true
+			s.githubAPIBase = gh.URL + "/"
+			s.e2eInProgress = make(map[string]bool)
+			pr := &model.PullRequest{
+				RepoOwner: "mattermost", RepoName: app.repo, FullName: "contributor/" + app.repo,
+				Number: 42, Ref: "feature", Sha: strings.Repeat("a", 40),
+			}
+			s.e2eInstances[app.repo+"-pr-42"] = app.instances()
+			s.handleE2ETestRequest(pr, app.label)
+			assert.Empty(t, captures, "a stripped E2E label must not dispatch the labeled SHA")
+		})
+	}
+}
+
+func TestCancelMatchesNameOrLegacyNonDefaultBranch(t *testing.T) {
+	for _, app := range forkE2EApps {
+		t.Run(app.repo, func(t *testing.T) {
+			sha := strings.Repeat("a", 40)
+			title := "E2E PR #42 @ " + sha
+			runs := []map[string]interface{}{
+				{"id": 11, "name": title, "display_title": app.defaultBranch, "head_branch": app.defaultBranch, "status": "queued"},
+				{"id": 12, "name": "E2E", "display_title": "E2E", "head_branch": "feature", "status": "in_progress"},
+				{"id": 13, "name": "E2E", "display_title": "E2E", "head_branch": app.defaultBranch, "status": "in_progress"},
+			}
+			var cancelled []string
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/workflows/"+app.workflow+"/runs"):
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"workflow_runs": runs})
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/jobs"):
+					_, _ = w.Write([]byte(`{"jobs":[{"name":"build-ios-simulator","status":"in_progress"}]}`))
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
+					cancelled = append(cancelled, r.URL.Path)
+					w.WriteHeader(http.StatusAccepted)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(gh.Close)
+			s := newDryRunServer(t, "", "mattermost")
+			s.githubAPIBase = gh.URL + "/"
+			s.e2eDefaultBranch = app.defaultBranch
+			pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: app.repo, Number: 42, Ref: "feature", Sha: sha}
+			s.cancelPRWorkflowRuns(pr, s.Logger, app.platform)
+			assert.Contains(t, strings.Join(cancelled, ","), "/actions/runs/11/cancel", "identity on name must cancel queued runs")
+			assert.Contains(t, strings.Join(cancelled, ","), "/actions/runs/12/cancel", "legacy same-repo feature-branch runs remain cancellable")
+			assert.NotContains(t, strings.Join(cancelled, ","), "/actions/runs/13/cancel", "unidentified default-branch runs must never be cancelled")
 		})
 	}
 }

@@ -69,6 +69,9 @@ type Server struct {
 	// githubAPIBase redirects GitHub API calls to a mock URL in tests (empty = use real GitHub).
 	githubAPIBase string
 
+	// e2eDefaultBranch injects the origin default branch in tests.
+	e2eDefaultBranch string
+
 	// e2eVersionCache holds the resolved "latest" version (1-hour TTL) to avoid redundant GitHub API calls.
 	e2eVersionCache     string
 	e2eVersionCacheTime time.Time
