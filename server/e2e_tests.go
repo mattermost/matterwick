@@ -160,6 +160,13 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		s.e2eInProgressLock.Unlock()
 	}()
 
+	// Oxide: serialize reuse/create/store per PR so concurrent Android and iOS label requests
+	// share one server set instead of each provisioning six servers.
+	if instanceType == oxideE2EInstanceType {
+		unlock := s.lockOxidePRProvisioning(key)
+		defer unlock()
+	}
+
 	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
 	s.e2eInstancesLock.Lock()
 	existingInstances := s.e2eInstances[key]

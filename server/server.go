@@ -58,6 +58,11 @@ type Server struct {
 	e2ePRCleanupGeneration     map[string]int64
 	e2ePRCleanupGenerationLock sync.Mutex
 
+	// oxidePRProvisionLocks holds one *sync.Mutex per Oxide PR key. Oxide dispatches Android
+	// and iOS from separate labels, so provisioning/reuse is serialized per PR (not per
+	// platform) to keep both requests on one server set. Zero value is ready to use.
+	oxidePRProvisionLocks sync.Map
+
 	// stopCh is closed by Stop() to terminate background goroutines.
 	stopCh   chan struct{}
 	stopOnce sync.Once

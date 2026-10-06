@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/google/go-github/v32/github"
 	"github.com/mattermost/matterwick/model"
@@ -60,6 +61,18 @@ var oxideE2EWorkflowInputKeys = []string{
 // isOxideRepo reports whether repoName is the Oxide repo (exact name, case-insensitive).
 func isOxideRepo(repoName string) bool {
 	return strings.EqualFold(repoName, oxideRepoName)
+}
+
+// lockOxidePRProvisioning blocks until this PR's provisioning/reuse section is free and
+// returns its unlock func. E2E/Run-Android and E2E/Run-iOS have different in-progress keys
+// (so they dispatch independently), but must not both create a server set: the second
+// request waits here, then reuses the instances the first one stored. The per-PR mutex is
+// kept for the process lifetime (one small entry per Oxide PR that ran E2E).
+func (s *Server) lockOxidePRProvisioning(key string) func() {
+	m, _ := s.oxidePRProvisionLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // buildURLInputs maps each instance's Platform to its workflow input key. It requires
