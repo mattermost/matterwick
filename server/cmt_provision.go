@@ -17,6 +17,13 @@ import (
 
 // handleCMTTrigger resolves instance type and server versions, then delegates to handleCMTWithServerVersions.
 func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
+	if isOxideRepo(repoName) {
+		// Oxide has no compatibility-matrix testing; the "mobile" substring below would
+		// otherwise provision mattermost-mobile's CMT servers.
+		logger.Warn("CMT is not enabled for Oxide, skipping CMT trigger")
+		return
+	}
+
 	instanceType := "desktop"
 	if strings.Contains(repoName, "mobile") {
 		instanceType = "mobile"

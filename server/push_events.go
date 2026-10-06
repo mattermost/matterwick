@@ -89,6 +89,13 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 		"sha":    sha,
 	})
 
+	if isOxideRepo(repoName) {
+		// Oxide E2E is PR-label only; without this check the "mobile" substring below would
+		// provision mattermost-mobile's server set for every push to Oxide's default branch.
+		logger.Info("Push-triggered E2E is not enabled for Oxide, skipping")
+		return
+	}
+
 	isDesktop := strings.Contains(repoName, "desktop")
 	isMobile := strings.Contains(repoName, "mobile")
 

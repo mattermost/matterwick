@@ -54,22 +54,7 @@ var mobileE2EWorkflowInputKeys = []string{
 // It validates that exactly the canonical platforms are present and pairs them with
 // mobileE2EWorkflowInputKeys so callers cannot drift from the canonical order.
 func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
-	if len(instances) != len(mobileE2EPlatforms) {
-		return nil, fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
-	}
-	platformToURL := make(map[string]string, len(instances))
-	for _, inst := range instances {
-		platformToURL[inst.Platform] = inst.URL
-	}
-	inputs := make(map[string]string, len(mobileE2EWorkflowInputKeys))
-	for i, platform := range mobileE2EPlatforms {
-		url, ok := platformToURL[platform]
-		if !ok {
-			return nil, fmt.Errorf("mobile E2E missing instance for platform %s", platform)
-		}
-		inputs[mobileE2EWorkflowInputKeys[i]] = url
-	}
-	return inputs, nil
+	return buildURLInputs("mobile", instances, mobileE2EPlatforms, mobileE2EWorkflowInputKeys)
 }
 
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
@@ -115,7 +100,17 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	var platforms []string
 	var testPlatform string // For mobile: which OS to test (ios/android/both). For desktop: unused (tests all OS platforms)
 
-	if strings.Contains(pr.RepoName, "desktop") {
+	if isOxideRepo(pr.RepoName) {
+		// Checked first: the Oxide repo name also contains "mobile".
+		if !s.Config.E2EOxideEnabled {
+			logger.Info("Oxide E2E is disabled (E2EOxideEnabled=false), ignoring E2E label")
+			return
+		}
+		instanceType = oxideE2EInstanceType
+		platforms = oxideE2EPlatforms
+		testPlatform = s.extractPlatformFromLabel(label)
+		logger.WithField("testPlatform", testPlatform).Info("Detected Oxide test platform from label (ios/android/both)")
+	} else if strings.Contains(pr.RepoName, "desktop") {
 		instanceType = "desktop"
 		platforms = []string{"linux", "macos", "windows"}
 		testPlatform = "all"
@@ -416,7 +411,8 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
 		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
-	if instanceType == "mobile" {
+	// Oxide gets the mobile baseline unchanged; no Oxide-only server settings.
+	if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
 		envVars["MM_FEATUREFLAGS_CHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"] = cloudModel.EnvVar{Value: "true"}
@@ -521,7 +517,7 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	// Try config first, then fall back to environment variables
 	password = s.Config.E2EPassword
 	if password == "" {
-		if instanceType == "mobile" {
+		if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
 			password = os.Getenv("MM_MOBILE_E2E_ADMIN_PASSWORD")
 		} else {
 			password = os.Getenv("MM_DESKTOP_E2E_USER_CREDENTIALS")
@@ -628,6 +624,8 @@ func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInsta
 	} else if instanceType == "mobile" {
 		// Mobile uses testPlatform to determine which mobile OS to test (ios/android/both)
 		return s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
+	} else if instanceType == oxideE2EInstanceType {
+		return s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
 	}
 
 	return fmt.Errorf("unknown instance type: %s", instanceType)
@@ -764,7 +762,12 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 // cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
 func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
 	var instanceType string
-	if strings.Contains(pr.RepoName, "desktop") {
+	if isOxideRepo(pr.RepoName) {
+		// Checked first so an Oxide PR close never matches mobile-pr-<N>-% (mattermost-mobile's
+		// servers for the same PR number). Runs even when E2EOxideEnabled is false so servers
+		// created before the flag was turned off are still removed.
+		instanceType = oxideE2EInstanceType
+	} else if strings.Contains(pr.RepoName, "desktop") {
 		instanceType = "desktop"
 	} else if strings.Contains(pr.RepoName, "mobile") {
 		instanceType = "mobile"
@@ -846,7 +849,7 @@ func (s *Server) cleanupStaleE2EInstances() {
 
 	var reapedPRInstallationIDs []string
 
-	for _, instanceType := range []string{"desktop", "mobile"} {
+	for _, instanceType := range []string{"desktop", "mobile", oxideE2EInstanceType} {
 		pattern := instanceType + "-%"
 		installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 			DNS:    pattern,
@@ -1306,7 +1309,13 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 
 	// Determine which workflow file to cancel based on repository type
 	var workflowFile string
-	if strings.Contains(pr.RepoName, "desktop") {
+	if isOxideRepo(pr.RepoName) {
+		// Oxide runs Android and iOS as separate dispatches (E2E/Run-Android, E2E/Run-iOS) and
+		// cancels superseded runs itself with per-PR/per-platform concurrency groups. Cancelling
+		// every in-progress run on the branch here would kill the other platform's run.
+		logger.Info("Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)")
+		return
+	} else if strings.Contains(pr.RepoName, "desktop") {
 		workflowFile = "e2e-functional.yml"
 	} else if strings.Contains(pr.RepoName, "mobile") {
 		workflowFile = "e2e-detox-pr.yml"

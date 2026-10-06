@@ -29,3 +29,15 @@ To rebuild the go code run `make build`.
 You do not need to rebuild the docker image unless you make changes to the Dockerfile. You must restart your docker container after a `make build` in order to see changes
 
 
+
+### E2E repo profiles
+
+PR labels (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`, `E2E/Reset-Servers`) provision Mattermost Cloud test servers and dispatch the repo's test workflow:
+
+| Repo | Servers per PR | Dispatched workflow | Push / CMT |
+|---|---|---|---|
+| `*desktop*` | 3 (`linux`, `macos`, `windows`) | `e2e-functional.yml` | yes |
+| `*mobile*` | 5 (`android-site-1/2`, `ios-site-1/2`, `site-3`) | `e2e-detox-pr.yml` | yes |
+| `mattermost-mobile-oxide` (exact name, checked before `*mobile*`) | 6 (`android-site-1..3`, `ios-site-1..3`), DNS prefix `oxide-` | `e2e-matterwick.yml` | no |
+
+The Oxide profile is off unless `E2EOxideEnabled` is `true`; while off, Oxide labels are ignored. PR close and `E2E/Reset-Servers` only ever delete `oxide-pr-<N>-*` for Oxide.

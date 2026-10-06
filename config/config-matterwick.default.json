@@ -79,6 +79,7 @@
   "E2EPassword": "",
   "E2EServerVersion": "latest",
   "E2EAutoTriggerOnMaster": true,
+  "E2EOxideEnabled": false,
   "E2EReleasePatternPrefix": "release-",
   "E2ETestWorkflowNames": ["Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"],
   "E2EInstanceMaxAge": 6,
