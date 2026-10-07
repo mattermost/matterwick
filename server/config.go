@@ -105,17 +105,12 @@ type MatterwickConfig struct {
 	// Value: plugin ID to use for mmctl enable command
 	PluginRepoToIDMapping map[string]string
 
-	E2ELabel              string
-	E2EMobileIOSLabel     string
-	E2EMobileAndroidLabel string
-	E2EResetServersLabel  string
-	E2EUsername           string
-	E2EPassword           string
-	// E2EServerVersion is used by PR/main E2E only (E2E/Run and push/main).
-	// "master" provisions mattermostdevelopment/mattermost-enterprise-edition:master.
-	// "latest" or empty resolves to the highest GitHub release (stable or RC).
-	// CMT is independent and uses cmtServerVersions(); it does not read this field.
-	// Plugin SpinWicks are independent and use pluginSpinwickServerVersion().
+	E2ELabel                string
+	E2EMobileIOSLabel       string
+	E2EMobileAndroidLabel   string
+	E2EResetServersLabel    string
+	E2EUsername             string
+	E2EPassword             string
 	E2EServerVersion        string
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string
@@ -134,6 +129,11 @@ type MatterwickConfig struct {
 	// tracking entry is also evicted, so re-applying E2E/Run provisions a fresh set.
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
+
+	// E2EOxideEnabled enables PR-label E2E for mattermost-mobile-oxide (6 servers,
+	// e2e-matterwick.yml). When false, Oxide E2E labels are ignored; Oxide push and CMT
+	// events are always ignored, and PR-close cleanup only ever targets oxide-pr-<N>-*.
+	E2EOxideEnabled bool
 
 	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight
 	// CMT trigger workflow in the desktop/mobile repos. Matterwick provisions instances and
