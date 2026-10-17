@@ -85,7 +85,7 @@ func e2eInstanceName(dnsSuffix string, parts ...string) string {
 	return name
 }
 
-const forkPRE2EComment = "E2E tests don't run on pull requests from forks: the E2E workflow can only check out branches in this repository, and it holds secrets that fork code must not reach. A maintainer can apply `E2E/Override` to waive the E2E checks; the change is still covered by the E2E run on the default branch after merge."
+const forkPRE2EComment = "E2E tests don't run on pull requests from forks: the E2E workflow can only check out branches in this repository, and it holds secrets that fork code must not reach. A maintainer can apply `E2E/Override` to waive the E2E checks."
 
 // isForkPR reports whether the PR head lives outside the base repository. An empty head repo
 // (deleted fork) counts as a fork.
