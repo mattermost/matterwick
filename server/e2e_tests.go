@@ -132,8 +132,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	// The workflow is dispatched on the head branch in the base repo, which a fork branch is not,
-	// so provisioning servers for a fork PR only ends in a 422 and a teardown.
+	// The dispatch targets a branch of the base repo and the workflow holds secrets, so fork PRs
+	// never get servers.
 	if isForkPR(pr) {
 		logger.WithField("head_repo", pr.FullName).Info("Ignoring E2E label on a fork PR")
 		// Tear down anything provisioned for this PR before the guard existed or still in flight.
