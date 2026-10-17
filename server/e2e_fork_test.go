@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -73,10 +74,21 @@ func TestHandleE2ETestRequest_ForkPR(t *testing.T) {
 				Sha:       "abc123",
 			}
 
+			key := repo + "-pr-42"
+			s.e2ePRCleanupGeneration = map[string]int64{}
+			s.e2eInstances[key] = []*E2EInstance{{Name: "left-over", InstallationID: "left-over-id"}}
+
 			s.handleE2ETestRequest(pr, "E2E/Run")
 
-			assert.Zero(t, fc.count(), "no cloud installations may be created for a fork PR")
-			assert.Empty(t, s.e2eInstances)
+			deleted := false
+			for _, r := range fc.requests {
+				assert.NotEqual(t, http.MethodPost, r.Method, "no cloud installation may be created for a fork PR: %s", r.URL.Path)
+				deleted = deleted || (r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/left-over-id"))
+			}
+			assert.True(t, deleted, "a tracked installation for the fork PR must be destroyed")
+			assert.NotEmpty(t, fc.dnsQueries(), "existing servers for the fork PR must be cleaned up")
+			assert.Empty(t, s.e2eInstances, "tracked instances for the fork PR must be dropped")
+			assert.Equal(t, int64(1), s.e2ePRCleanupGeneration[key], "cleanup must invalidate any provisioning still in flight")
 			mu.Lock()
 			defer mu.Unlock()
 			require.Len(t, commentBodies, 1)

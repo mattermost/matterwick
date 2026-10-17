@@ -136,6 +136,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	// so provisioning servers for a fork PR only ends in a 422 and a teardown.
 	if isForkPR(pr) {
 		logger.WithField("head_repo", pr.FullName).Info("Ignoring E2E label on a fork PR")
+		// Tear down anything provisioned for this PR before the guard existed or still in flight.
+		s.handleE2ECleanup(pr)
 		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, forkPRE2EComment)
 		return
 	}
