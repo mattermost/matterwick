@@ -85,6 +85,14 @@ func e2eInstanceName(dnsSuffix string, parts ...string) string {
 	return name
 }
 
+const forkPRE2EComment = "E2E tests don't run on pull requests from forks: the E2E workflow can only check out branches in this repository, and it holds secrets that fork code must not reach. A maintainer can apply `E2E/Override` to waive the E2E checks; the change is still covered by the E2E run on the default branch after merge."
+
+// isForkPR reports whether the PR head lives outside the base repository. An empty head repo
+// (deleted fork) counts as a fork.
+func isForkPR(pr *model.PullRequest) bool {
+	return !strings.EqualFold(pr.FullName, pr.RepoOwner+"/"+pr.RepoName)
+}
+
 // handleE2ETestRequest is the main orchestrator for E2E test requests
 func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -121,6 +129,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
 	} else {
 		logger.Error("Unable to determine E2E instance type from repository name")
+		return
+	}
+
+	// The workflow is dispatched on the head branch in the base repo, which a fork branch is not,
+	// so provisioning servers for a fork PR only ends in a 422 and a teardown.
+	if isForkPR(pr) {
+		logger.WithField("head_repo", pr.FullName).Info("Ignoring E2E label on a fork PR")
+		s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, forkPRE2EComment)
 		return
 	}
 

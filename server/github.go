@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 
 	"github.com/mattermost/matterwick/model"
 	"github.com/pkg/errors"
@@ -129,6 +130,11 @@ func (s *Server) sendGitHubComment(repoOwner, repoName string, number int, comme
 	logger := s.Logger.WithFields(logrus.Fields{"issue": number, "comment": comment})
 	logger.Info("Sending GitHub comment")
 	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
 	_, _, err := client.Issues.CreateComment(context.Background(), repoOwner, repoName, number, &github.IssueComment{Body: &comment})
 	if err != nil {
 		logger.WithError(err).Error("Error commenting")
