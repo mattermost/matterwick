@@ -490,29 +490,8 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
 
-	// Wait for installation to be stable using polling with timeout
-	timeout := time.Now().Add(30 * time.Minute)
-	for {
-		inst, err := s.CloudClient.GetInstallation(installation.ID, nil)
-		if err != nil {
-			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to get installation status: %w", err))
-		}
-
-		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
-			logger.WithField("state", inst.State).Info("Installation is stable")
-			break
-		}
-
-		if time.Now().After(timeout) {
-			return nil, cleanupCreatedInstallation(fmt.Errorf("timeout waiting for installation to become stable"))
-		}
-
-		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
-		select {
-		case <-ctx.Done():
-			return nil, cleanupCreatedInstallation(fmt.Errorf("installation wait cancelled: %w", ctx.Err()))
-		case <-time.After(30 * time.Second):
-		}
+	if err := s.waitForE2EInstallationStable(ctx, installation.ID, logger); err != nil {
+		return nil, cleanupCreatedInstallation(err)
 	}
 
 	// Check cancellation before the 10-minute initialization phase (DNS + ping + user setup).
@@ -522,9 +501,15 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	err = s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
+	adminClient, err := s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
 	if err != nil {
 		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
+	}
+
+	if needsSharedChannelsBoot(instanceType) {
+		if err := s.enableSharedChannelsAtBoot(ctx, adminClient, installation.ID, logger); err != nil {
+			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to enable Shared Channels: %w", err))
+		}
 	}
 
 	return &E2EInstance{
@@ -533,6 +518,158 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		InstallationID: installation.ID,
 		ServerVersion:  version,
 	}, nil
+}
+
+// waitForE2EInstallationStable polls the provisioner until the installation is stable.
+// Cancelling ctx aborts the wait so parallel callers can fail fast.
+func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationID string, logger logrus.FieldLogger) error {
+	timeout := time.Now().Add(30 * time.Minute)
+	for {
+		inst, err := s.CloudClient.GetInstallation(installationID, nil)
+		if err != nil {
+			return fmt.Errorf("failed to get installation status: %w", err)
+		}
+
+		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
+			logger.WithField("state", inst.State).Info("Installation is stable")
+			return nil
+		}
+
+		if time.Now().After(timeout) {
+			return fmt.Errorf("timeout waiting for installation to become stable")
+		}
+
+		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("installation wait cancelled: %w", ctx.Err())
+		case <-time.After(e2eInstallationPollInterval):
+		}
+	}
+}
+
+// e2eInstallationPollInterval is the pause between installation status polls. Var, not
+// const, so tests can shorten it.
+var e2eInstallationPollInterval = 30 * time.Second
+
+// e2eRestartNonceEnv is a PriorityEnv entry that exists only to change the pod spec, so
+// the operator rolls the Mattermost pod. It is not a Mattermost setting.
+const e2eRestartNonceEnv = "MATTERWICK_E2E_RESTART_NONCE"
+
+// e2eSharedChannelsConfigPatch is sent as raw JSON: the vendored v6 client's Config has
+// no ConnectedWorkspacesSettings (v6 kept these flags under ExperimentalSettings).
+const e2eSharedChannelsConfigPatch = `{"ConnectedWorkspacesSettings":{"EnableRemoteClusterService":true,"EnableSharedChannels":true}}`
+
+// needsSharedChannelsBoot reports whether instances of this type must boot with Shared
+// Channels on. The server starts the remote cluster service only at boot, and only if a
+// flag is already on, so turning the flags on later (as mobile provisioning does) leaves
+// /api/v4/remotecluster returning 501 until a restart.
+func needsSharedChannelsBoot(instanceType string) bool {
+	return instanceType == "mobile"
+}
+
+// enableSharedChannelsAtBoot turns on the Connected Workspaces flags, then restarts the
+// server once so the remote cluster and shared channels services start at boot.
+// Servers without ConnectedWorkspacesSettings (older CMT versions) are left as they are.
+func (s *Server) enableSharedChannelsAtBoot(ctx context.Context, client *mattermostModel.Client4, installationID string, logger logrus.FieldLogger) error {
+	logger = logger.WithField("installation_id", installationID)
+
+	logger.Info("Enabling Shared Channels: patching ConnectedWorkspacesSettings")
+	supported, err := enableConnectedWorkspacesConfig(client)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		logger.Info("Server has no ConnectedWorkspacesSettings; skipping Shared Channels restart")
+		return nil
+	}
+	logger.Info("ConnectedWorkspacesSettings.EnableRemoteClusterService and EnableSharedChannels read back true")
+
+	// A changed PriorityEnv makes the operator restart the pod. The patch merges, so the
+	// existing entries stay.
+	nonce := cloudModel.NewID()
+	logger.WithField("nonce", nonce).Info("Restarting server: updating installation with a new restart nonce")
+	updated, err := s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
+		PriorityEnv: cloudModel.EnvVarMap{e2eRestartNonceEnv: cloudModel.EnvVar{Value: nonce}},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update installation to restart the server: %w", err)
+	}
+	// The provisioner moves the installation to update-requested only when the patch
+	// changed something; otherwise no restart is coming and the wait below would pass on
+	// the old pod.
+	if updated.State != cloudModel.InstallationStateUpdateRequested {
+		return fmt.Errorf("installation update did not schedule a restart (state %q)", updated.State)
+	}
+
+	logger.Info("Waiting for installation to be stable after restart")
+	if err := s.waitForE2EInstallationStable(ctx, installationID, logger); err != nil {
+		return err
+	}
+
+	wait := 600
+	logger.Infof("Waiting up to %d seconds for Mattermost to answer ping after restart", wait)
+	pingCtx, cancel := context.WithTimeout(ctx, time.Duration(wait)*time.Second)
+	defer cancel()
+	if err := checkMMPing(pingCtx, client, logger); err != nil {
+		return fmt.Errorf("failed to get mattermost ping response after restart: %w", err)
+	}
+
+	// Log only: the E2E run is the real check, but this shows in Matterwick's log whether
+	// the restart started the service.
+	if resp, err := client.DoAPIGet("/remotecluster", ""); err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		logger.WithError(err).Warnf("Shared Channels available: false (GET /api/v4/remotecluster returned %d)", status)
+	} else {
+		resp.Body.Close()
+		logger.Infof("Shared Channels available: true (GET /api/v4/remotecluster returned %d)", resp.StatusCode)
+	}
+
+	logger.Info("Shared Channels enabled at boot")
+	return nil
+}
+
+// enableConnectedWorkspacesConfig patches both Connected Workspaces flags on and reads the
+// config back. It returns supported=false when the server has no ConnectedWorkspacesSettings.
+func enableConnectedWorkspacesConfig(client *mattermostModel.Client4) (supported bool, err error) {
+	resp, err := client.DoAPIPut("/config/patch", e2eSharedChannelsConfigPatch)
+	if err != nil {
+		return false, fmt.Errorf("failed to patch ConnectedWorkspacesSettings: %w", err)
+	}
+	resp.Body.Close()
+
+	resp, err = client.DoAPIGet("/config", "")
+	if err != nil {
+		return false, fmt.Errorf("failed to read config back after patching ConnectedWorkspacesSettings: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var cfg struct {
+		ConnectedWorkspacesSettings *struct {
+			EnableRemoteClusterService *bool
+			EnableSharedChannels       *bool
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		return false, fmt.Errorf("failed to decode config: %w", err)
+	}
+	cws := cfg.ConnectedWorkspacesSettings
+	if cws == nil {
+		return false, nil
+	}
+	if cws.EnableRemoteClusterService == nil || !*cws.EnableRemoteClusterService ||
+		cws.EnableSharedChannels == nil || !*cws.EnableSharedChannels {
+		return false, fmt.Errorf("ConnectedWorkspacesSettings flags are not both true after patch (EnableRemoteClusterService=%v, EnableSharedChannels=%v)",
+			boolValue(cws.EnableRemoteClusterService), boolValue(cws.EnableSharedChannels))
+	}
+	return true, nil
+}
+
+func boolValue(b *bool) bool {
+	return b != nil && *b
 }
 
 // getE2EPassword returns the password for E2E testing from config or org-level secrets
@@ -555,8 +692,9 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	return password
 }
 
-// initializeMattermostE2EServer initializes a Mattermost server with E2E credentials
-func (s *Server) initializeMattermostE2EServer(spinwickURL, username, password string, logger logrus.FieldLogger) error {
+// initializeMattermostE2EServer initializes a Mattermost server with E2E credentials and
+// returns a client logged in as the admin.
+func (s *Server) initializeMattermostE2EServer(spinwickURL, username, password string, logger logrus.FieldLogger) (*mattermostModel.Client4, error) {
 	return s.setupE2EServerCredentials(spinwickURL, username, password, logger)
 }
 
@@ -581,7 +719,7 @@ func createE2EDefaultTeam(client *mattermostModel.Client4, userID string, logger
 }
 
 // setupE2EServerCredentials sets up a Mattermost server with provided E2E credentials
-func (s *Server) setupE2EServerCredentials(spinwickURL, username, password string, logger logrus.FieldLogger) error {
+func (s *Server) setupE2EServerCredentials(spinwickURL, username, password string, logger logrus.FieldLogger) (*mattermostModel.Client4, error) {
 	logger.Info("Setting up E2E server with provided credentials")
 
 	wait := 600
@@ -592,12 +730,12 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	// Parse the URL to get the hostname
 	mmHost, err := url.Parse(spinwickURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse MM URL: %w", err)
+		return nil, fmt.Errorf("failed to parse MM URL: %w", err)
 	}
 
 	// Check DNS
 	if err := checkDNS(ctx, fmt.Sprintf("%s:443", mmHost.Host)); err != nil {
-		return fmt.Errorf("timed out waiting for DNS to propagate: %w", err)
+		return nil, fmt.Errorf("timed out waiting for DNS to propagate: %w", err)
 	}
 
 	client := mattermostModel.NewAPIv4Client(spinwickURL)
@@ -606,7 +744,7 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 	if err := checkMMPing(ctx, client, logger); err != nil {
-		return fmt.Errorf("failed to get mattermost ping response: %w", err)
+		return nil, fmt.Errorf("failed to get mattermost ping response: %w", err)
 	}
 
 	// Create the admin user with provided credentials
@@ -617,22 +755,22 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	}
 	_, _, err = client.CreateUser(adminUser)
 	if err != nil {
-		return fmt.Errorf("failed to create E2E admin user: %w", err)
+		return nil, fmt.Errorf("failed to create E2E admin user: %w", err)
 	}
 
 	// Login as admin and capture the user ID
 	userLogged, _, err := client.Login(username, password)
 	if err != nil {
-		return fmt.Errorf("failed to log in as E2E admin user: %w", err)
+		return nil, fmt.Errorf("failed to log in as E2E admin user: %w", err)
 	}
 
 	// Create the default team 'ad-1' and add admin user to it
 	if err := createE2EDefaultTeam(client, userLogged.Id, logger); err != nil {
-		return err
+		return nil, err
 	}
 
 	logger.Info("E2E server setup complete")
-	return nil
+	return client, nil
 }
 
 // triggerE2EWorkflow triggers the appropriate E2E workflow with instance details
