@@ -144,24 +144,6 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
-	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
-	s.e2ePRCleanupGenerationLock.Lock()
-	startGeneration := s.e2ePRCleanupGeneration[key]
-	s.e2ePRCleanupGenerationLock.Unlock()
-
-	// storeIfCurrent atomically writes instances, but only if cleanup hasn't advanced since provisioning started.
-	storeIfCurrent := func(toStore []*E2EInstance) bool {
-		s.e2ePRCleanupGenerationLock.Lock()
-		defer s.e2ePRCleanupGenerationLock.Unlock()
-		s.e2eInstancesLock.Lock()
-		defer s.e2eInstancesLock.Unlock()
-		if s.e2ePRCleanupGeneration[key] != startGeneration {
-			return false
-		}
-		s.e2eInstances[key] = toStore
-		return true
-	}
-
 	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
 	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
 	s.e2eInProgressLock.Lock()
@@ -185,12 +167,39 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		defer unlock()
 	}
 
+	// Desktop and mobile start every run on fresh servers, but only when no other E2E run or
+	// provisioning is active on the PR: Android and iOS runs share one server set, so tearing
+	// it down mid-run would break the other platform's run. Otherwise reuse, as before.
+	fresh := instanceType != oxideE2EInstanceType && s.isPRE2EIdle(pr, key, inProgressKey, logger)
+	if fresh {
+		logger.Info("No other E2E run active on this PR; replacing its servers with fresh ones")
+		s.handleE2ECleanup(pr)
+	}
+
+	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
+	s.e2ePRCleanupGenerationLock.Lock()
+	startGeneration := s.e2ePRCleanupGeneration[key]
+	s.e2ePRCleanupGenerationLock.Unlock()
+
+	// storeIfCurrent atomically writes instances, but only if cleanup hasn't advanced since provisioning started.
+	storeIfCurrent := func(toStore []*E2EInstance) bool {
+		s.e2ePRCleanupGenerationLock.Lock()
+		defer s.e2ePRCleanupGenerationLock.Unlock()
+		s.e2eInstancesLock.Lock()
+		defer s.e2eInstancesLock.Unlock()
+		if s.e2ePRCleanupGeneration[key] != startGeneration {
+			return false
+		}
+		s.e2eInstances[key] = toStore
+		return true
+	}
+
 	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
 	s.e2eInstancesLock.Lock()
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
-	if len(existingInstances) > 0 {
+	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
 		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(existingInstances, logger)
@@ -202,20 +211,22 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
-	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
-		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
-		s.wakeUpHibernatingInstances(cloudInstances, logger)
-		if !storeIfCurrent(cloudInstances) {
-			logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
-			s.destroyE2EInstances(cloudInstances, logger)
+	if !fresh {
+		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
+			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
+			s.cancelPRWorkflowRuns(pr, logger)
+			s.wakeUpHibernatingInstances(cloudInstances, logger)
+			if !storeIfCurrent(cloudInstances) {
+				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
+				s.destroyE2EInstances(cloudInstances, logger)
+				return
+			}
+			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
+				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+			}
 			return
 		}
-		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
-			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
-			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
-		}
-		return
 	}
 
 	// 3. No existing instances — create fresh ones.
@@ -1217,6 +1228,11 @@ Tests will run against these servers. Please monitor the workflow run for progre
 func (s *Server) postE2EErrorComment(pr *model.PullRequest, errorMsg string) {
 	ctx := context.Background()
 	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
 
 	comment := fmt.Sprintf("❌ E2E Test Setup Failed\n\n%s", errorMsg)
 
@@ -1375,6 +1391,72 @@ func (s *Server) dispatchMobileE2EWorkflow(
 	return nil
 }
 
+// prE2EWorkflowFile returns the PR E2E workflow file for a desktop or mobile repo, or "".
+func prE2EWorkflowFile(repoName string) string {
+	if isOxideRepo(repoName) {
+		return ""
+	} else if strings.Contains(repoName, "desktop") {
+		return "e2e-functional.yml"
+	} else if strings.Contains(repoName, "mobile") {
+		return "e2e-detox-pr.yml"
+	}
+	return ""
+}
+
+// isPRE2EIdle reports whether nothing else is using the PR's E2E servers: no other
+// platform's request is provisioning, and no E2E workflow run on the PR branch is queued or
+// running. Any error counts as busy, so an unknown state never tears servers down.
+func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, logger logrus.FieldLogger) bool {
+	s.e2eInProgressLock.Lock()
+	for k := range s.e2eInProgress {
+		if k != inProgressKey && strings.HasPrefix(k, key+"-") {
+			s.e2eInProgressLock.Unlock()
+			logger.WithField("other_request", k).Info("Another E2E request for this PR is in progress; reusing servers")
+			return false
+		}
+	}
+	s.e2eInProgressLock.Unlock()
+
+	workflowFile := prE2EWorkflowFile(pr.RepoName)
+	if workflowFile == "" {
+		return false
+	}
+
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?branch=%s&event=workflow_dispatch&per_page=100",
+		pr.RepoOwner, pr.RepoName, workflowFile, url.QueryEscape(pr.Ref))
+	req, err := client.NewRequest("GET", listURL, nil)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to build workflow runs request; reusing servers")
+		return false
+	}
+	var runs struct {
+		WorkflowRuns []struct {
+			ID         int64  `json:"id"`
+			HeadBranch string `json:"head_branch"`
+			Status     string `json:"status"`
+		} `json:"workflow_runs"`
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := client.Do(ctx, req, &runs); err != nil {
+		logger.WithError(err).Warn("Failed to list E2E workflow runs; reusing servers")
+		return false
+	}
+	for _, run := range runs.WorkflowRuns {
+		if run.HeadBranch == pr.Ref && run.Status != "completed" {
+			logger.WithFields(logrus.Fields{"run_id": run.ID, "status": run.Status}).Info("An E2E workflow run is active on this PR; reusing servers")
+			return false
+		}
+	}
+	return true
+}
+
 // cancelPRWorkflowRuns cancels any in-progress E2E workflow runs for a PR
 // This is called when a new E2E run is triggered for the same PR
 func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
@@ -1388,19 +1470,15 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("Attempting to cancel in-progress E2E workflow runs")
 
-	// Determine which workflow file to cancel based on repository type
-	var workflowFile string
 	if isOxideRepo(pr.RepoName) {
 		// Oxide runs Android and iOS as separate dispatches (E2E/Run-Android, E2E/Run-iOS) and
 		// cancels superseded runs itself with per-PR/per-platform concurrency groups. Cancelling
 		// every in-progress run on the branch here would kill the other platform's run.
 		logger.Info("Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)")
 		return
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		workflowFile = "e2e-functional.yml"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		workflowFile = "e2e-detox-pr.yml"
-	} else {
+	}
+	workflowFile := prE2EWorkflowFile(pr.RepoName)
+	if workflowFile == "" {
 		logger.Warn("Unable to determine workflow file for repository")
 		return
 	}
