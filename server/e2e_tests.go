@@ -160,12 +160,10 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		s.e2eInProgressLock.Unlock()
 	}()
 
-	// Oxide: serialize reuse/create/store per PR so concurrent Android and iOS label requests
-	// share one server set instead of each provisioning six servers.
-	if instanceType == oxideE2EInstanceType {
-		unlock := s.lockOxidePRProvisioning(key)
-		defer unlock()
-	}
+	// Serialize reuse/create/store per PR so concurrent Android and iOS label requests share
+	// one server set instead of each provisioning their own.
+	unlock := s.lockE2EPRProvisioning(key)
+	defer unlock()
 
 	// Desktop and mobile start every run on fresh servers, but only when no other E2E run or
 	// provisioning is active on the PR: Android and iOS runs share one server set, so tearing
@@ -476,7 +474,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		OwnerID:     name,
 		Version:     version,
 		DNS:         fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer),
-		Size:        "100users",
+		Size:        "miniSingleton",
 		Affinity:    cloudModel.InstallationAffinityMultiTenant,
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
 		Filestore:   cloudModel.InstallationFilestoreBifrost,
@@ -539,6 +537,14 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 		inst, err := s.CloudClient.GetInstallation(installationID, nil)
 		if err != nil {
 			return fmt.Errorf("failed to get installation status: %w", err)
+		}
+		if inst == nil {
+			return fmt.Errorf("installation %s not found", installationID)
+		}
+
+		// The provisioner never retries these on its own, so waiting longer cannot help.
+		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed {
+			return fmt.Errorf("installation entered state %q", inst.State)
 		}
 
 		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
@@ -708,19 +714,47 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 //   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
 func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
+	var err error
 	if instanceType == "desktop" {
 		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
-		return s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
+		err = s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
 	} else if instanceType == "mobile" {
 		// Mobile uses testPlatform to determine which mobile OS to test (ios/android/both)
-		return s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
+		err = s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
 	} else if instanceType == oxideE2EInstanceType {
-		return s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
+		err = s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
+	} else {
+		return fmt.Errorf("unknown instance type: %s", instanceType)
 	}
+	if err == nil {
+		s.e2eLastDispatch.Store(fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number), time.Now())
+	}
+	return err
+}
 
-	return fmt.Errorf("unknown instance type: %s", instanceType)
+// e2eGithubClient returns a GitHub client, pointed at the test server when one is set.
+func (s *Server) e2eGithubClient() *github.Client {
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+	return client
+}
+
+// lockE2EPRProvisioning blocks until this PR's provisioning/reuse section is free and
+// returns its unlock func. E2E/Run-Android and E2E/Run-iOS have different in-progress keys
+// (so they dispatch independently), but must not both create a server set: the second
+// request waits here, then reuses the instances the first one stored. The per-PR mutex is
+// kept for the process lifetime (one small entry per PR that ran E2E).
+func (s *Server) lockE2EPRProvisioning(key string) func() {
+	m, _ := s.e2ePRProvisionLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // triggerDesktopE2EWorkflow triggers the desktop E2E workflow
@@ -1227,12 +1261,7 @@ Tests will run against these servers. Please monitor the workflow run for progre
 // postE2EErrorComment posts an error comment
 func (s *Server) postE2EErrorComment(pr *model.PullRequest, errorMsg string) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
-	}
+	client := s.e2eGithubClient()
 
 	comment := fmt.Sprintf("❌ E2E Test Setup Failed\n\n%s", errorMsg)
 
@@ -1403,9 +1432,14 @@ func prE2EWorkflowFile(repoName string) string {
 	return ""
 }
 
+// e2eDispatchGracePeriod covers the delay between a workflow dispatch and GitHub listing
+// the run: a trigger within it counts as busy.
+const e2eDispatchGracePeriod = 5 * time.Minute
+
 // isPRE2EIdle reports whether nothing else is using the PR's E2E servers: no other
-// platform's request is provisioning, and no E2E workflow run on the PR branch is queued or
-// running. Any error counts as busy, so an unknown state never tears servers down.
+// platform's request is provisioning, no E2E workflow was dispatched for the PR in the last
+// e2eDispatchGracePeriod, and no E2E workflow run on the PR branch is queued or running.
+// Any error counts as busy, so an unknown state never tears servers down.
 func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, logger logrus.FieldLogger) bool {
 	s.e2eInProgressLock.Lock()
 	for k := range s.e2eInProgress {
@@ -1417,17 +1451,17 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 	}
 	s.e2eInProgressLock.Unlock()
 
+	if last, ok := s.e2eLastDispatch.Load(key); ok && time.Since(last.(time.Time)) < e2eDispatchGracePeriod {
+		logger.Info("An E2E workflow was dispatched for this PR moments ago; reusing servers")
+		return false
+	}
+
 	workflowFile := prE2EWorkflowFile(pr.RepoName)
 	if workflowFile == "" {
 		return false
 	}
 
-	client := newGithubClient(s.Config.GithubAccessToken)
-	if s.githubAPIBase != "" {
-		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
-			client.BaseURL = baseURL
-		}
-	}
+	client := s.e2eGithubClient()
 	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?branch=%s&event=workflow_dispatch&per_page=100",
 		pr.RepoOwner, pr.RepoName, workflowFile, url.QueryEscape(pr.Ref))
 	req, err := client.NewRequest("GET", listURL, nil)
@@ -1461,7 +1495,7 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 // This is called when a new E2E run is triggered for the same PR
 func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	logger = logger.WithFields(logrus.Fields{
 		"repo": pr.RepoName,
