@@ -144,6 +144,36 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
 
+	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
+	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
+	s.e2eInProgressLock.Lock()
+	if s.e2eInProgress[inProgressKey] {
+		s.e2eInProgressLock.Unlock()
+		logger.Warn("E2E instance creation already in progress for this PR and platform, skipping duplicate request")
+		return
+	}
+	s.e2eInProgress[inProgressKey] = true
+	s.e2eInProgressLock.Unlock()
+	defer func() {
+		s.e2eInProgressLock.Lock()
+		delete(s.e2eInProgress, inProgressKey)
+		s.e2eInProgressLock.Unlock()
+	}()
+
+	// Serialize reuse/create/store per PR so concurrent Android and iOS label requests share
+	// one server set instead of each provisioning their own.
+	unlock := s.lockE2EPRProvisioning(key)
+	defer unlock()
+
+	// Desktop and mobile start every run on fresh servers, but only when no other E2E run or
+	// provisioning is active on the PR: Android and iOS runs share one server set, so tearing
+	// it down mid-run would break the other platform's run. Otherwise reuse, as before.
+	fresh := instanceType != oxideE2EInstanceType && s.isPRE2EIdle(pr, key, inProgressKey, logger)
+	if fresh {
+		logger.Info("No other E2E run active on this PR; replacing its servers with fresh ones")
+		s.handleE2ECleanup(pr)
+	}
+
 	// Snapshot cleanup generation before provisioning; re-checked before storing to prevent stale writes after a concurrent reset.
 	s.e2ePRCleanupGenerationLock.Lock()
 	startGeneration := s.e2ePRCleanupGeneration[key]
@@ -162,35 +192,12 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return true
 	}
 
-	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
-	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
-	s.e2eInProgressLock.Lock()
-	if s.e2eInProgress[inProgressKey] {
-		s.e2eInProgressLock.Unlock()
-		logger.Warn("E2E instance creation already in progress for this PR and platform, skipping duplicate request")
-		return
-	}
-	s.e2eInProgress[inProgressKey] = true
-	s.e2eInProgressLock.Unlock()
-	defer func() {
-		s.e2eInProgressLock.Lock()
-		delete(s.e2eInProgress, inProgressKey)
-		s.e2eInProgressLock.Unlock()
-	}()
-
-	// Oxide: serialize reuse/create/store per PR so concurrent Android and iOS label requests
-	// share one server set instead of each provisioning six servers.
-	if instanceType == oxideE2EInstanceType {
-		unlock := s.lockOxidePRProvisioning(key)
-		defer unlock()
-	}
-
 	// 1. Reuse existing in-memory instances (servers stay alive between label toggles).
 	s.e2eInstancesLock.Lock()
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
-	if len(existingInstances) > 0 {
+	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
 		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(existingInstances, logger)
@@ -202,20 +209,22 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
-	if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
-		logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
-		s.wakeUpHibernatingInstances(cloudInstances, logger)
-		if !storeIfCurrent(cloudInstances) {
-			logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
-			s.destroyE2EInstances(cloudInstances, logger)
+	if !fresh {
+		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
+			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
+			s.cancelPRWorkflowRuns(pr, logger)
+			s.wakeUpHibernatingInstances(cloudInstances, logger)
+			if !storeIfCurrent(cloudInstances) {
+				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
+				s.destroyE2EInstances(cloudInstances, logger)
+				return
+			}
+			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
+				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
+			}
 			return
 		}
-		if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
-			logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
-			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
-		}
-		return
 	}
 
 	// 3. No existing instances — create fresh ones.
@@ -490,29 +499,8 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
 
-	// Wait for installation to be stable using polling with timeout
-	timeout := time.Now().Add(30 * time.Minute)
-	for {
-		inst, err := s.CloudClient.GetInstallation(installation.ID, nil)
-		if err != nil {
-			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to get installation status: %w", err))
-		}
-
-		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
-			logger.WithField("state", inst.State).Info("Installation is stable")
-			break
-		}
-
-		if time.Now().After(timeout) {
-			return nil, cleanupCreatedInstallation(fmt.Errorf("timeout waiting for installation to become stable"))
-		}
-
-		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
-		select {
-		case <-ctx.Done():
-			return nil, cleanupCreatedInstallation(fmt.Errorf("installation wait cancelled: %w", ctx.Err()))
-		case <-time.After(30 * time.Second):
-		}
+	if err := s.waitForE2EInstallationStable(ctx, installation.ID, logger); err != nil {
+		return nil, cleanupCreatedInstallation(err)
 	}
 
 	// Check cancellation before the 10-minute initialization phase (DNS + ping + user setup).
@@ -522,9 +510,15 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	err = s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
+	adminClient, err := s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
 	if err != nil {
 		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
+	}
+
+	if instanceType == "mobile" {
+		if err := s.restartWithSharedChannels(ctx, adminClient, installation.ID, logger); err != nil {
+			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to enable Shared Channels: %w", err))
+		}
 	}
 
 	return &E2EInstance{
@@ -533,6 +527,84 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		InstallationID: installation.ID,
 		ServerVersion:  version,
 	}, nil
+}
+
+// waitForE2EInstallationStable polls the provisioner until the installation is stable.
+// Cancelling ctx aborts the wait so parallel callers can fail fast.
+func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationID string, logger logrus.FieldLogger) error {
+	timeout := time.Now().Add(30 * time.Minute)
+	for {
+		inst, err := s.CloudClient.GetInstallation(installationID, nil)
+		if err != nil {
+			return fmt.Errorf("failed to get installation status: %w", err)
+		}
+		if inst == nil {
+			return fmt.Errorf("installation %s not found", installationID)
+		}
+
+		// The provisioner never retries these on its own, so waiting longer cannot help.
+		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed {
+			return fmt.Errorf("installation entered state %q", inst.State)
+		}
+
+		if inst.State == cloudModel.InstallationStateStable || inst.State == cloudModel.InstallationStateHibernating {
+			logger.WithField("state", inst.State).Info("Installation is stable")
+			return nil
+		}
+
+		if time.Now().After(timeout) {
+			return fmt.Errorf("timeout waiting for installation to become stable")
+		}
+
+		// Context-aware sleep: wake immediately if a sibling goroutine failed and cancelled ctx.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("installation wait cancelled: %w", ctx.Err())
+		case <-time.After(e2eInstallationPollInterval):
+		}
+	}
+}
+
+// e2eInstallationPollInterval is the pause between installation status polls. Var, not
+// const, so tests can shorten it.
+var e2eInstallationPollInterval = 30 * time.Second
+
+// restartWithSharedChannels turns on both Connected Workspaces flags, then restarts the
+// server once. The server starts the remote cluster and shared channels services only at
+// boot, and only if the flags are already on.
+func (s *Server) restartWithSharedChannels(ctx context.Context, client *mattermostModel.Client4, installationID string, logger logrus.FieldLogger) error {
+	logger = logger.WithField("installation_id", installationID)
+
+	logger.Info("Enabling Shared Channels in config")
+	// Raw JSON: the v6 client's Config has no ConnectedWorkspacesSettings.
+	resp, err := client.DoAPIPut("/config/patch", `{"ConnectedWorkspacesSettings":{"EnableRemoteClusterService":true,"EnableSharedChannels":true}}`)
+	if err != nil {
+		return fmt.Errorf("failed to patch ConnectedWorkspacesSettings: %w", err)
+	}
+	resp.Body.Close()
+
+	// Changing a PriorityEnv value makes the operator restart the pod. The patch merges,
+	// so the existing env vars stay.
+	logger.Info("Restarting server so Shared Channels starts at boot")
+	_, err = s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
+		PriorityEnv: cloudModel.EnvVarMap{"MATTERWICK_E2E_RESTART_NONCE": cloudModel.EnvVar{Value: cloudModel.NewID()}},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update installation to restart the server: %w", err)
+	}
+
+	if err := s.waitForE2EInstallationStable(ctx, installationID, logger); err != nil {
+		return err
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if err := checkMMPing(pingCtx, client, logger); err != nil {
+		return fmt.Errorf("failed to get mattermost ping response after restart: %w", err)
+	}
+
+	logger.Info("Server restarted with Shared Channels enabled")
+	return nil
 }
 
 // getE2EPassword returns the password for E2E testing from config or org-level secrets
@@ -555,8 +627,9 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	return password
 }
 
-// initializeMattermostE2EServer initializes a Mattermost server with E2E credentials
-func (s *Server) initializeMattermostE2EServer(spinwickURL, username, password string, logger logrus.FieldLogger) error {
+// initializeMattermostE2EServer initializes a Mattermost server with E2E credentials and
+// returns a client logged in as the admin.
+func (s *Server) initializeMattermostE2EServer(spinwickURL, username, password string, logger logrus.FieldLogger) (*mattermostModel.Client4, error) {
 	return s.setupE2EServerCredentials(spinwickURL, username, password, logger)
 }
 
@@ -581,7 +654,7 @@ func createE2EDefaultTeam(client *mattermostModel.Client4, userID string, logger
 }
 
 // setupE2EServerCredentials sets up a Mattermost server with provided E2E credentials
-func (s *Server) setupE2EServerCredentials(spinwickURL, username, password string, logger logrus.FieldLogger) error {
+func (s *Server) setupE2EServerCredentials(spinwickURL, username, password string, logger logrus.FieldLogger) (*mattermostModel.Client4, error) {
 	logger.Info("Setting up E2E server with provided credentials")
 
 	wait := 600
@@ -592,12 +665,12 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	// Parse the URL to get the hostname
 	mmHost, err := url.Parse(spinwickURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse MM URL: %w", err)
+		return nil, fmt.Errorf("failed to parse MM URL: %w", err)
 	}
 
 	// Check DNS
 	if err := checkDNS(ctx, fmt.Sprintf("%s:443", mmHost.Host)); err != nil {
-		return fmt.Errorf("timed out waiting for DNS to propagate: %w", err)
+		return nil, fmt.Errorf("timed out waiting for DNS to propagate: %w", err)
 	}
 
 	client := mattermostModel.NewAPIv4Client(spinwickURL)
@@ -606,7 +679,7 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	ctx, cancel = context.WithTimeout(context.Background(), time.Duration(wait)*time.Second)
 	defer cancel()
 	if err := checkMMPing(ctx, client, logger); err != nil {
-		return fmt.Errorf("failed to get mattermost ping response: %w", err)
+		return nil, fmt.Errorf("failed to get mattermost ping response: %w", err)
 	}
 
 	// Create the admin user with provided credentials
@@ -617,22 +690,22 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	}
 	_, _, err = client.CreateUser(adminUser)
 	if err != nil {
-		return fmt.Errorf("failed to create E2E admin user: %w", err)
+		return nil, fmt.Errorf("failed to create E2E admin user: %w", err)
 	}
 
 	// Login as admin and capture the user ID
 	userLogged, _, err := client.Login(username, password)
 	if err != nil {
-		return fmt.Errorf("failed to log in as E2E admin user: %w", err)
+		return nil, fmt.Errorf("failed to log in as E2E admin user: %w", err)
 	}
 
 	// Create the default team 'ad-1' and add admin user to it
 	if err := createE2EDefaultTeam(client, userLogged.Id, logger); err != nil {
-		return err
+		return nil, err
 	}
 
 	logger.Info("E2E server setup complete")
-	return nil
+	return client, nil
 }
 
 // triggerE2EWorkflow triggers the appropriate E2E workflow with instance details
@@ -641,19 +714,47 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 //   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
 func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
+	var err error
 	if instanceType == "desktop" {
 		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
-		return s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
+		err = s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
 	} else if instanceType == "mobile" {
 		// Mobile uses testPlatform to determine which mobile OS to test (ios/android/both)
-		return s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
+		err = s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
 	} else if instanceType == oxideE2EInstanceType {
-		return s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
+		err = s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
+	} else {
+		return fmt.Errorf("unknown instance type: %s", instanceType)
 	}
+	if err == nil {
+		s.e2eLastDispatch.Store(fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number), time.Now())
+	}
+	return err
+}
 
-	return fmt.Errorf("unknown instance type: %s", instanceType)
+// e2eGithubClient returns a GitHub client, pointed at the test server when one is set.
+func (s *Server) e2eGithubClient() *github.Client {
+	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
+	return client
+}
+
+// lockE2EPRProvisioning blocks until this PR's provisioning/reuse section is free and
+// returns its unlock func. E2E/Run-Android and E2E/Run-iOS have different in-progress keys
+// (so they dispatch independently), but must not both create a server set: the second
+// request waits here, then reuses the instances the first one stored. The per-PR mutex is
+// kept for the process lifetime (one small entry per PR that ran E2E).
+func (s *Server) lockE2EPRProvisioning(key string) func() {
+	m, _ := s.e2ePRProvisionLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // triggerDesktopE2EWorkflow triggers the desktop E2E workflow
@@ -1160,7 +1261,7 @@ Tests will run against these servers. Please monitor the workflow run for progre
 // postE2EErrorComment posts an error comment
 func (s *Server) postE2EErrorComment(pr *model.PullRequest, errorMsg string) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	comment := fmt.Sprintf("❌ E2E Test Setup Failed\n\n%s", errorMsg)
 
@@ -1319,11 +1420,82 @@ func (s *Server) dispatchMobileE2EWorkflow(
 	return nil
 }
 
+// prE2EWorkflowFile returns the PR E2E workflow file for a desktop or mobile repo, or "".
+func prE2EWorkflowFile(repoName string) string {
+	if isOxideRepo(repoName) {
+		return ""
+	} else if strings.Contains(repoName, "desktop") {
+		return "e2e-functional.yml"
+	} else if strings.Contains(repoName, "mobile") {
+		return "e2e-detox-pr.yml"
+	}
+	return ""
+}
+
+// e2eDispatchGracePeriod covers the delay between a workflow dispatch and GitHub listing
+// the run: a trigger within it counts as busy.
+const e2eDispatchGracePeriod = 5 * time.Minute
+
+// isPRE2EIdle reports whether nothing else is using the PR's E2E servers: no other
+// platform's request is provisioning, no E2E workflow was dispatched for the PR in the last
+// e2eDispatchGracePeriod, and no E2E workflow run on the PR branch is queued or running.
+// Any error counts as busy, so an unknown state never tears servers down.
+func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, logger logrus.FieldLogger) bool {
+	s.e2eInProgressLock.Lock()
+	for k := range s.e2eInProgress {
+		if k != inProgressKey && strings.HasPrefix(k, key+"-") {
+			s.e2eInProgressLock.Unlock()
+			logger.WithField("other_request", k).Info("Another E2E request for this PR is in progress; reusing servers")
+			return false
+		}
+	}
+	s.e2eInProgressLock.Unlock()
+
+	if last, ok := s.e2eLastDispatch.Load(key); ok && time.Since(last.(time.Time)) < e2eDispatchGracePeriod {
+		logger.Info("An E2E workflow was dispatched for this PR moments ago; reusing servers")
+		return false
+	}
+
+	workflowFile := prE2EWorkflowFile(pr.RepoName)
+	if workflowFile == "" {
+		return false
+	}
+
+	client := s.e2eGithubClient()
+	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?branch=%s&event=workflow_dispatch&per_page=100",
+		pr.RepoOwner, pr.RepoName, workflowFile, url.QueryEscape(pr.Ref))
+	req, err := client.NewRequest("GET", listURL, nil)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to build workflow runs request; reusing servers")
+		return false
+	}
+	var runs struct {
+		WorkflowRuns []struct {
+			ID         int64  `json:"id"`
+			HeadBranch string `json:"head_branch"`
+			Status     string `json:"status"`
+		} `json:"workflow_runs"`
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := client.Do(ctx, req, &runs); err != nil {
+		logger.WithError(err).Warn("Failed to list E2E workflow runs; reusing servers")
+		return false
+	}
+	for _, run := range runs.WorkflowRuns {
+		if run.HeadBranch == pr.Ref && run.Status != "completed" {
+			logger.WithFields(logrus.Fields{"run_id": run.ID, "status": run.Status}).Info("An E2E workflow run is active on this PR; reusing servers")
+			return false
+		}
+	}
+	return true
+}
+
 // cancelPRWorkflowRuns cancels any in-progress E2E workflow runs for a PR
 // This is called when a new E2E run is triggered for the same PR
 func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
 	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
+	client := s.e2eGithubClient()
 
 	logger = logger.WithFields(logrus.Fields{
 		"repo": pr.RepoName,
@@ -1332,19 +1504,15 @@ func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.Field
 
 	logger.Info("Attempting to cancel in-progress E2E workflow runs")
 
-	// Determine which workflow file to cancel based on repository type
-	var workflowFile string
 	if isOxideRepo(pr.RepoName) {
 		// Oxide runs Android and iOS as separate dispatches (E2E/Run-Android, E2E/Run-iOS) and
 		// cancels superseded runs itself with per-PR/per-platform concurrency groups. Cancelling
 		// every in-progress run on the branch here would kill the other platform's run.
 		logger.Info("Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)")
 		return
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		workflowFile = "e2e-functional.yml"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		workflowFile = "e2e-detox-pr.yml"
-	} else {
+	}
+	workflowFile := prE2EWorkflowFile(pr.RepoName)
+	if workflowFile == "" {
 		logger.Warn("Unable to determine workflow file for repository")
 		return
 	}

@@ -378,16 +378,16 @@ func TestCancelPRWorkflowRuns_SkipsOxide(t *testing.T) {
 	assert.Equal(t, "Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)", hook.LastEntry().Message)
 }
 
-func TestLockOxidePRProvisioning(t *testing.T) {
+func TestLockE2EPRProvisioning(t *testing.T) {
 	s := &Server{}
 	const prKey = "mattermost-mobile-oxide-pr-9"
 
-	unlockFirst := s.lockOxidePRProvisioning(prKey)
+	unlockFirst := s.lockE2EPRProvisioning(prKey)
 
 	// A second request for the same PR (e.g. E2E/Run-iOS while E2E/Run-Android provisions)
 	// must wait until the first one has stored its instances.
 	acquired := make(chan func())
-	go func() { acquired <- s.lockOxidePRProvisioning(prKey) }()
+	go func() { acquired <- s.lockE2EPRProvisioning(prKey) }()
 	select {
 	case <-acquired:
 		t.Fatal("second request for the same PR acquired the provisioning lock concurrently")
@@ -397,7 +397,7 @@ func TestLockOxidePRProvisioning(t *testing.T) {
 	// Other PRs are never blocked by it.
 	otherDone := make(chan struct{})
 	go func() {
-		s.lockOxidePRProvisioning("mattermost-mobile-oxide-pr-10")()
+		s.lockE2EPRProvisioning("mattermost-mobile-oxide-pr-10")()
 		close(otherDone)
 	}()
 	select {

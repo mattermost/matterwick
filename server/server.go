@@ -58,10 +58,14 @@ type Server struct {
 	e2ePRCleanupGeneration     map[string]int64
 	e2ePRCleanupGenerationLock sync.Mutex
 
-	// oxidePRProvisionLocks holds one *sync.Mutex per Oxide PR key. Oxide dispatches Android
-	// and iOS from separate labels, so provisioning/reuse is serialized per PR (not per
-	// platform) to keep both requests on one server set. Zero value is ready to use.
-	oxidePRProvisionLocks sync.Map
+	// e2ePRProvisionLocks holds one *sync.Mutex per PR key. Android and iOS are dispatched
+	// from separate labels, so provisioning/reuse is serialized per PR (not per platform)
+	// to keep both requests on one server set. Zero value is ready to use.
+	e2ePRProvisionLocks sync.Map
+
+	// e2eLastDispatch holds the time.Time of the last E2E workflow dispatch per PR key, so a
+	// trigger right after a dispatch (before GitHub lists the run) never counts as idle.
+	e2eLastDispatch sync.Map
 
 	// stopCh is closed by Stop() to terminate background goroutines.
 	stopCh   chan struct{}
