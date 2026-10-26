@@ -81,7 +81,6 @@
   "E2EAutoTriggerOnMaster": true,
   "E2EOxideEnabled": false,
   "E2EReleasePatternPrefix": "release-",
-  "E2ETestWorkflowNames": ["Electron Playwright Tests", "E2E", "Compatibility Matrix Testing"],
   "E2EInstanceMaxAge": 6,
   "E2EPRInstanceMaxAge": 8,
   "CMTTriggerWorkflowName": "CMT Provisioner",

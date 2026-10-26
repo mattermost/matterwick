@@ -32,14 +32,17 @@ You do not need to rebuild the docker image unless you make changes to the Docke
 
 ### E2E repo profiles
 
-PR labels (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`, `E2E/Reset-Servers`) provision Mattermost Cloud test servers and dispatch the repo's test workflow:
+Every E2E flow uses the repo's profile (`server/e2e_profiles.go`). Adding a repo means adding a profile:
 
-| Repo | Servers per PR | Dispatched workflow | Push / CMT |
+| Repo | Servers | Workflow | CMT |
 |---|---|---|---|
-| `*desktop*` | 3 (`linux`, `macos`, `windows`) | `e2e-functional.yml` | yes |
-| `*mobile*` | 5 (`android-site-1/2`, `ios-site-1/2`, `site-3`) | `e2e-detox-pr.yml` | yes |
-| `mattermost-mobile-oxide` (exact name, checked before `*mobile*`) | 6 (`android-site-1..3`, `ios-site-1..3`), DNS prefix `oxide-` | `e2e-matterwick.yml` | push to the default branch only; no CMT |
+| `*desktop*` | `linux`, `macos`, `windows` | `e2e-functional.yml` | yes |
+| `*mobile*` | `android-site-1/2`, `ios-site-1/2`, `site-3` | `e2e-detox-pr.yml` | yes |
+| `mattermost-mobile-oxide` (exact name, checked first) | `android-site-1..3`, `ios-site-1..3` | `e2e-matterwick.yml` | no |
 
-The Oxide profile is off unless `E2EOxideEnabled` is `true`; while off, Oxide labels are ignored. PR close and `E2E/Reset-Servers` only ever delete `oxide-pr-<N>-*` for Oxide.
+Same rules for every repo:
+- **PR labels** (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`): servers `<kind>-pr-<N>-*`. A run gets fresh servers when nothing else is using the PR's servers, otherwise it reuses them. Each workflow cancels its own superseded runs. PR close and `E2E/Reset-Servers` delete `<kind>-pr-<N>-*`.
+- **Pushes to the default branch** (`E2EAutoTriggerOnMaster`): fresh `<kind>-push-*` servers, dispatched on that branch with the pushed SHA. A push superseded while its servers came up is skipped. Its servers are destroyed when that run completes, or by the stale scan after `E2EInstanceMaxAge`.
+- **Provisioning**: a failed server is deleted and replaced after a backoff; the set fails only when one server gives up, and the error names it.
 
-With `E2EOxideEnabled` and `E2EAutoTriggerOnMaster` both `true`, each push to Oxide's default branch provisions 6 fresh `oxide-main-*` servers and dispatches `e2e-matterwick.yml` on that branch with `MOBILE_VERSION` = the pushed SHA, `PLATFORM=both` and an empty `pr_number`. If the branch has moved on by the time the servers are up, the push is skipped (the newer push runs instead), because the workflow only accepts the branch's current commit. The servers are destroyed when that run completes (matched by workflow path, branch and SHA), or by the periodic scan after `E2EInstanceMaxAge`.
+Oxide is off unless `E2EOxideEnabled` is `true`; its servers are cleaned up either way.

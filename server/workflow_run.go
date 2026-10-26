@@ -100,39 +100,23 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		return
 	}
 
-	// Oxide's e2e-matterwick.yml is matched by path, not name (it must stay out of
-	// E2ETestWorkflowNames so its PR runs never trigger SHA cleanup). Only the completed
-	// run's own push key is destroyed; PR servers are left for reuse. Runs regardless of
-	// E2EOxideEnabled so servers provisioned before the flag was turned off are reclaimed.
-	if payload.Action == "completed" && isOxideE2EWorkflowRun(repoName, payload.WorkflowRun.Path) {
-		s.destroyOxidePushInstances(repoName, headBranch, headSHA, logger)
-		return
-	}
-
-	// On completion: CMT keys on run id, non-CMT flows key on SHA.
-	if payload.Action == "completed" && s.isE2ETestWorkflow(workflowName) {
+	if payload.Action == "completed" {
+		// CMT keys on run id.
 		if workflowName == s.cmtTestWorkflowName() {
 			logger.Info("CMT test workflow completed, cleaning up instances by run id")
 			s.findAndDestroyInstancesByRunID(repoName, runID, logger)
-		} else {
-			logger.Info("Test workflow completed, cleaning up matching instances by SHA")
-			s.findAndDestroyInstancesBySHA(repoName, headSHA, false, logger)
+			return
 		}
-		return
-	}
-
-	logger.WithField("configured_test_workflows", s.Config.E2ETestWorkflowNames).
-		Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
-}
-
-// isE2ETestWorkflow reports whether name is in Config.E2ETestWorkflowNames.
-func (s *Server) isE2ETestWorkflow(name string) bool {
-	for _, n := range s.Config.E2ETestWorkflowNames {
-		if n == name {
-			return true
+		// A push run of the repo's E2E workflow (matched by file, not name) destroys exactly
+		// its own servers. PR runs of the same workflow match no push key, so PR servers stay
+		// for reuse. Runs even when the profile is disabled, so no server is left behind.
+		if p := e2eProfileFor(repoName); p != nil && workflowFileOf(payload.WorkflowRun.Path) == p.workflow {
+			s.destroyPushRunInstances(repoName, headBranch, headSHA, logger)
+			return
 		}
 	}
-	return false
+
+	logger.Info("Ignoring workflow_run event (not relevant to E2E lifecycle)")
 }
 
 // defaultCMTTestWorkflowName is the "name:" of compatibility-matrix-testing.yml in the
@@ -221,43 +205,6 @@ func (s *Server) findAndDestroyInstancesByRunID(repoName string, testRunID int64
 		return
 	}
 	s.destroyE2EInstances(instances, logger)
-}
-
-// instanceKeyMatchesSHA reports whether key belongs to repoName, ends with headSHA, and matches the flow type (CMT vs push/scheduled) to prevent cross-flow SHA collisions.
-func instanceKeyMatchesSHA(key, repoName, headSHA string, cmtOnly bool) bool {
-	if !strings.HasPrefix(key, repoName+"-") || !strings.HasSuffix(key, "-"+headSHA) {
-		return false
-	}
-	return strings.HasPrefix(key, repoName+"-cmt-") == cmtOnly
-}
-
-// findAndDestroyInstancesBySHA destroys instances whose key ends with headSHA, scoped to CMT or non-CMT flows to prevent cross-flow teardown.
-func (s *Server) findAndDestroyInstancesBySHA(repoName, headSHA string, cmtOnly bool, logger logrus.FieldLogger) {
-	if headSHA == "" {
-		return
-	}
-
-	s.e2eInstancesLock.Lock()
-	var found []*E2EInstance
-	var keysToDelete []string
-	for key, instances := range s.e2eInstances {
-		if !instanceKeyMatchesSHA(key, repoName, headSHA, cmtOnly) {
-			continue
-		}
-		found = append(found, instances...)
-		keysToDelete = append(keysToDelete, key)
-	}
-	for _, k := range keysToDelete {
-		delete(s.e2eInstances, k)
-	}
-	s.e2eInstancesLock.Unlock()
-
-	if len(found) == 0 {
-		logger.Debug("No sha-tracked instances found for cleanup")
-		return
-	}
-	logger.WithField("instances", len(found)).Info("Destroying sha-tracked instances for completed workflow")
-	s.destroyE2EInstances(found, logger)
 }
 
 // parseServerVersionsFromString splits a comma-separated version string and trims whitespace.

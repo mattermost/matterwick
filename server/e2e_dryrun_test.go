@@ -16,7 +16,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -140,9 +139,9 @@ func newTestGitHubClient(t *testing.T, srv *httptest.Server) *gogithub.Client {
 // makeDesktopInstances fabricates the 3 desktop instances (linux/macos/windows).
 func makeDesktopInstances() []*E2EInstance {
 	return []*E2EInstance{
-		{Name: "inst-linux", Platform: "linux", Runner: "ubuntu-latest", URL: "https://linux.test.example.com", InstallationID: "id-1", ServerVersion: "master"},
-		{Name: "inst-macos", Platform: "macos", Runner: "macos-latest", URL: "https://macos.test.example.com", InstallationID: "id-2", ServerVersion: "master"},
-		{Name: "inst-windows", Platform: "windows", Runner: "windows-2022", URL: "https://windows.test.example.com", InstallationID: "id-3", ServerVersion: "master"},
+		{Name: "inst-linux", Platform: "linux", URL: "https://linux.test.example.com", InstallationID: "id-1", ServerVersion: "master"},
+		{Name: "inst-macos", Platform: "macos", URL: "https://macos.test.example.com", InstallationID: "id-2", ServerVersion: "master"},
+		{Name: "inst-windows", Platform: "windows", URL: "https://windows.test.example.com", InstallationID: "id-3", ServerVersion: "master"},
 	}
 }
 
@@ -189,116 +188,7 @@ func TestDryRun_DesktopDispatch(t *testing.T) {
 		}
 	})
 
-	t.Run("workflow inputs built correctly", func(t *testing.T) {
-		// Drive the real triggerDesktopE2EWorkflow so assertions validate the
-		// actual payload produced by production code, not a hand-built map.
-		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
-		client := newTestGitHubClient(t, ghSrv)
-		pr := &model.PullRequest{
-			RepoOwner: "mattermost",
-			RepoName:  "mattermost-desktop",
-			Number:    42,
-			Ref:       "feature-branch",
-			Sha:       "abc123",
-		}
 
-		err := s.triggerDesktopE2EWorkflow(context.Background(), client, pr, instances)
-		require.NoError(t, err)
-		require.Len(t, *captures, 1)
-
-		c := (*captures)[0]
-		// MM_SERVER_VERSION must come from instances[0].ServerVersion, NOT from
-		// s.Config.E2EServerVersion (which may be "latest").
-		assert.Equal(t, instances[0].ServerVersion, c.Inputs["MM_SERVER_VERSION"],
-			"MM_SERVER_VERSION must come from instances[0].ServerVersion, not from config")
-		assert.Equal(t, s.Config.E2EUsername, c.Inputs["MM_TEST_USER_NAME"])
-		assert.Equal(t, pr.Ref, c.Inputs["version_name"])
-		assert.NotEmpty(t, c.Inputs["instance_details"])
-	})
-
-}
-
-// ------------------------------------------------------------
-// 2. Mobile PR label: three label variants → correct PLATFORM
-// ------------------------------------------------------------
-
-func TestDryRun_MobileDispatch(t *testing.T) {
-	s := newDryRunServer(t, "", "mattermost")
-	instances := makeMobileInstances()
-	prSha := "def456"
-	prRef := "feature-mobile"
-
-	for _, tt := range []struct {
-		label    string
-		platform string
-	}{
-		{"E2E/Run", "both"},
-		{"E2E/Run-iOS", "ios"},
-		{"E2E/Run-Android", "android"},
-	} {
-		t.Run("label "+tt.label+" → PLATFORM="+tt.platform, func(t *testing.T) {
-			platform := s.extractPlatformFromLabel(tt.label)
-			assert.Equal(t, tt.platform, platform)
-
-			ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
-			client := newTestGitHubClient(t, ghSrv)
-			pr := &model.PullRequest{
-				RepoOwner: "mattermost",
-				RepoName:  "mattermost-mobile",
-				Number:    42,
-				Ref:       prRef,
-				Sha:       prSha,
-			}
-			require.NoError(t, s.triggerMobileE2EWorkflow(context.Background(), client, pr, instances, platform))
-			require.Len(t, *captures, 1)
-
-			capture := (*captures)[0]
-			assert.Equal(t, prRef, capture.Ref)
-			assert.Equal(t, tt.platform, capture.Inputs["PLATFORM"])
-			assert.Equal(t, prSha, capture.Inputs["MOBILE_VERSION"])
-			assert.Equal(t, "https://android-site1.test.example.com", capture.Inputs["ANDROID_SITE_1_URL"])
-			assert.Equal(t, "https://android-site2.test.example.com", capture.Inputs["ANDROID_SITE_2_URL"])
-			assert.Equal(t, "https://ios-site1.test.example.com", capture.Inputs["IOS_SITE_1_URL"])
-			assert.Equal(t, "https://ios-site2.test.example.com", capture.Inputs["IOS_SITE_2_URL"])
-			assert.Equal(t, "https://site3.test.example.com", capture.Inputs["SITE_3_URL"])
-
-			// Mobile must NOT use instance_details (desktop-only field)
-			assert.NotContains(t, capture.Inputs, "instance_details",
-				"mobile workflow must not send instance_details")
-			assert.NotContains(t, capture.Inputs, "SITE_1_URL",
-				"new Matterwick dispatches must use explicit platform URL inputs")
-			assert.NotContains(t, capture.Inputs, "SITE_2_URL",
-				"new Matterwick dispatches must use explicit platform URL inputs")
-		})
-	}
-
-}
-
-func TestDryRun_MobileTopology(t *testing.T) {
-	assert.Equal(t, []string{
-		"android-site-1",
-		"android-site-2",
-		"ios-site-1",
-		"ios-site-2",
-		"site-3",
-	}, mobileE2EPlatforms)
-	assert.Equal(t, []string{
-		"ANDROID_SITE_1_URL",
-		"ANDROID_SITE_2_URL",
-		"IOS_SITE_1_URL",
-		"IOS_SITE_2_URL",
-		"SITE_3_URL",
-	}, mobileE2EWorkflowInputKeys)
-
-	s := newDryRunServer(t, "", "mattermost")
-	err := s.triggerMobileE2EWorkflowForPushEvent(
-		"mattermost",
-		"mattermost-mobile",
-		"main",
-		"abc123",
-		makeMobileInstances()[:3],
-	)
-	require.EqualError(t, err, "mobile E2E requires 5 instances")
 }
 
 // ------------------------------------------------------------
@@ -593,34 +483,6 @@ func TestInstanceKeyMatchesRunID(t *testing.T) {
 	assert.False(t, instanceKeyMatchesRunID(otherRunKey, repo, runID))
 	assert.False(t, instanceKeyMatchesRunID(cmtKey, "mattermost-desktop", runID))
 }
-
-func TestInstanceKeyMatchesSHA(t *testing.T) {
-	repo := "mattermost-mobile"
-	sha := "deadbeef"
-	nightlyKey := fmt.Sprintf("%s-scheduled-200-%s", repo, sha)   // nightly flow, same SHA
-	pushKey := fmt.Sprintf("%s-push-release-9.0-%s", repo, sha)   // push flow, same SHA
-	prKey := fmt.Sprintf("%s-pr-42", repo)                        // PR flow, no -sha suffix
-	legacyCMTKey := fmt.Sprintf("%s-cmt-100-%s", repo, sha)       // legacy CMT key shape (runID + sha) — pre-refactor
-	liveCMTKey := cmtInstanceKey(repo, 100)                       // live CMT key shape ({repo}-cmt-{runID}, no sha)
-	otherSHAKey := fmt.Sprintf("%s-cmt-100-%s", repo, "feedface") // legacy CMT key with different sha
-
-	t.Run("non-CMT completion matches push/scheduled but NEVER any CMT shape", func(t *testing.T) {
-		assert.True(t, instanceKeyMatchesSHA(nightlyKey, repo, sha, false))
-		assert.True(t, instanceKeyMatchesSHA(pushKey, repo, sha, false))
-		assert.False(t, instanceKeyMatchesSHA(prKey, repo, sha, false), "PR keys have no -sha suffix")
-		assert.False(t, instanceKeyMatchesSHA(legacyCMTKey, repo, sha, false), "legacy CMT keys are CMT-prefixed and never SHA-cleaned by non-CMT completions")
-		assert.False(t, instanceKeyMatchesSHA(liveCMTKey, repo, sha, false), "live CMT keys have no -sha suffix so cannot match a non-CMT SHA cleanup")
-		assert.False(t, instanceKeyMatchesSHA(otherSHAKey, repo, sha, false), "legacy CMT key with different sha must not match")
-	})
-
-	t.Run("other repo is never matched", func(t *testing.T) {
-		assert.False(t, instanceKeyMatchesSHA("mattermost-desktop-cmt-100-"+sha, repo, sha, true))
-	})
-}
-
-// ------------------------------------------------------------
-// 10. Instance name length safety
-// ------------------------------------------------------------
 
 func TestDryRun_InstanceNameLength(t *testing.T) {
 	t.Run("long repo name gets truncated to fit DNS limit", func(t *testing.T) {
@@ -973,112 +835,10 @@ func TestDryRun_ResolveE2EServerVersion(t *testing.T) {
 }
 
 // ------------------------------------------------------------
-// 12b. Push-event server version selection — always latest, ignore branch suffix
-// ------------------------------------------------------------
-
-func TestDryRun_PushEventServerVersion(t *testing.T) {
-	// Push events (release branch, master, main) must always provision the latest
-	// stable Mattermost release. Deriving a version from a release branch name
-	// (e.g. "release-9.0" → "9.0") would attempt to pull a Docker tag that
-	// typically doesn't exist (Docker Hub publishes full SemVer like "9.0.0"),
-	// causing silent installation failures and no E2E workflow dispatch.
-	t.Run("release branch push uses latest version, ignoring branch-derived version", func(t *testing.T) {
-		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
-		srv := mockReleasesServer(t, body, http.StatusOK)
-		s := newDryRunServerLatest(t, srv)
-
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent(),
-			"release-9.0 push must provision latest server (12.0.0), not branch-derived 9.0")
-	})
-
-	t.Run("master push uses latest version", func(t *testing.T) {
-		body := `[{"tag_name":"v12.0.0","draft":false,"prerelease":false}]`
-		srv := mockReleasesServer(t, body, http.StatusOK)
-		s := newDryRunServerLatest(t, srv)
-
-		assert.Equal(t, "12.0.0", s.serverVersionForPushEvent())
-	})
-}
-
-// ------------------------------------------------------------
 // 13. MM_SERVER_VERSION sourced from instance, not config
 // ------------------------------------------------------------
 
 func TestDryRun_MMServerVersionFromInstance(t *testing.T) {
-	t.Run("desktop dispatch uses instances[0].ServerVersion not config", func(t *testing.T) {
-		// Config says "latest" but instances were provisioned with resolved "11.6.0".
-		// Drive triggerDesktopE2EWorkflow so we assert the real payload, not a hand-built map.
-		s := newDryRunServer(t, "", "mattermost")
-		s.Config.E2EServerVersion = "latest" // would be wrong if used in dispatch
-
-		resolvedVersion := "11.6.0"
-		instances := []*E2EInstance{
-			{Name: "inst-linux", Platform: "linux", Runner: "ubuntu-latest",
-				URL: "https://linux.test.example.com", InstallationID: "id-1",
-				ServerVersion: resolvedVersion},
-			{Name: "inst-macos", Platform: "macos", Runner: "macos-latest",
-				URL: "https://macos.test.example.com", InstallationID: "id-2",
-				ServerVersion: resolvedVersion},
-			{Name: "inst-windows", Platform: "windows", Runner: "windows-2022",
-				URL: "https://windows.test.example.com", InstallationID: "id-3",
-				ServerVersion: resolvedVersion},
-		}
-
-		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
-		client := newTestGitHubClient(t, ghSrv)
-		pr := &model.PullRequest{
-			RepoOwner: "mattermost",
-			RepoName:  "mattermost-desktop",
-			Number:    99,
-			Ref:       "feature-branch",
-			Sha:       "abc123",
-		}
-
-		err := s.triggerDesktopE2EWorkflow(context.Background(), client, pr, instances)
-		require.NoError(t, err)
-		require.Len(t, *captures, 1)
-
-		c := (*captures)[0]
-		assert.Equal(t, "11.6.0", c.Inputs["MM_SERVER_VERSION"],
-			"MM_SERVER_VERSION must be the resolved instance version, not the 'latest' config sentinel")
-		assert.NotEqual(t, s.Config.E2EServerVersion, c.Inputs["MM_SERVER_VERSION"],
-			"MM_SERVER_VERSION must NOT be the raw config value when config is 'latest'")
-	})
-
-	t.Run("mobile dispatch does not include MM_SERVER_VERSION", func(t *testing.T) {
-		// Drive triggerMobileE2EWorkflow so we assert the real payload, not a hand-built map.
-		s := newDryRunServer(t, "", "mattermost")
-		instances := makeMobileInstances()
-		for _, instance := range instances {
-			instance.ServerVersion = "11.6.0"
-		}
-
-		ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
-		client := newTestGitHubClient(t, ghSrv)
-		pr := &model.PullRequest{
-			RepoOwner: "mattermost",
-			RepoName:  "mattermost-mobile",
-			Number:    99,
-			Ref:       "feature-branch",
-			Sha:       "feature-sha",
-		}
-
-		err := s.triggerMobileE2EWorkflow(context.Background(), client, pr, instances, "both")
-		require.NoError(t, err)
-		require.Len(t, *captures, 1)
-
-		c := (*captures)[0]
-		assert.NotContains(t, c.Inputs, "MM_SERVER_VERSION",
-			"mobile dispatch must never include MM_SERVER_VERSION")
-		assert.NotContains(t, c.Inputs, "instance_details",
-			"mobile dispatch must never include instance_details")
-		assert.Equal(t, "https://android-site1.test.example.com", c.Inputs["ANDROID_SITE_1_URL"])
-		assert.Equal(t, "https://android-site2.test.example.com", c.Inputs["ANDROID_SITE_2_URL"])
-		assert.Equal(t, "https://ios-site1.test.example.com", c.Inputs["IOS_SITE_1_URL"])
-		assert.Equal(t, "https://ios-site2.test.example.com", c.Inputs["IOS_SITE_2_URL"])
-		assert.Equal(t, "https://site3.test.example.com", c.Inputs["SITE_3_URL"])
-	})
-
 	t.Run("resolveMattermostServerVersion with latest returns Docker Hub compatible version", func(t *testing.T) {
 		// Docker Hub tags are bare semver (e.g. "11.6.0"), NOT "v11.6.0".
 		// Verify the v-stripping produces a Docker Hub compatible string.

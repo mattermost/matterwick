@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,138 +101,127 @@ func makeOxideInstances() []*E2EInstance {
 	return out
 }
 
-func TestIsOxideRepo(t *testing.T) {
+func TestE2EProfileFor(t *testing.T) {
 	for _, tt := range []struct {
 		repo string
-		want bool
+		want *e2eProfile
 	}{
-		{"mattermost-mobile-oxide", true},
-		{"Mattermost-Mobile-Oxide", true},
-		{"mattermost-mobile", false},
-		{"mattermost-desktop", false},
-		{"mattermost-mobile-oxide-fork", false},
-		{"oxide", false},
-		{"", false},
+		// Oxide is matched by exact name before the "mobile" substring: otherwise an Oxide
+		// event would provision, dispatch to and clean up mattermost-mobile's servers.
+		{"mattermost-mobile-oxide", oxideE2EProfile},
+		{"Mattermost-Mobile-Oxide", oxideE2EProfile},
+		{"mattermost-mobile", mobileE2EProfile},
+		{"desktop", desktopE2EProfile},
+		{"mattermost-server", nil},
 	} {
 		t.Run(tt.repo, func(t *testing.T) {
-			assert.Equal(t, tt.want, isOxideRepo(tt.repo))
+			assert.Same(t, tt.want, e2eProfileFor(tt.repo))
 		})
 	}
-}
 
-func TestOxideTopology(t *testing.T) {
-	assert.Equal(t, []string{
-		"android-site-1", "android-site-2", "android-site-3",
-		"ios-site-1", "ios-site-2", "ios-site-3",
-	}, oxideE2EPlatforms)
-	assert.Equal(t, []string{
-		"ANDROID_SITE_1_URL", "ANDROID_SITE_2_URL", "ANDROID_SITE_3_URL",
-		"IOS_SITE_1_URL", "IOS_SITE_2_URL", "IOS_SITE_3_URL",
-	}, oxideE2EWorkflowInputKeys)
-
-	// GitHub caps workflow_dispatch at 10 inputs: 6 URLs + MOBILE_VERSION + PLATFORM + pr_number.
-	assert.LessOrEqual(t, len(oxideE2EWorkflowInputKeys)+3, 10)
-
-	// DNS LIKE patterns ("<type>-%") must stay disjoint across repo kinds.
-	for _, other := range []string{"mobile", "desktop"} {
-		assert.False(t, strings.HasPrefix(other, oxideE2EInstanceType))
-		assert.False(t, strings.HasPrefix(oxideE2EInstanceType, other))
+	// DNS LIKE patterns ("<kind>-%") must stay disjoint across profiles.
+	for _, a := range e2eProfiles {
+		for _, b := range e2eProfiles {
+			if a != b {
+				assert.False(t, strings.HasPrefix(a.kind, b.kind), "%s must not start with %s", a.kind, b.kind)
+			}
+		}
 	}
 }
 
-func TestDryRun_OxideDispatch(t *testing.T) {
-	s := newDryRunServer(t, "", "mattermost")
-	instances := makeOxideInstances()
+func instancesFor(platforms []string) []*E2EInstance {
+	var out []*E2EInstance
+	for i, p := range platforms {
+		out = append(out, &E2EInstance{Platform: p, URL: "https://" + p + ".test", InstallationID: fmt.Sprintf("id-%d", i), ServerVersion: "11.9.0"})
+	}
+	return out
+}
+
+// TestDispatchE2E pins every profile's dispatch for PR and push runs: the workflow, the ref,
+// and the exact input set (GitHub rejects undeclared inputs with 422 and allows at most 10).
+func TestDispatchE2E(t *testing.T) {
+	pr := e2eRun{owner: "mattermost", ref: "feature-x", sha: "prsha", prNumber: 42, platform: "ios"}
+	push := e2eRun{owner: "mattermost", ref: "main", sha: "pushsha", platform: "both"}
+	reversed := instancesFor(oxideE2EPlatforms)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	mobileURLs := map[string]interface{}{
+		"ANDROID_SITE_1_URL": "https://android-site-1.test", "ANDROID_SITE_2_URL": "https://android-site-2.test",
+		"IOS_SITE_1_URL": "https://ios-site-1.test", "IOS_SITE_2_URL": "https://ios-site-2.test", "SITE_3_URL": "https://site-3.test",
+	}
+	oxideURLs := map[string]interface{}{
+		"ANDROID_SITE_1_URL": "https://android-site-1.test", "ANDROID_SITE_2_URL": "https://android-site-2.test", "ANDROID_SITE_3_URL": "https://android-site-3.test",
+		"IOS_SITE_1_URL": "https://ios-site-1.test", "IOS_SITE_2_URL": "https://ios-site-2.test", "IOS_SITE_3_URL": "https://ios-site-3.test",
+	}
+	with := func(base map[string]interface{}, extra map[string]interface{}) map[string]interface{} {
+		out := map[string]interface{}{}
+		for k, v := range base {
+			out[k] = v
+		}
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	}
+	desktopDetails := `[{"platform":"linux","runner":"ubuntu-latest","url":"https://linux.test","installation-id":"id-0","server_version":"11.9.0"},` +
+		`{"platform":"macos","runner":"macos-latest","url":"https://macos.test","installation-id":"id-1","server_version":"11.9.0"},` +
+		`{"platform":"windows","runner":"windows-2022","url":"https://windows.test","installation-id":"id-2","server_version":"11.9.0"}]`
 
 	for _, tt := range []struct {
-		label    string
-		platform string
+		name      string
+		profile   *e2eProfile
+		run       e2eRun
+		instances []*E2EInstance
+		want      map[string]interface{}
+		wantErr   string
 	}{
-		{"E2E/Run", "both"},
-		{"E2E/Run-iOS", "ios"},
-		{"E2E/Run-Android", "android"},
+		{"desktop PR", desktopE2EProfile, pr, instancesFor(desktopE2EProfile.platforms), map[string]interface{}{
+			"instance_details": desktopDetails, "version_name": "feature-x", "MM_TEST_USER_NAME": "e2eadmin", "MM_SERVER_VERSION": "11.9.0", "pr_number": "42"}, ""},
+		{"desktop push", desktopE2EProfile, push, instancesFor(desktopE2EProfile.platforms), map[string]interface{}{
+			"instance_details": desktopDetails, "version_name": "main", "MM_TEST_USER_NAME": "e2eadmin", "MM_SERVER_VERSION": "11.9.0", "run_type": "MASTER"}, ""},
+		{"mobile PR", mobileE2EProfile, pr, instancesFor(mobileE2EPlatforms),
+			with(mobileURLs, map[string]interface{}{"MOBILE_VERSION": "prsha", "PLATFORM": "ios", "pr_number": "42"}), ""},
+		{"mobile push", mobileE2EProfile, push, instancesFor(mobileE2EPlatforms),
+			with(mobileURLs, map[string]interface{}{"MOBILE_VERSION": "pushsha", "PLATFORM": "both", "run_type": "MASTER"}), ""},
+		{"oxide PR, instances in any order", oxideE2EProfile, pr, reversed,
+			with(oxideURLs, map[string]interface{}{"MOBILE_VERSION": "prsha", "PLATFORM": "ios", "pr_number": "42"}), ""},
+		{"oxide push: empty pr_number marks a default-branch run", oxideE2EProfile, push, instancesFor(oxideE2EPlatforms),
+			with(oxideURLs, map[string]interface{}{"MOBILE_VERSION": "pushsha", "PLATFORM": "both", "pr_number": ""}), ""},
+		{"missing a server", mobileE2EProfile, pr, instancesFor(mobileE2EPlatforms)[:4], nil, "mobile E2E requires exactly 5 instances, got 4"},
+		{"wrong slot", oxideE2EProfile, pr, instancesFor(append([]string{"site-3"}, oxideE2EPlatforms[1:]...)), nil, "E2E missing instance for platform android-site-1"},
 	} {
-		t.Run(tt.label, func(t *testing.T) {
-			platform := s.extractPlatformFromLabel(tt.label)
-			require.Equal(t, tt.platform, platform)
+		t.Run(tt.name, func(t *testing.T) {
+			s := newDryRunServer(t, "", "mattermost")
+			gh, captures := mockGitHubServer(t, http.StatusNoContent)
+			s.githubAPIBase = gh.URL + "/"
+			run := tt.run
+			run.repo = "repo-under-test"
 
-			ghSrv, captures := mockGitHubServer(t, http.StatusNoContent)
-			pr := &model.PullRequest{
-				RepoOwner: "mattermost",
-				RepoName:  "mattermost-mobile-oxide",
-				Number:    42,
-				Ref:       "feature-oxide",
-				Sha:       "abc999",
+			err := s.dispatchE2E(tt.profile, run, tt.instances)
+
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Empty(t, *captures)
+				return
 			}
-			require.NoError(t, s.triggerOxideE2EWorkflow(context.Background(), newTestGitHubClient(t, ghSrv), pr, instances, platform))
+			require.NoError(t, err)
 			require.Len(t, *captures, 1)
-
 			c := (*captures)[0]
-			assert.Equal(t, oxideE2EWorkflowFile, c.Workflow)
-			assert.Equal(t, "mattermost-mobile-oxide", c.Repo)
-			assert.Equal(t, "feature-oxide", c.Ref)
-
-			var keys []string
-			for k := range c.Inputs {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			assert.Equal(t, []string{
-				"ANDROID_SITE_1_URL", "ANDROID_SITE_2_URL", "ANDROID_SITE_3_URL",
-				"IOS_SITE_1_URL", "IOS_SITE_2_URL", "IOS_SITE_3_URL",
-				"MOBILE_VERSION", "PLATFORM", "pr_number",
-			}, keys, "inputs must exactly match e2e-matterwick.yml's declared inputs")
-
-			assert.Equal(t, tt.platform, c.Inputs["PLATFORM"])
-			assert.Equal(t, "abc999", c.Inputs["MOBILE_VERSION"])
-			assert.Equal(t, "42", c.Inputs["pr_number"])
-			for i, p := range oxideE2EPlatforms {
-				assert.Equal(t, "https://"+p+".test.example.com", c.Inputs[oxideE2EWorkflowInputKeys[i]])
-			}
+			assert.Equal(t, tt.profile.workflow, c.Workflow)
+			assert.Equal(t, "repo-under-test", c.Repo)
+			assert.Equal(t, run.ref, c.Ref)
+			assert.Equal(t, tt.want, c.Inputs)
+			assert.LessOrEqual(t, len(c.Inputs), 10)
 		})
 	}
-}
-
-func TestBuildURLInputs(t *testing.T) {
-	t.Run("order independent", func(t *testing.T) {
-		instances := makeOxideInstances()
-		for i, j := 0, len(instances)-1; i < j; i, j = i+1, j-1 {
-			instances[i], instances[j] = instances[j], instances[i]
-		}
-		inputs, err := buildURLInputs("oxide", instances, oxideE2EPlatforms, oxideE2EWorkflowInputKeys)
-		require.NoError(t, err)
-		assert.Equal(t, "https://ios-site-3.test.example.com", inputs["IOS_SITE_3_URL"])
-		assert.Equal(t, "https://android-site-1.test.example.com", inputs["ANDROID_SITE_1_URL"])
-	})
-
-	t.Run("count mismatch", func(t *testing.T) {
-		_, err := buildURLInputs("oxide", makeOxideInstances()[:5], oxideE2EPlatforms, oxideE2EWorkflowInputKeys)
-		require.EqualError(t, err, "oxide E2E requires exactly 6 instances, got 5")
-	})
-
-	t.Run("missing platform", func(t *testing.T) {
-		instances := makeOxideInstances()
-		instances[0].Platform = "site-3"
-		_, err := buildURLInputs("oxide", instances, oxideE2EPlatforms, oxideE2EWorkflowInputKeys)
-		require.EqualError(t, err, "oxide E2E missing instance for platform android-site-1")
-	})
-
-	t.Run("topology mismatch", func(t *testing.T) {
-		_, err := buildURLInputs("oxide", makeOxideInstances(), oxideE2EPlatforms, oxideE2EWorkflowInputKeys[:5])
-		require.Error(t, err)
-	})
-
-	t.Run("mobile wrapper unchanged", func(t *testing.T) {
-		_, err := buildMobileURLInputs(makeMobileInstances()[:3])
-		require.EqualError(t, err, "mobile E2E requires exactly 5 instances, got 3")
-	})
 }
 
 func TestOxideInstanceNamesFitAndParse(t *testing.T) {
 	const dns = "test.mattermost.cloud"
 	// Longest realistic name: 5-digit PR number, longest platform token.
-	full := strings.Join([]string{oxideE2EInstanceType, "pr-99999", "android-site-3", "abcdef12"}, "-")
-	assert.Equal(t, full, e2eInstanceName(dns, oxideE2EInstanceType, "pr-99999", "android-site-3", "abcdef12"),
+	full := strings.Join([]string{oxideE2EProfile.kind, "pr-99999", "android-site-3", "abcdef12"}, "-")
+	assert.Equal(t, full, e2eInstanceName(dns, oxideE2EProfile.kind, "pr-99999", "android-site-3", "abcdef12"),
 		"oxide instance names must not be truncated, or the platform suffix becomes unparseable")
 
 	// Reuse path: OwnerIDs come back in arbitrary order and must map to every platform.
@@ -250,7 +240,7 @@ func TestOxideInstanceNamesFitAndParse(t *testing.T) {
 
 	s, fc := newFakeCloudServer(t, string(listJSON))
 	pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: "mattermost-mobile-oxide", Number: 12}
-	found, err := s.findExistingE2EInstancesInCloud(pr, oxideE2EInstanceType, oxideE2EPlatforms)
+	found, err := s.findExistingE2EInstancesInCloud(pr, oxideE2EProfile)
 	require.NoError(t, err)
 	require.Len(t, found, len(oxideE2EPlatforms))
 	for i, p := range oxideE2EPlatforms {
@@ -304,7 +294,7 @@ func TestGetE2EPassword_OxideUsesMobileSecret(t *testing.T) {
 	t.Setenv("MM_DESKTOP_E2E_USER_CREDENTIALS", "desktop-secret")
 	s := &Server{Config: &MatterwickConfig{}, Logger: logrus.New()}
 
-	assert.Equal(t, "mobile-secret", s.getE2EPassword(oxideE2EInstanceType))
+	assert.Equal(t, "mobile-secret", s.getE2EPassword(oxideE2EProfile.kind))
 	assert.Equal(t, "mobile-secret", s.getE2EPassword("mobile"))
 	assert.Equal(t, "desktop-secret", s.getE2EPassword("desktop"))
 }
@@ -329,33 +319,11 @@ func TestCreateCloudInstallation_OxideEnvMatchesMobile(t *testing.T) {
 
 	mobile := priorityEnv("mobile")
 	require.NotEmpty(t, mobile)
-	assert.Equal(t, mobile, priorityEnv(oxideE2EInstanceType), "Oxide must get exactly the mobile server baseline")
+	assert.Equal(t, mobile, priorityEnv(oxideE2EProfile.kind), "Oxide must get exactly the mobile server baseline")
 	assert.NotEqual(t, mobile, priorityEnv("desktop"))
 }
 
-func TestHandlePushEventE2E_SkipsOxide(t *testing.T) {
-	s, fc := newFakeCloudServer(t, "[]")
-	s.Config.E2EOxideEnabled = true
-	s.Config.E2EAutoTriggerOnMaster = true
-	repo := "mattermost-mobile-oxide"
-	sha := "abc"
-	event := &gogithub.PushEvent{
-		Repo:       &gogithub.PushEventRepository{Name: &repo},
-		HeadCommit: &gogithub.HeadCommit{ID: &sha},
-	}
-
-	logger, hook := test.NewNullLogger()
-	s.Logger = logger
-
-	s.handlePushEventE2E(event, "main")
-
-	assert.Zero(t, fc.count(), "the desktop/mobile push path must never provision servers for Oxide")
-	require.NotNil(t, hook.LastEntry())
-	assert.Equal(t, "Oxide push E2E is handled by handleOxidePushEventE2E, skipping", hook.LastEntry().Message)
-}
-
-func oxidePushEvent(ref, defaultBranch, sha string, deleted bool) *gogithub.PushEvent {
-	repo := oxideRepoName
+func pushEvent(repo, ref, defaultBranch, sha string, deleted bool) *gogithub.PushEvent {
 	return &gogithub.PushEvent{
 		Ref:        &ref,
 		Deleted:    &deleted,
@@ -364,9 +332,10 @@ func oxidePushEvent(ref, defaultBranch, sha string, deleted bool) *gogithub.Push
 	}
 }
 
-func TestOxidePushE2ESkipReason(t *testing.T) {
+func TestPushE2ESkipReason(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
+		repo          string
 		oxideEnabled  bool
 		autoTrigger   bool
 		branch        string
@@ -374,36 +343,38 @@ func TestOxidePushE2ESkipReason(t *testing.T) {
 		deleted       bool
 		want          string
 	}{
-		{"default branch push runs", true, true, "main", "main", false, ""},
-		{"non-main default branch runs", true, true, "trunk", "trunk", false, ""},
-		{"profile disabled", false, true, "main", "main", false, "Oxide E2E is disabled (E2EOxideEnabled=false)"},
-		{"auto-trigger disabled", true, false, "main", "main", false, "push E2E is disabled (E2EAutoTriggerOnMaster=false)"},
-		{"branch deleted", true, true, "main", "main", true, "branch was deleted"},
-		{"feature branch", true, true, "feature-x", "main", false, "push is not to the default branch"},
-		{"master is not the default branch", true, true, "master", "main", false, "push is not to the default branch"},
-		{"default branch unknown", true, true, "main", "", false, "push is not to the default branch"},
+		{"oxide default branch runs", oxideRepoName, true, true, "main", "main", false, ""},
+		{"mobile default branch runs", "mattermost-mobile", false, true, "main", "main", false, ""},
+		{"desktop master default branch runs", "desktop", false, true, "master", "master", false, ""},
+		{"no profile", "mattermost-server", true, true, "master", "master", false, "repository has no E2E profile"},
+		{"oxide disabled", oxideRepoName, false, true, "main", "main", false, "E2E is disabled for this repository"},
+		{"auto-trigger disabled", "mattermost-mobile", true, false, "main", "main", false, "push E2E is disabled (E2EAutoTriggerOnMaster=false)"},
+		{"branch deleted", oxideRepoName, true, true, "main", "main", true, "branch was deleted"},
+		{"feature branch", "mattermost-mobile", true, true, "feature-x", "main", false, "push is not to the default branch"},
+		{"master that is not the default branch", oxideRepoName, true, true, "master", "main", false, "push is not to the default branch"},
+		{"default branch unknown", oxideRepoName, true, true, "main", "", false, "push is not to the default branch"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Server{Config: &MatterwickConfig{E2EOxideEnabled: tt.oxideEnabled, E2EAutoTriggerOnMaster: tt.autoTrigger}}
-			event := oxidePushEvent("refs/heads/"+tt.branch, tt.defaultBranch, "abc", tt.deleted)
-			assert.Equal(t, tt.want, s.oxidePushE2ESkipReason(event, tt.branch))
+			event := pushEvent(tt.repo, "refs/heads/"+tt.branch, tt.defaultBranch, "abc", tt.deleted)
+			assert.Equal(t, tt.want, s.pushE2ESkipReason(e2eProfileFor(tt.repo), event, tt.branch))
 		})
 	}
 }
 
-func TestOxidePushInstanceNames(t *testing.T) {
+func TestPushInstanceNames(t *testing.T) {
 	const dns = "test.mattermost.cloud"
-	for _, p := range oxideE2EPlatforms {
-		full := strings.Join([]string{oxideE2EInstanceType, oxidePushE2ENameToken, p, "abcdef12"}, "-")
-		name := e2eInstanceName(dns, oxideE2EInstanceType, oxidePushE2ENameToken, p, "abcdef12")
-		assert.Equal(t, full, name, "push names must not be truncated")
-		assert.True(t, strings.HasPrefix(name, oxideE2EInstanceType+"-"), "the periodic scan must find push servers")
-		assert.NotContains(t, name, "-pr-", "push servers must use the non-PR max age and never match oxide-pr-<N>-%")
+	for _, p := range e2eProfiles {
+		for _, platform := range p.platforms {
+			name := e2eInstanceName(dns, p.kind, e2eRun{}.nameToken(), platform, "abcdef12")
+			assert.Equal(t, strings.Join([]string{p.kind, "push", platform, "abcdef12"}, "-"), name, "push names must not be truncated")
+			assert.NotContains(t, name, "-pr-", "push servers must use the non-PR max age and never match <kind>-pr-<N>-%")
+		}
 	}
 }
 
-// fakeOxideGitHub serves the commits lookup (HEAD sha, or headStatus) and records dispatches.
-func fakeOxideGitHub(t *testing.T, head string, headStatus, dispatchStatus int) (*httptest.Server, *[]dispatchCapture) {
+// fakePushGitHub serves the commits lookup (HEAD sha, or headStatus) and records dispatches.
+func fakePushGitHub(t *testing.T, head string, headStatus, dispatchStatus int) (*httptest.Server, *[]dispatchCapture) {
 	t.Helper()
 	dispatch, captures := mockGitHubServer(t, dispatchStatus)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -440,9 +411,10 @@ func instanceIDs(instances []*E2EInstance) []string {
 	return ids
 }
 
-func TestDispatchOxidePushRun(t *testing.T) {
+func TestDispatchPushRun(t *testing.T) {
 	const pushSHA = "1111111"
-	key := oxidePushInstanceKey(oxideRepoName, "main", pushSHA)
+	run := e2eRun{owner: "mattermost", repo: oxideRepoName, ref: "main", sha: pushSHA, platform: "both"}
+	key := run.key()
 
 	for _, tt := range []struct {
 		name           string
@@ -461,25 +433,18 @@ func TestDispatchOxidePushRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, fc := newFakeCloudServer(t, "[]")
 			s.Config.Org = "mattermost"
-			gh, captures := fakeOxideGitHub(t, tt.head, tt.headStatus, tt.dispatchStatus)
+			gh, captures := fakePushGitHub(t, tt.head, tt.headStatus, tt.dispatchStatus)
 			s.githubAPIBase = gh.URL + "/"
 			instances := makeOxideInstances()
 
-			s.dispatchOxidePushRun("mattermost", oxideRepoName, "main", pushSHA, instances, s.Logger)
+			s.dispatchPushRun(oxideE2EProfile, run, instances, s.Logger)
 
 			if tt.wantDispatch {
 				require.Len(t, *captures, 1)
 				c := (*captures)[0]
-				assert.Equal(t, oxideE2EWorkflowFile, c.Workflow)
-				assert.Equal(t, oxideRepoName, c.Repo)
+				assert.Equal(t, oxideE2EProfile.workflow, c.Workflow)
 				assert.Equal(t, "main", c.Ref)
-				assert.Equal(t, pushSHA, c.Inputs["MOBILE_VERSION"])
-				assert.Equal(t, "both", c.Inputs["PLATFORM"])
-				assert.Equal(t, "", c.Inputs["pr_number"], "an empty pr_number marks a default-branch run")
-				assert.Len(t, c.Inputs, 9, "inputs must exactly match e2e-matterwick.yml's declared inputs")
-				for i, p := range oxideE2EPlatforms {
-					assert.Equal(t, "https://"+p+".test.example.com", c.Inputs[oxideE2EWorkflowInputKeys[i]])
-				}
+				assert.Equal(t, pushSHA, c.Inputs["MOBILE_VERSION"], "the run must test the pushed commit")
 			} else {
 				assert.Empty(t, *captures)
 			}
@@ -499,66 +464,52 @@ func TestDispatchOxidePushRun(t *testing.T) {
 	}
 }
 
-func TestHandleWorkflowRunEvent_OxidePushCleanup(t *testing.T) {
-	const (
-		oxideWorkflowPath = ".github/workflows/" + oxideE2EWorkflowFile
-		doneKey           = "mattermost-mobile-oxide-push-main-sha1"
-		otherPushKey      = "mattermost-mobile-oxide-push-main-sha2"
-		prKey             = "mattermost-mobile-oxide-pr-5"
-	)
+func TestHandleWorkflowRunEvent_PushCleanup(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		repo       string
-		action     string
+		workflow   string // run name
 		path       string
+		action     string
 		headBranch string
-		headSHA    string
-		wantGone   []string
+		wantGone   bool // the run's own push servers are destroyed
 	}{
-		{"main run completed", oxideRepoName, "completed", oxideWorkflowPath, "main", "sha1", []string{doneKey}},
-		{"path with ref suffix", oxideRepoName, "completed", oxideWorkflowPath + "@refs/heads/main", "main", "sha1", []string{doneKey}},
-		{"PR run on the same commit", oxideRepoName, "completed", oxideWorkflowPath, "feature-x", "sha1", nil},
-		{"main run still in progress", oxideRepoName, "in_progress", oxideWorkflowPath, "main", "sha1", nil},
-		{"other Oxide workflow", oxideRepoName, "completed", ".github/workflows/ci.yml", "main", "sha1", nil},
+		{"oxide main run completed", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", true},
+		{"path with ref suffix", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml@refs/heads/main", "completed", "main", true},
+		{"mobile main run completed", "mattermost-mobile", "E2E", ".github/workflows/e2e-detox-pr.yml", "completed", "main", true},
+		{"desktop master run completed", "desktop", "Electron Playwright Tests", ".github/workflows/e2e-functional.yml", "completed", "master", true},
+		{"PR run on the same commit keeps main's servers", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "feature-x", false},
+		{"run still in progress", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "in_progress", "main", false},
+		{"another workflow", oxideRepoName, "ci", ".github/workflows/ci.yml", "completed", "main", false},
+		{"another repo's workflow file", "mattermost-mobile", "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s, fc := newFakeCloudServer(t, "[]")
-			s.Config.E2ETestWorkflowNames = []string{"E2E"}
-			tracked := map[string][]*E2EInstance{
-				doneKey:      {{InstallationID: "main-sha1"}},
-				otherPushKey: {{InstallationID: "main-sha2"}},
-				prKey:        {{InstallationID: "pr-5"}},
+			doneKey := pushRunKey(tt.repo, "main", "sha1")
+			if tt.headBranch == "master" {
+				doneKey = pushRunKey(tt.repo, "master", "sha1")
 			}
-			for k, v := range tracked {
-				s.e2eInstances[k] = v
-			}
+			otherPushKey := pushRunKey(tt.repo, "main", "sha2")
+			prKey := tt.repo + "-pr-5"
+			s.e2eInstances[doneKey] = []*E2EInstance{{InstallationID: "done"}}
+			s.e2eInstances[otherPushKey] = []*E2EInstance{{InstallationID: "other-push"}}
+			s.e2eInstances[prKey] = []*E2EInstance{{InstallationID: "pr"}}
 
 			s.handleWorkflowRunEventWithInputs(&WorkflowRunWebhookPayload{
-				Action: tt.action,
-				WorkflowRun: WorkflowRunWithInputs{
-					ID: 1, Name: "maestro", HeadBranch: tt.headBranch, HeadSHA: tt.headSHA, Path: tt.path,
-				},
-				Repository: map[string]interface{}{
-					"name":  tt.repo,
-					"owner": map[string]interface{}{"login": "mattermost"},
-				},
+				Action:      tt.action,
+				WorkflowRun: WorkflowRunWithInputs{ID: 1, Name: tt.workflow, HeadBranch: tt.headBranch, HeadSHA: "sha1", Path: tt.path},
+				Repository:  map[string]interface{}{"name": tt.repo, "owner": map[string]interface{}{"login": "mattermost"}},
 			})
 
-			var wantDeleted []string
-			for k, v := range tracked {
-				gone := false
-				for _, g := range tt.wantGone {
-					gone = gone || g == k
-				}
-				if gone {
-					assert.NotContains(t, s.e2eInstances, k)
-					wantDeleted = append(wantDeleted, instanceIDs(v)...)
-				} else {
-					assert.Contains(t, s.e2eInstances, k)
-				}
+			assert.Contains(t, s.e2eInstances, otherPushKey)
+			assert.Contains(t, s.e2eInstances, prKey)
+			if tt.wantGone {
+				assert.NotContains(t, s.e2eInstances, doneKey)
+				assert.Equal(t, []string{"done"}, deletedInstallationIDs(fc))
+			} else {
+				assert.Contains(t, s.e2eInstances, doneKey)
+				assert.Empty(t, deletedInstallationIDs(fc))
 			}
-			sort.Strings(wantDeleted)
-			assert.Equal(t, wantDeleted, deletedInstallationIDs(fc))
 		})
 	}
 }
@@ -567,7 +518,7 @@ func TestParseWorkflowRunEvent_Path(t *testing.T) {
 	payload, err := ParseWorkflowRunEventWithInputs(strings.NewReader(
 		`{"action":"completed","workflow_run":{"name":"maestro","head_branch":"main","head_sha":"abc","path":".github/workflows/e2e-matterwick.yml"}}`))
 	require.NoError(t, err)
-	assert.True(t, isOxideE2EWorkflowRun(oxideRepoName, payload.WorkflowRun.Path))
+	assert.Equal(t, oxideE2EProfile.workflow, workflowFileOf(payload.WorkflowRun.Path))
 }
 
 func TestHandleCMTTrigger_SkipsOxide(t *testing.T) {
@@ -580,18 +531,7 @@ func TestHandleCMTTrigger_SkipsOxide(t *testing.T) {
 
 	assert.Zero(t, fc.count(), "CMT must never provision servers for Oxide")
 	require.NotNil(t, hook.LastEntry())
-	assert.Equal(t, "CMT is not enabled for Oxide, skipping CMT trigger", hook.LastEntry().Message)
-}
-
-func TestCancelPRWorkflowRuns_SkipsOxide(t *testing.T) {
-	logger, hook := test.NewNullLogger()
-	s := &Server{Config: &MatterwickConfig{GithubAccessToken: "t"}, Logger: logger}
-	pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: "mattermost-mobile-oxide", Number: 3, Ref: "b"}
-
-	s.cancelPRWorkflowRuns(pr, logger)
-
-	require.NotNil(t, hook.LastEntry())
-	assert.Equal(t, "Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)", hook.LastEntry().Message)
+	assert.Equal(t, "Repository has no CMT, skipping CMT trigger", hook.LastEntry().Message)
 }
 
 func TestLockE2EPRProvisioning(t *testing.T) {

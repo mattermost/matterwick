@@ -114,7 +114,6 @@ type MatterwickConfig struct {
 	E2EServerVersion        string
 	E2EAutoTriggerOnMaster  bool
 	E2EReleasePatternPrefix string
-	E2ETestWorkflowNames    []string // workflow names of the actual test workflows (for completion-based cleanup)
 	// E2EInstanceMaxAge is the minimum age (in hours) a non-PR E2E instance must reach
 	// before the periodic orphan-cleanup scan will delete it. This prevents the scan
 	// from destroying instances that are still being used by a currently-running test.
@@ -130,10 +129,8 @@ type MatterwickConfig struct {
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
 
-	// E2EOxideEnabled enables E2E for mattermost-mobile-oxide (6 servers, e2e-matterwick.yml):
-	// PR labels, and pushes to its default branch when E2EAutoTriggerOnMaster is also true.
-	// When false, Oxide E2E labels and pushes are ignored. Oxide CMT is always off, and
-	// PR-close cleanup only ever targets oxide-pr-<N>-*.
+	// E2EOxideEnabled enables E2E for mattermost-mobile-oxide (see e2eProfiles). When false,
+	// Oxide E2E labels and pushes are ignored; its servers are still cleaned up.
 	E2EOxideEnabled bool
 
 	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight

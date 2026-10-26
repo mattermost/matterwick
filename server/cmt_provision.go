@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -17,20 +16,12 @@ import (
 
 // handleCMTTrigger resolves instance type and server versions, then delegates to handleCMTWithServerVersions.
 func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
-	if isOxideRepo(repoName) {
-		// Oxide has no compatibility-matrix testing; the "mobile" substring below would
-		// otherwise provision mattermost-mobile's CMT servers.
-		logger.Warn("CMT is not enabled for Oxide, skipping CMT trigger")
+	p := e2eProfileFor(repoName)
+	if p == nil || !p.cmt {
+		logger.Warn("Repository has no CMT, skipping CMT trigger")
 		return
 	}
-
-	instanceType := "desktop"
-	if strings.Contains(repoName, "mobile") {
-		instanceType = "mobile"
-	} else if !strings.Contains(repoName, "desktop") {
-		logger.Warn("Repository is neither desktop nor mobile, skipping CMT trigger")
-		return
-	}
+	instanceType := p.kind
 
 	versions := s.cmtServerVersions(instanceType)
 	logger.WithFields(logrus.Fields{
@@ -453,47 +444,13 @@ func (s *Server) createMobileCMTInstances(ctx context.Context, repoName, version
 		platforms = mobileE2EPlatforms
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	type result struct {
-		instance *E2EInstance
-		err      error
-	}
-	results := make([]result, len(platforms))
-	var wg sync.WaitGroup
-	var firstErr error
-	var errMu sync.Mutex
+	slots := make([]e2eSlot, len(platforms))
 	for i, platform := range platforms {
-		wg.Add(1)
-		go func(idx int, platform string) {
-			defer wg.Done()
-			instance, err := s.createSingleCMTInstance(ctx, repoName, "mobile", version, platform, logger)
-			results[idx] = result{instance: instance, err: err}
-			if err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
-				}
-				errMu.Unlock()
-			}
-		}(i, platform)
+		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
+			return e2eInstanceName(s.Config.DNSNameTestServer, "mobile", sanitizeForDNS(version), platform, e2eUniqueSuffix())
+		}}
 	}
-	wg.Wait()
-
-	instances := make([]*E2EInstance, 0, len(results))
-	for _, result := range results {
-		if result.err != nil {
-			continue
-		}
-		instances = append(instances, result.instance)
-	}
-	if firstErr != nil {
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
-	}
-	return instances, nil
+	return s.provisionE2EInstances(ctx, slots, version, s.Config.E2EUsername, s.getE2EPassword("mobile"), "mobile", logger)
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml and polls for the run id used to key cleanup.

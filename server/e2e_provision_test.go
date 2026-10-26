@@ -167,6 +167,9 @@ func (sc *scriptedCloud) postCounts() map[string]int {
 	return out
 }
 
+// Provisioning tests use the desktop kind: mobile kinds also restart the server for Shared
+// Channels, which needs a real Mattermost client.
+
 // stubProvisioningTimers makes polling instant, skips the network-bound server setup, and
 // records every replacement backoff instead of waiting it out.
 func stubProvisioningTimers(t *testing.T) *[]time.Duration {
@@ -196,7 +199,7 @@ func oxideSlots(s *Server, platforms ...string) []e2eSlot {
 	slots := make([]e2eSlot, len(platforms))
 	for i, p := range platforms {
 		slots[i] = e2eSlot{platform: p, nameFn: func() string {
-			return e2eInstanceName(s.Config.DNSNameTestServer, oxideE2EInstanceType, "pr-1", p, e2eUniqueSuffix())
+			return e2eInstanceName(s.Config.DNSNameTestServer, oxideE2EProfile.kind, "pr-1", p, e2eUniqueSuffix())
 		}}
 	}
 	return slots
@@ -251,7 +254,7 @@ func TestProvisionE2EInstances(t *testing.T) {
 			sleeps := stubProvisioningTimers(t)
 			s, sc := newScriptedCloud(t, tt.script, tt.after)
 
-			instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1, site2, site3), "11.9.0", "admin", "pw", oxideE2EInstanceType, s.Logger)
+			instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1, site2, site3), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
 
 			if len(tt.wantErr) == 0 {
 				require.NoError(t, err)
@@ -294,7 +297,7 @@ func TestProvisionE2EInstances_CallerCancels(t *testing.T) {
 		cancel()
 	}()
 
-	instances, err := s.provisionE2EInstances(ctx, oxideSlots(s, site1, site2, site3), "11.9.0", "admin", "pw", oxideE2EInstanceType, s.Logger)
+	instances, err := s.provisionE2EInstances(ctx, oxideSlots(s, site1, site2, site3), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
 
 	require.Error(t, err)
 	assert.Nil(t, instances)
@@ -309,7 +312,7 @@ func TestProvisionE2EInstances_SlotTimeCap(t *testing.T) {
 	t.Cleanup(func() { e2eInstallationMaxDuration = orig })
 	s, sc := newScriptedCloud(t, map[string][]string{site1: {"stable"}, site2: {"pending"}}, nil)
 
-	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1, site2), "11.9.0", "admin", "pw", oxideE2EInstanceType, s.Logger)
+	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1, site2), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
 
 	require.Error(t, err)
 	assert.Nil(t, instances)

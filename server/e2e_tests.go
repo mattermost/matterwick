@@ -26,40 +26,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// E2EInstance represents a single E2E test server instance
-// Note: Platform field has different meanings for desktop vs mobile:
-//   - Desktop: Platform = OS runner (linux/macos/windows) where tests execute
-//   - Mobile: Platform = platform/site identifier for the test server
+// E2EInstance is one E2E test server.
 type E2EInstance struct {
 	Name           string `json:"name"`
-	Platform       string `json:"platform"` // Desktop: linux/macos/windows (OS runner), Mobile: platform/site instance ID
-	Runner         string `json:"runner"`   // For desktop only: GitHub Actions runner label
+	Platform       string `json:"platform"` // the profile slot: desktop OS (linux/macos/windows) or mobile site
 	URL            string `json:"url"`
 	InstallationID string `json:"installation_id"`
 	ServerVersion  string `json:"server_version"`
-}
-
-var mobileE2EPlatforms = []string{
-	"android-site-1",
-	"android-site-2",
-	"ios-site-1",
-	"ios-site-2",
-	"site-3",
-}
-
-var mobileE2EWorkflowInputKeys = []string{
-	"ANDROID_SITE_1_URL",
-	"ANDROID_SITE_2_URL",
-	"IOS_SITE_1_URL",
-	"IOS_SITE_2_URL",
-	"SITE_3_URL",
-}
-
-// buildMobileURLInputs maps each mobile instance's Platform to its workflow input URL.
-// It validates that exactly the canonical platforms are present and pairs them with
-// mobileE2EWorkflowInputKeys so callers cannot drift from the canonical order.
-func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
-	return buildURLInputs("mobile", instances, mobileE2EPlatforms, mobileE2EWorkflowInputKeys)
 }
 
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
@@ -108,34 +81,17 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	})
 	logger.Info("Handling E2E test request")
 
-	// Determine instance type and platforms first — needed for both reuse lookup and creation.
-	var instanceType string
-	var platforms []string
-	var testPlatform string // For mobile: which OS to test (ios/android/both). For desktop: unused (tests all OS platforms)
-
-	if isOxideRepo(pr.RepoName) {
-		// Checked first: the Oxide repo name also contains "mobile".
-		if !s.Config.E2EOxideEnabled {
-			logger.Info("Oxide E2E is disabled (E2EOxideEnabled=false), ignoring E2E label")
-			return
-		}
-		instanceType = oxideE2EInstanceType
-		platforms = oxideE2EPlatforms
-		testPlatform = s.extractPlatformFromLabel(label)
-		logger.WithField("testPlatform", testPlatform).Info("Detected Oxide test platform from label (ios/android/both)")
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		instanceType = "desktop"
-		platforms = []string{"linux", "macos", "windows"}
-		testPlatform = "all"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		instanceType = "mobile"
-		platforms = mobileE2EPlatforms
-		testPlatform = s.extractPlatformFromLabel(label)
-		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
-	} else {
-		logger.Error("Unable to determine E2E instance type from repository name")
+	p := e2eProfileFor(pr.RepoName)
+	if p == nil {
+		logger.Error("Repository has no E2E profile")
 		return
 	}
+	if !s.e2eEnabled(p) {
+		logger.WithField("kind", p.kind).Info("E2E is disabled for this repository, ignoring E2E label")
+		return
+	}
+	run := e2eRun{owner: pr.RepoOwner, repo: pr.RepoName, ref: pr.Ref, sha: pr.Sha, prNumber: pr.Number, platform: s.extractPlatformFromLabel(label)}
+	logger = logger.WithFields(logrus.Fields{"kind": p.kind, "testPlatform": run.platform})
 
 	// The dispatch targets a branch of the base repo and the workflow holds secrets, so fork PRs
 	// never get servers.
@@ -147,10 +103,10 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+	key := run.key()
 
 	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
-	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
+	inProgressKey := fmt.Sprintf("%s-%s", key, run.platform)
 	s.e2eInProgressLock.Lock()
 	if s.e2eInProgress[inProgressKey] {
 		s.e2eInProgressLock.Unlock()
@@ -170,10 +126,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	unlock := s.lockE2EPRProvisioning(key)
 	defer unlock()
 
-	// Desktop and mobile start every run on fresh servers, but only when no other E2E run or
-	// provisioning is active on the PR: Android and iOS runs share one server set, so tearing
-	// it down mid-run would break the other platform's run. Otherwise reuse, as before.
-	fresh := instanceType != oxideE2EInstanceType && s.isPRE2EIdle(pr, key, inProgressKey, logger)
+	// Every run starts on fresh servers, but only when no other E2E run or provisioning is
+	// active on the PR: Android and iOS runs share one server set, so tearing it down mid-run
+	// would break the other platform's run. Otherwise reuse. Superseded runs are cancelled by
+	// each workflow's own concurrency group.
+	fresh := s.isPRE2EIdle(pr, p.workflow, key, inProgressKey, logger)
 	if fresh {
 		logger.Info("No other E2E run active on this PR; replacing its servers with fresh ones")
 		s.handleE2ECleanup(pr)
@@ -204,9 +161,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
 		s.wakeUpHibernatingInstances(existingInstances, logger)
-		if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
+		if err := s.dispatchE2E(p, run, existingInstances); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 		}
@@ -215,16 +171,15 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if !fresh {
-		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
+		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-			s.cancelPRWorkflowRuns(pr, logger)
 			s.wakeUpHibernatingInstances(cloudInstances, logger)
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
 				s.destroyE2EInstances(cloudInstances, logger)
 				return
 			}
-			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+			if err := s.dispatchE2E(p, run, cloudInstances); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 			}
@@ -233,7 +188,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	}
 
 	// 3. No existing instances — create fresh ones.
-	instances, err := s.createMultipleE2EInstances(pr, instanceType, platforms)
+	instances, err := s.provisionRun(p, run, logger)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to create E2E test instances: %v", err))
@@ -265,7 +220,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
-	if err = s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform); err != nil {
+	if err = s.dispatchE2E(p, run, instances); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 		// Remove from tracking before cleanup to avoid double-destroy on later cleanup.
@@ -279,36 +234,18 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.Info("Successfully triggered E2E workflow")
 }
 
-// createMultipleE2EInstances creates instances in parallel; results are in platforms[] order for stable index assignment.
-func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
-	if len(platforms) == 0 {
-		return nil, fmt.Errorf("no platforms specified")
-	}
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":      pr.RepoName,
-		"pr":        pr.Number,
-		"type":      instanceType,
-		"platforms": len(platforms),
-	})
-
-	version := s.resolveMattermostServerVersion()
-	username := s.Config.E2EUsername
-	password := s.getE2EPassword(instanceType)
-
-	// Name format: {type}-pr-{pr}-{platform}-{hex8}. Fresh uid per attempt: a replacement
-	// must not reuse the failed installation's DNS name.
-	slots := make([]e2eSlot, len(platforms))
-	for i, platform := range platforms {
+// provisionRun creates one fresh server per profile slot for run.
+// Names: <kind>-pr-<N>-<platform>-<uid> or <kind>-push-<platform>-<uid>.
+func (s *Server) provisionRun(p *e2eProfile, run e2eRun, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	slots := make([]e2eSlot, len(p.platforms))
+	for i, platform := range p.platforms {
+		// Fresh uid per attempt: a replacement must not reuse the failed installation's DNS name.
 		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
-			return e2eInstanceName(
-				s.Config.DNSNameTestServer,
-				instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, e2eUniqueSuffix(),
-			)
+			return e2eInstanceName(s.Config.DNSNameTestServer, p.kind, run.nameToken(), platform, e2eUniqueSuffix())
 		}}
 	}
-	logger.Info("Creating E2E instances")
-	return s.provisionE2EInstances(context.Background(), slots, version, username, password, instanceType, logger)
+	logger.WithField("servers", len(slots)).Info("Creating E2E instances")
+	return s.provisionE2EInstances(context.Background(), slots, s.resolveMattermostServerVersion(), s.Config.E2EUsername, s.getE2EPassword(p.kind), p.kind, logger)
 }
 
 // e2eSlot is one server of a parallel E2E set.
@@ -359,9 +296,6 @@ func (s *Server) provisionE2EInstances(ctx context.Context, slots []e2eSlot, ver
 				return
 			}
 			inst.Platform = slot.platform
-			if instanceType == "desktop" {
-				inst.Runner = getRunnerForPlatform(slot.platform)
-			}
 			results[idx] = result{instance: inst}
 		}(i, slot)
 	}
@@ -601,8 +535,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
 		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
-	// Oxide gets the mobile baseline unchanged; no Oxide-only server settings.
-	if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
+	if mobileServerKind(instanceType) {
 		envVars["MM_FEATUREFLAGS_CHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"] = cloudModel.EnvVar{Value: "true"}
@@ -673,7 +606,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
 	}
 
-	if instanceType == "mobile" {
+	if mobileServerKind(instanceType) {
 		if err := s.restartWithSharedChannels(ctx, adminClient, installation.ID, logger); err != nil {
 			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to enable Shared Channels: %w", err))
 		}
@@ -772,7 +705,7 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	// Try config first, then fall back to environment variables
 	password = s.Config.E2EPassword
 	if password == "" {
-		if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
+		if mobileServerKind(instanceType) {
 			password = os.Getenv("MM_MOBILE_E2E_ADMIN_PASSWORD")
 		} else {
 			password = os.Getenv("MM_DESKTOP_E2E_USER_CREDENTIALS")
@@ -870,30 +803,29 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	return client, nil
 }
 
-// triggerE2EWorkflow triggers the appropriate E2E workflow with instance details
-// testPlatform parameter:
-//   - For desktop: "all" (tests run on linux/macos/windows automatically)
-//   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
-func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
-	ctx := context.Background()
+// dispatchE2E dispatches p's workflow for run on run.ref with the profile's inputs.
+func (s *Server) dispatchE2E(p *e2eProfile, run e2eRun, instances []*E2EInstance) error {
+	if len(instances) != len(p.platforms) {
+		return fmt.Errorf("%s E2E requires exactly %d instances, got %d", p.kind, len(p.platforms), len(instances))
+	}
+	inputs, err := p.inputs(s, run, instances)
+	if err != nil {
+		return err
+	}
 	client := s.e2eGithubClient()
-
-	var err error
-	if instanceType == "desktop" {
-		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
-		err = s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
-	} else if instanceType == "mobile" {
-		// Mobile uses testPlatform to determine which mobile OS to test (ios/android/both)
-		err = s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
-	} else if instanceType == oxideE2EInstanceType {
-		err = s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
-	} else {
-		return fmt.Errorf("unknown instance type: %s", instanceType)
+	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches", run.owner, run.repo, p.workflow),
+		map[string]interface{}{"ref": run.ref, "inputs": inputs})
+	if err != nil {
+		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
 	}
-	if err == nil {
-		s.e2eLastDispatch.Store(fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number), time.Now())
+	if _, err := client.Do(context.Background(), req, nil); err != nil {
+		return fmt.Errorf("failed to dispatch %s: %w", p.workflow, err)
 	}
-	return err
+	if run.prNumber > 0 {
+		s.e2eLastDispatch.Store(run.key(), time.Now())
+	}
+	s.Logger.WithFields(logrus.Fields{"repo": run.repo, "ref": run.ref, "workflow": p.workflow, "pr": run.prNumber}).Info("Dispatched E2E workflow")
+	return nil
 }
 
 // e2eGithubClient returns a GitHub client, pointed at the test server when one is set.
@@ -917,99 +849,6 @@ func (s *Server) lockE2EPRProvisioning(key string) func() {
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
-}
-
-// triggerDesktopE2EWorkflow triggers the desktop E2E workflow
-func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance) error {
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
-		"type": "desktop",
-	})
-
-	// Convert instances to JSON for workflow input using consistent schema
-	instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
-	if err != nil {
-		return fmt.Errorf("failed to marshal instance details: %w", err)
-	}
-
-	// Use the github REST API to trigger the workflow_dispatch event
-	body := map[string]interface{}{
-		"ref": pr.Ref,
-		"inputs": map[string]interface{}{
-			"instance_details":  instanceDetailsJSON,
-			"version_name":      pr.Ref,
-			"MM_TEST_USER_NAME": s.Config.E2EUsername,
-			"MM_SERVER_VERSION": instances[0].ServerVersion,
-			"pr_number":         fmt.Sprintf("%d", pr.Number),
-		},
-	}
-
-	logger.WithField("instances_json", string(instanceDetailsJSON)).Debug("Triggering desktop E2E workflow")
-
-	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", pr.RepoOwner, pr.RepoName), body)
-	if err != nil {
-		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
-	}
-
-	_, err = client.Do(ctx, req, nil)
-	if err != nil {
-		return fmt.Errorf("failed to trigger desktop e2e workflow: %w", err)
-	}
-
-	logger.Info("Successfully triggered desktop E2E workflow")
-	return nil
-}
-
-// triggerMobileE2EWorkflow triggers the mobile E2E workflow
-// testPlatform specifies which mobile OS to test: "ios", "android", or "both"
-func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance, testPlatform string) error {
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":         pr.RepoName,
-		"pr":           pr.Number,
-		"type":         "mobile",
-		"testPlatform": testPlatform, // ios/android/both
-	})
-
-	if len(instances) != len(mobileE2EPlatforms) {
-		return fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
-	}
-
-	// Build workflow inputs keyed by Platform so dispatch order is independent of slice order.
-	mobileInputs, err := buildMobileURLInputs(instances)
-	if err != nil {
-		return err
-	}
-
-	inputs := map[string]interface{}{
-		"MOBILE_VERSION": pr.Sha,
-		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
-		"pr_number":      fmt.Sprintf("%d", pr.Number),
-	}
-	for inputKey, url := range mobileInputs {
-		inputs[inputKey] = url
-	}
-
-	// Use the github REST API to trigger the workflow_dispatch event
-	body := map[string]interface{}{
-		"ref":    pr.Ref,
-		"inputs": inputs,
-	}
-
-	logger.WithField("workflow", "e2e-detox-pr.yml").Debug("Triggering mobile E2E workflow")
-
-	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", pr.RepoOwner, pr.RepoName), body)
-	if err != nil {
-		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
-	}
-
-	_, err = client.Do(ctx, req, nil)
-	if err != nil {
-		return fmt.Errorf("failed to trigger mobile e2e workflow: %w", err)
-	}
-
-	logger.Info("Successfully triggered mobile E2E workflow")
-	return nil
 }
 
 // handleE2ECleanup destroys tracked E2E instances, then queries the cloud API by DNS pattern to catch orphans.
@@ -1049,22 +888,14 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 
 // cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
 func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
-	var instanceType string
-	if isOxideRepo(pr.RepoName) {
-		// Checked first so an Oxide PR close never matches mobile-pr-<N>-% (mattermost-mobile's
-		// servers for the same PR number). Runs even when E2EOxideEnabled is false so servers
-		// created before the flag was turned off are still removed.
-		instanceType = oxideE2EInstanceType
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		instanceType = "desktop"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		instanceType = "mobile"
-	} else {
+	// Runs even when the profile is disabled, so servers created before then are removed.
+	p := e2eProfileFor(pr.RepoName)
+	if p == nil {
 		logger.Debug("Skipping orphan E2E cleanup for non-E2E repo")
 		return
 	}
 
-	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number) // e.g. "mobile-pr-9587-%"
 
 	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 		DNS:    dnsPattern,
@@ -1137,7 +968,8 @@ func (s *Server) cleanupStaleE2EInstances() {
 
 	var reapedPRInstallationIDs []string
 
-	for _, instanceType := range []string{"desktop", "mobile", oxideE2EInstanceType} {
+	for _, p := range e2eProfiles {
+		instanceType := p.kind
 		pattern := instanceType + "-%"
 		installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 			DNS:    pattern,
@@ -1283,8 +1115,9 @@ func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.Fie
 // findExistingE2EInstancesInCloud queries the cloud API for E2E instances that match a PR and
 // reconstructs E2EInstance objects for reuse. Returns an error if the count doesn't match
 // the expected number of platforms (indicating a partial or fully absent set).
-func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
-	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number)
+func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2eProfile) ([]*E2EInstance, error) {
+	platforms := p.platforms
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number)
 
 	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 		DNS:    dnsPattern,
@@ -1341,17 +1174,13 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instance
 	result := make([]*E2EInstance, len(platforms))
 	for i, platform := range platforms {
 		inst := platformByInst[platform]
-		e2eInst := &E2EInstance{
+		result[i] = &E2EInstance{
 			Name:           inst.OwnerID,
 			Platform:       platform,
 			URL:            fmt.Sprintf("https://%s.%s", inst.OwnerID, s.Config.DNSNameTestServer),
 			InstallationID: inst.ID,
 			ServerVersion:  inst.Version,
 		}
-		if instanceType == "desktop" {
-			e2eInst.Runner = getRunnerForPlatform(platform)
-		}
-		result[i] = e2eInst
 	}
 	return result, nil
 }
@@ -1450,7 +1279,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	for i, inst := range instances {
 		details[i] = instanceDetail{
 			Platform:       inst.Platform,
-			Runner:         inst.Runner,
+			Runner:         getRunnerForPlatform(inst.Platform),
 			URL:            inst.URL,
 			InstallationID: inst.InstallationID,
 			ServerVersion:  inst.ServerVersion,
@@ -1465,135 +1294,6 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers e2e-functional.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"ref":  ref,
-	})
-
-	// Determine the server version to use for the workflow.
-	// Default to the configured E2E server version, but prefer the actual
-	// provisioned version from the instance details when available.
-	serverVersion := s.resolveMattermostServerVersion()
-	if instanceDetailsJSON != "" {
-		var instances []struct {
-			ServerVersion string `json:"server_version"`
-		}
-		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
-			if len(instances) > 0 && instances[0].ServerVersion != "" {
-				serverVersion = instances[0].ServerVersion
-			}
-		}
-	}
-
-	// Build the workflow dispatch request
-	workflowInputs := map[string]interface{}{
-		"instance_details":  instanceDetailsJSON,
-		"version_name":      ref,
-		"MM_TEST_USER_NAME": s.Config.E2EUsername,
-		"MM_SERVER_VERSION": serverVersion,
-		"run_type":          runType,
-	}
-
-	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger desktop E2E workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Desktop E2E workflow dispatched successfully")
-	return nil
-}
-
-// dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
-func (s *Server) dispatchMobileE2EWorkflow(
-	repoOwner, repoName, ref, sha string,
-	instances []*E2EInstance,
-	platform, runType string,
-) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	mobileInputs, err := buildMobileURLInputs(instances)
-	if err != nil {
-		return err
-	}
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"ref":  ref,
-	})
-
-	// Build the workflow dispatch request
-	workflowInputs := map[string]interface{}{
-		"MOBILE_VERSION": sha,
-		"PLATFORM":       platform,
-		"run_type":       runType,
-	}
-	for inputKey, url := range mobileInputs {
-		workflowInputs[inputKey] = url
-	}
-
-	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger mobile E2E workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Mobile E2E workflow dispatched successfully")
-	return nil
-}
-
-// prE2EWorkflowFile returns the PR E2E workflow file for a desktop or mobile repo, or "".
-func prE2EWorkflowFile(repoName string) string {
-	if isOxideRepo(repoName) {
-		return ""
-	} else if strings.Contains(repoName, "desktop") {
-		return "e2e-functional.yml"
-	} else if strings.Contains(repoName, "mobile") {
-		return "e2e-detox-pr.yml"
-	}
-	return ""
-}
-
 // e2eDispatchGracePeriod covers the delay between a workflow dispatch and GitHub listing
 // the run: a trigger within it counts as busy.
 const e2eDispatchGracePeriod = 5 * time.Minute
@@ -1602,7 +1302,7 @@ const e2eDispatchGracePeriod = 5 * time.Minute
 // platform's request is provisioning, no E2E workflow was dispatched for the PR in the last
 // e2eDispatchGracePeriod, and no E2E workflow run on the PR branch is queued or running.
 // Any error counts as busy, so an unknown state never tears servers down.
-func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, logger logrus.FieldLogger) bool {
+func (s *Server) isPRE2EIdle(pr *model.PullRequest, workflowFile, key, inProgressKey string, logger logrus.FieldLogger) bool {
 	s.e2eInProgressLock.Lock()
 	for k := range s.e2eInProgress {
 		if k != inProgressKey && strings.HasPrefix(k, key+"-") {
@@ -1615,11 +1315,6 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 
 	if last, ok := s.e2eLastDispatch.Load(key); ok && time.Since(last.(time.Time)) < e2eDispatchGracePeriod {
 		logger.Info("An E2E workflow was dispatched for this PR moments ago; reusing servers")
-		return false
-	}
-
-	workflowFile := prE2EWorkflowFile(pr.RepoName)
-	if workflowFile == "" {
 		return false
 	}
 
@@ -1651,87 +1346,4 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 		}
 	}
 	return true
-}
-
-// cancelPRWorkflowRuns cancels any in-progress E2E workflow runs for a PR
-// This is called when a new E2E run is triggered for the same PR
-func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
-	ctx := context.Background()
-	client := s.e2eGithubClient()
-
-	logger = logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
-	})
-
-	logger.Info("Attempting to cancel in-progress E2E workflow runs")
-
-	if isOxideRepo(pr.RepoName) {
-		// Oxide runs Android and iOS as separate dispatches (E2E/Run-Android, E2E/Run-iOS) and
-		// cancels superseded runs itself with per-PR/per-platform concurrency groups. Cancelling
-		// every in-progress run on the branch here would kill the other platform's run.
-		logger.Info("Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)")
-		return
-	}
-	workflowFile := prE2EWorkflowFile(pr.RepoName)
-	if workflowFile == "" {
-		logger.Warn("Unable to determine workflow file for repository")
-		return
-	}
-
-	// List workflow runs for this workflow file
-	// GitHub API v32 limitation: we need to use REST API directly
-	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?status=in_progress&event=workflow_dispatch",
-		pr.RepoOwner, pr.RepoName, workflowFile)
-
-	req, err := client.NewRequest("GET", listURL, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow runs list request")
-		return
-	}
-
-	var workflowRuns struct {
-		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			HeadBranch string `json:"head_branch"`
-			Status     string `json:"status"`
-		} `json:"workflow_runs"`
-	}
-
-	_, err = client.Do(ctx, req, &workflowRuns)
-	if err != nil {
-		logger.WithError(err).Error("Failed to list workflow runs")
-		return
-	}
-
-	// Cancel workflow runs that match this PR's branch
-	cancelCount := 0
-	for _, run := range workflowRuns.WorkflowRuns {
-		// Check if this run is for the PR's branch
-		if run.HeadBranch == pr.Ref && run.Status == "in_progress" {
-			cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
-				pr.RepoOwner, pr.RepoName, run.ID)
-
-			cancelReq, err := client.NewRequest("POST", cancelURL, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
-				continue
-			}
-
-			_, err = client.Do(ctx, cancelReq, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
-				continue
-			}
-
-			logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
-			cancelCount++
-		}
-	}
-
-	if cancelCount > 0 {
-		logger.WithField("cancelled_runs", cancelCount).Info("Successfully cancelled workflow runs")
-	} else {
-		logger.Debug("No in-progress workflow runs found to cancel")
-	}
 }
