@@ -129,6 +129,10 @@ type MatterwickConfig struct {
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
 
+	// E2EMaxConcurrentProvisions is how many E2E servers may be in creation at once across
+	// all flows (PR labels, pushes, CMT). More are queued, not refused. Default (0): 24.
+	E2EMaxConcurrentProvisions int
+
 	// E2EOxideEnabled enables E2E for mattermost-mobile-oxide (see e2eProfiles). When false,
 	// Oxide E2E labels and pushes are ignored; its servers are still cleaned up.
 	E2EOxideEnabled bool

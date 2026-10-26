@@ -94,7 +94,8 @@ func (s *Server) createPluginSpinWick(pr *model.PullRequest, envVars cloudModel.
 		logger.WithField("env_vars", envVarNames(envVars)).Info("Applying environment variables to plugin SpinWick")
 	}
 
-	installation, err = cloudClient.CreateInstallation(installationRequest)
+	// Same group as E2E servers: go through the serialized create (see sendCreateInstallation).
+	installation, err = s.sendCreateInstallation(context.Background(), installationRequest, logger)
 	if err != nil {
 		return request.WithError(
 			errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	cloudModel "github.com/mattermost/mattermost-cloud/model"
 	mattermostModel "github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
@@ -29,6 +31,7 @@ func TestMain(m *testing.M) {
 	// Replacing a failed installation backs off 15s+ in production. Keep that out of every
 	// test's wall-clock; tests that check the backoff install their own recorder.
 	e2eRetrySleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+	installationDeleteRetryDelay = time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -38,6 +41,8 @@ func TestMain(m *testing.M) {
 //   - "creation-failed": the installation fails on its first status poll
 //   - "pending": the installation never comes up (polls until cancelled)
 //   - "get403": the installation is created, but its status poll answers 403
+//   - "capacity": the first 3 polls report no cluster has room, then it is stable
+//   - "hang": its status polls never answer
 //   - an HTTP status code such as "400": the create request itself fails
 type scriptedCloud struct {
 	t      *testing.T
@@ -52,6 +57,8 @@ type scriptedCloud struct {
 	outcomes map[string]string // installation ID -> outcome
 	deleted  []string
 	polled   map[string]chan struct{} // closed on a platform's first status poll
+	polls    map[string]int           // installation ID -> status polls answered
+	release  chan struct{}            // closed at cleanup, ending "hang" polls
 }
 
 func newScriptedCloud(t *testing.T, script map[string][]string, after map[string][]string) (*Server, *scriptedCloud) {
@@ -63,12 +70,15 @@ func newScriptedCloud(t *testing.T, script map[string][]string, after map[string
 		posts:    map[string]int{},
 		outcomes: map[string]string{},
 		polled:   map[string]chan struct{}{},
+		polls:    map[string]int{},
+		release:  make(chan struct{}),
 	}
 	for p := range script {
 		sc.polled[p] = make(chan struct{})
 	}
 	ts := httptest.NewServer(http.HandlerFunc(sc.serve))
 	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(sc.release) }) // runs before ts.Close, so hung polls can end
 
 	s := &Server{
 		Config:       &MatterwickConfig{DNSNameTestServer: "test.example.com"},
@@ -122,6 +132,8 @@ func (sc *scriptedCloud) serve(w http.ResponseWriter, r *http.Request) {
 		p := sc.platformOf(id)
 		sc.mu.Lock()
 		outcome := sc.outcomes[id]
+		sc.polls[id]++
+		polls := sc.polls[id]
 		first := false
 		select {
 		case <-sc.polled[p]:
@@ -139,9 +151,18 @@ func (sc *scriptedCloud) serve(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if outcome == "get403" {
+		switch {
+		case outcome == "get403":
 			w.WriteHeader(http.StatusForbidden)
 			return
+		case outcome == "hang":
+			<-sc.release
+			return
+		case outcome == "capacity" && polls <= 3:
+			_ = json.NewEncoder(w).Encode(map[string]string{"ID": id, "State": "creation-no-compatible-clusters"})
+			return
+		case outcome == "capacity":
+			outcome = "stable"
 		}
 		state := map[string]string{"stable": "stable", "creation-failed": "creation-failed", "pending": "creation-in-progress"}[outcome]
 		_ = json.NewEncoder(w).Encode(map[string]string{"ID": id, "State": state})
@@ -434,4 +455,139 @@ func TestProvisionE2EInstances_GroupLockedBySupervisorIsRetried(t *testing.T) {
 	assert.Equal(t, gc.requested[0], gc.requested[2], "nothing was created, so the same request is re-sent")
 	assert.Equal(t, []time.Duration{2 * time.Second, 5 * time.Second}, *sleeps, "a locked group is retried quickly, not replaced after the 15s backoff")
 	assert.Empty(t, gc.deleted)
+}
+
+func TestProvisionE2EInstances_QueueBoundsConcurrentCreation(t *testing.T) {
+	stubProvisioningTimers(t)
+	script := map[string][]string{}
+	for _, p := range oxideE2EPlatforms {
+		script[p] = []string{"stable"}
+	}
+	s, _ := newScriptedCloud(t, script, nil)
+	s.Config.E2EMaxConcurrentProvisions = 2
+
+	var mu sync.Mutex
+	active, peak := 0, 0
+	initializeE2EServer = func(*Server, string, string, string, logrus.FieldLogger) (*mattermostModel.Client4, error) {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil, nil
+	}
+
+	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, oxideE2EPlatforms...), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+
+	require.NoError(t, err)
+	assert.Len(t, instances, len(oxideE2EPlatforms), "every requested server is provided, the excess just waits")
+	assert.Equal(t, 2, peak, "no more than E2EMaxConcurrentProvisions servers are in creation at once")
+}
+
+func TestProvisionE2EInstances_WaitsForClusterCapacity(t *testing.T) {
+	stubProvisioningTimers(t)
+	orig := e2eInstallationStableTimeout
+	e2eInstallationStableTimeout = 2 * time.Millisecond
+	t.Cleanup(func() { e2eInstallationStableTimeout = orig })
+	e2eInstallationPollInterval = 5 * time.Millisecond // 3 capacity polls outlast the stability timeout
+	s, sc := newScriptedCloud(t, map[string][]string{site1: {"capacity"}}, nil)
+
+	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+
+	require.NoError(t, err, "waiting for a cluster with room must not count as failing to become stable")
+	require.Len(t, instances, 1)
+	assert.Empty(t, sc.deletedIDs(), "a server waiting for capacity is kept, not replaced")
+}
+
+func TestProvisionE2EInstances_HungStatusPollDoesNotHangTheRun(t *testing.T) {
+	stubProvisioningTimers(t)
+	orig := e2eCloudCallTimeout
+	e2eCloudCallTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { e2eCloudCallTimeout = orig })
+	s, sc := newScriptedCloud(t, map[string][]string{site1: {"hang", "stable"}, site2: {"stable"}}, nil)
+
+	done := make(chan error, 1)
+	var instances []*E2EInstance
+	go func() {
+		var err error
+		instances, err = s.provisionE2EInstances(context.Background(), oxideSlots(s, site1, site2), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("a provisioner request that never answers hung the run")
+	}
+	require.Len(t, instances, 2)
+	assert.Equal(t, []string{"android-site-1-i1"}, sc.deletedIDs(), "the unreachable installation is deleted and replaced")
+}
+
+func TestSendCreateInstallation_Cancellation(t *testing.T) {
+	stubProvisioningTimers(t)
+	posts := make(chan *http.Request, 4)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // read the body, so the server notices the client hanging up
+		posts <- r
+		<-r.Context().Done() // never answers; ends when the client aborts
+	}))
+	t.Cleanup(ts.Close)
+	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+	t.Run("an in-flight create is aborted", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { <-posts; cancel() }()
+		_, err := s.sendCreateInstallation(ctx, &cloudModel.CreateInstallationRequest{OwnerID: "x"}, s.Logger)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("a cancelled caller waiting for its turn sends nothing", func(t *testing.T) {
+		gate := s.createGate()
+		gate <- struct{}{} // another create holds the turn
+		t.Cleanup(func() { <-gate })
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := s.sendCreateInstallation(ctx, &cloudModel.CreateInstallationRequest{OwnerID: "y"}, s.Logger)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, posts, "no create request may be sent")
+	})
+}
+
+func TestDeleteInstallationWithRetry(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		responses []int
+		wantCalls int
+	}{
+		{"provisioner busy with the installation (409) is retried", []int{409, 409, 202}, 3},
+		{"already gone (404) counts as deleted", []int{404}, 1},
+		{"persistent failure uses every attempt", []int{500}, installationDeleteAttempts},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			calls := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				i := calls
+				calls++
+				mu.Unlock()
+				if i >= len(tt.responses) {
+					i = len(tt.responses) - 1
+				}
+				w.WriteHeader(tt.responses[i])
+			}))
+			t.Cleanup(ts.Close)
+			s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+			s.deleteInstallationWithRetry("i1", "name", s.Logger)
+
+			assert.Equal(t, tt.wantCalls, calls)
+		})
+	}
 }

@@ -36,7 +36,7 @@ type Server struct {
 
 	Logger logrus.FieldLogger
 
-	CloudClient *cloudModel.Client
+	CloudClient *model.CloudClient
 
 	// envMaps is a map of environment variables for each active installation.
 	envMaps     map[string]cloudModel.EnvVarMap
@@ -63,8 +63,22 @@ type Server struct {
 	// to keep both requests on one server set. Zero value is ready to use.
 	e2ePRProvisionLocks sync.Map
 
-	// e2eCreateMu serializes installation create requests; see sendCreateInstallation.
-	e2eCreateMu sync.Mutex
+	// e2eCreateGate serializes installation create requests; see sendCreateInstallation.
+	e2eCreateGate     chan struct{}
+	e2eCreateGateOnce sync.Once
+
+	// e2eProvisionQueue bounds concurrent server creation; see provisionQueue.
+	e2eProvisionQueue     chan struct{}
+	e2eProvisionQueueOnce sync.Once
+
+	// e2ePushRuns holds the run of each tracked push key (guarded by e2eInstancesLock), so the
+	// stale scan can check whether that run is still queued or running.
+	e2ePushRuns map[string]e2eRun
+
+	// e2ePushProvisions holds the cancel func of the push run provisioning per repo/branch,
+	// so a newer push stops an older one's provisioning; see startPushProvision.
+	e2ePushProvisions   map[string]*pushProvision
+	e2ePushProvisionsMu sync.Mutex
 
 	// e2eLastDispatch holds the time.Time of the last E2E workflow dispatch per PR key, so a
 	// trigger right after a dispatch (before GitHub lists the run) never counts as idle.

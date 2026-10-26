@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 
 	"github.com/google/go-github/v32/github"
@@ -95,8 +96,20 @@ func (s *Server) handlePushEventE2E(p *e2eProfile, event *github.PushEvent, bran
 		return
 	}
 
-	instances, err := s.provisionRun(p, run, logger)
+	// Skip a push that is already superseded, before creating any servers.
+	if head, err := s.resolveBranchHeadSHA(run.owner, run.repo, run.ref); err == nil && head != run.sha {
+		logger.WithField("head_sha", head).Info("Branch already moved on; the newer push runs E2E")
+		return
+	}
+
+	ctx, done := s.startPushProvision(run)
+	defer done()
+	instances, err := s.provisionRun(ctx, p, run, logger)
 	if err != nil {
+		if ctx.Err() != nil {
+			logger.Info("A newer push to this branch stopped this push's provisioning")
+			return
+		}
 		// Push E2E has no PR comment to fall back on, so a provisioning failure is invisible
 		// unless it is reported.
 		logger.WithError(err).Error("Failed to create E2E instances")
@@ -105,6 +118,39 @@ func (s *Server) handlePushEventE2E(p *e2eProfile, event *github.PushEvent, bran
 	}
 
 	s.dispatchPushRun(p, run, instances, logger)
+}
+
+// pushProvision is a push run whose servers are being created.
+type pushProvision struct {
+	sha    string
+	cancel context.CancelFunc
+}
+
+// startPushProvision registers run as its branch's provisioning push and cancels the one it
+// replaces: in a burst of merges only the newest push gets servers. done unregisters run.
+func (s *Server) startPushProvision(run e2eRun) (context.Context, func()) {
+	key := run.repo + "/" + run.ref
+	ctx, cancel := context.WithCancel(context.Background())
+	mine := &pushProvision{sha: run.sha, cancel: cancel}
+
+	s.e2ePushProvisionsMu.Lock()
+	if s.e2ePushProvisions == nil {
+		s.e2ePushProvisions = make(map[string]*pushProvision)
+	}
+	if older := s.e2ePushProvisions[key]; older != nil {
+		older.cancel()
+	}
+	s.e2ePushProvisions[key] = mine
+	s.e2ePushProvisionsMu.Unlock()
+
+	return ctx, func() {
+		s.e2ePushProvisionsMu.Lock()
+		if s.e2ePushProvisions[key] == mine {
+			delete(s.e2ePushProvisions, key)
+		}
+		s.e2ePushProvisionsMu.Unlock()
+		cancel()
+	}
 }
 
 // dispatchPushRun tracks a push run's servers and dispatches it, or destroys the servers when
@@ -126,14 +172,16 @@ func (s *Server) dispatchPushRun(p *e2eProfile, run e2eRun, instances []*E2EInst
 	key := run.key()
 	s.e2eInstancesLock.Lock()
 	s.e2eInstances[key] = instances
+	if s.e2ePushRuns == nil {
+		s.e2ePushRuns = make(map[string]e2eRun)
+	}
+	s.e2ePushRuns[key] = run
 	s.e2eInstancesLock.Unlock()
 
 	if err := s.dispatchE2E(p, run, instances); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.logErrorToMattermost("E2E on %s %s (%s) did not run: workflow dispatch failed (%v)", run.repo, run.ref, run.sha, err)
-		s.e2eInstancesLock.Lock()
-		delete(s.e2eInstances, key)
-		s.e2eInstancesLock.Unlock()
+		s.untrackRun(key)
 		s.destroyE2EInstances(instances, logger)
 	}
 }
@@ -147,6 +195,7 @@ func (s *Server) destroyPushRunInstances(repoName, headBranch, headSHA string, l
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
+	delete(s.e2ePushRuns, key)
 	s.e2eInstancesLock.Unlock()
 
 	if len(instances) == 0 {

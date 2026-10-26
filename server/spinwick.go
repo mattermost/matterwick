@@ -58,7 +58,7 @@ func init() {
 
 // Helper function to check for existing installation
 func (s *Server) checkExistingInstallation(ownerID string, logger logrus.FieldLogger) (*cloudModel.InstallationDTO, error) {
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient.Client, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +650,6 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 
 	logger.Info("Creating installation")
 
-	cloudClient := s.CloudClient
 	installationRequest := s.createInstallationRequest(
 		ownerID,
 		version,
@@ -661,7 +660,8 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 		envVars,
 	)
 
-	installation, err = cloudClient.CreateInstallation(installationRequest)
+	// Same group as E2E servers: go through the serialized create (see sendCreateInstallation).
+	installation, err = s.sendCreateInstallation(context.Background(), installationRequest, logger)
 	if err != nil {
 		return request.WithError(
 			errors.Wrap(err, "unable to make the installation creation request to the provisioning server")).
@@ -841,7 +841,7 @@ func (s *Server) updateSpinWick(pr *model.PullRequest, withLicense, withCloudInf
 		ownerID = spinwick.RepeatableID
 	}
 
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient.Client, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
@@ -1154,7 +1154,7 @@ func (s *Server) destroySpinWick(pr *model.PullRequest, logger logrus.FieldLogge
 	spinwick := model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer)
 
 	ownerID := spinwick.RepeatableID
-	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient, s.Config.ProvisionerServer, ownerID)
+	installation, err := cloudtools.GetInstallationIDFromOwnerID(s.CloudClient.Client, s.Config.ProvisionerServer, ownerID)
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}

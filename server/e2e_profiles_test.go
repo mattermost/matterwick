@@ -69,6 +69,10 @@ func newFakeCloudServer(t *testing.T, listJSON string) (*Server, *fakeCloud) {
 			_, _ = w.Write([]byte(listJSON))
 			return
 		}
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(ts.Close)
@@ -568,5 +572,80 @@ func TestLockE2EPRProvisioning(t *testing.T) {
 		unlockSecond()
 	case <-time.After(time.Second):
 		t.Fatal("second request never acquired the lock after the first released it")
+	}
+}
+
+func TestStartPushProvision(t *testing.T) {
+	s := &Server{}
+	older, olderDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "a"})
+	other, otherDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "release-1", sha: "a"})
+	newer, newerDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "b"})
+	defer otherDone()
+
+	assert.Error(t, older.Err(), "a newer push to the same branch stops the older one's provisioning")
+	assert.NoError(t, other.Err(), "other branches are unaffected")
+	assert.NoError(t, newer.Err())
+
+	olderDone() // the older run finishing must not unregister the newer one
+	_, _ = s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "c"})
+	assert.Error(t, newer.Err(), "the newer run was still registered, so the next push stopped it")
+	newerDone()
+}
+
+func TestHandlePushEventE2E_SkipsSupersededPushBeforeProvisioning(t *testing.T) {
+	s, fc := newFakeCloudServer(t, "[]")
+	s.Config.Org = "mattermost"
+	gh, captures := fakePushGitHub(t, "newer-sha", http.StatusOK, http.StatusNoContent)
+	s.githubAPIBase = gh.URL + "/"
+
+	s.handlePushEventE2E(oxideE2EProfile, pushEvent(oxideRepoName, "refs/heads/main", "main", "older-sha", false), "main")
+
+	assert.Zero(t, fc.count(), "no servers may be created for a push the branch has already moved past")
+	assert.Empty(t, *captures)
+}
+
+func TestCleanupStaleE2EInstances_KeepsServersOfActiveRuns(t *testing.T) {
+	sevenHoursAgo := time.Now().Add(-7 * time.Hour).UnixMilli()
+	list := fmt.Sprintf(`[{"ID":"owned","OwnerID":"oxide-push-ios-site-1-aaaaaaaa","State":"stable","CreateAt":%d},`+
+		`{"ID":"unowned","OwnerID":"oxide-push-ios-site-2-bbbbbbbb","State":"stable","CreateAt":%d}]`, sevenHoursAgo, sevenHoursAgo)
+	run := e2eRun{owner: "mattermost", repo: oxideRepoName, ref: "main", sha: "abc"}
+
+	for _, tt := range []struct {
+		name        string
+		runsStatus  int
+		runsJSON    string
+		wantDeleted []string
+	}{
+		{"run still queued: its server is kept", http.StatusOK, `{"workflow_runs":[{"status":"queued"}]}`, []string{"unowned"}},
+		{"run finished: its server is removed", http.StatusOK, `{"workflow_runs":[{"status":"completed"}]}`, []string{"owned", "unowned"}},
+		{"run state unknown: its server is kept", http.StatusInternalServerError, `{}`, []string{"unowned"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// The scan queries each kind's name pattern; only "oxide-%" matches these servers.
+			s, fc := newFakeCloudServer(t, "[]")
+			oxide := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fc.record(r)
+				switch {
+				case r.Method == http.MethodGet && r.URL.Query().Get("dns_name") == "oxide-%":
+					_, _ = w.Write([]byte(list))
+				case r.Method == http.MethodGet:
+					_, _ = w.Write([]byte("[]"))
+				default:
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			t.Cleanup(oxide.Close)
+			s.CloudClient = model.NewCloudClient(oxide.URL, "", "", "", "")
+			base, _ := newFakeGitHub(t, tt.runsStatus, tt.runsJSON)
+			s.githubAPIBase = base
+			s.e2eInstances[run.key()] = []*E2EInstance{{InstallationID: "owned"}}
+			s.e2ePushRuns = map[string]e2eRun{run.key(): run}
+
+			s.cleanupStaleE2EInstances()
+
+			assert.Equal(t, tt.wantDeleted, deletedInstallationIDs(fc))
+			_, stillTracked := s.e2eInstances[run.key()]
+			assert.Equal(t, len(tt.wantDeleted) == 1, stillTracked, "a removed run's tracking is dropped with it")
+		})
 	}
 }
