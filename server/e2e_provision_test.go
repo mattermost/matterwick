@@ -37,12 +37,14 @@ func TestMain(m *testing.M) {
 //   - "stable": the installation comes up
 //   - "creation-failed": the installation fails on its first status poll
 //   - "pending": the installation never comes up (polls until cancelled)
+//   - "get403": the installation is created, but its status poll answers 403
 //   - an HTTP status code such as "400": the create request itself fails
 type scriptedCloud struct {
 	t      *testing.T
 	script map[string][]string
-	// after holds a platform's first create request until each listed platform's
-	// installation has been polled, so a test can fail a slot while siblings are mid-wait.
+	// after holds a platform's first status poll until each listed platform's installation
+	// has been polled, so a test can fail a slot while its siblings are mid-wait. (Not the
+	// create: creates are sent one at a time.)
 	after map[string][]string
 
 	mu       sync.Mutex
@@ -98,15 +100,6 @@ func (sc *scriptedCloud) serve(w http.ResponseWriter, r *http.Request) {
 		n := sc.posts[p]
 		sc.posts[p]++
 		sc.mu.Unlock()
-		if n == 0 {
-			for _, other := range sc.after[p] {
-				select {
-				case <-sc.polled[other]:
-				case <-time.After(5 * time.Second):
-					sc.t.Errorf("%s was never polled", other)
-				}
-			}
-		}
 
 		steps := sc.script[p]
 		outcome := steps[len(steps)-1]
@@ -129,12 +122,27 @@ func (sc *scriptedCloud) serve(w http.ResponseWriter, r *http.Request) {
 		p := sc.platformOf(id)
 		sc.mu.Lock()
 		outcome := sc.outcomes[id]
+		first := false
 		select {
 		case <-sc.polled[p]:
 		default:
 			close(sc.polled[p])
+			first = true
 		}
 		sc.mu.Unlock()
+		if first {
+			for _, other := range sc.after[p] {
+				select {
+				case <-sc.polled[other]:
+				case <-time.After(5 * time.Second):
+					sc.t.Errorf("%s was never polled", other)
+				}
+			}
+		}
+		if outcome == "get403" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		state := map[string]string{"stable": "stable", "creation-failed": "creation-failed", "pending": "creation-in-progress"}[outcome]
 		_ = json.NewEncoder(w).Encode(map[string]string{"ID": id, "State": state})
 
@@ -243,11 +251,11 @@ func TestProvisionE2EInstances(t *testing.T) {
 		},
 		{
 			name:        "non-retryable provisioner error fails at once and cancels siblings",
-			script:      map[string][]string{site1: {"pending"}, site2: {"400"}, site3: {"pending"}},
+			script:      map[string][]string{site1: {"pending"}, site2: {"get403"}, site3: {"pending"}},
 			after:       map[string][]string{site2: {site1, site3}},
-			wantErr:     []string{"android site 2 server: not retryable", "failed with status code 400"},
+			wantErr:     []string{"android site 2 server: not retryable", "failed with status code 403"},
 			wantPosts:   map[string]int{site1: 1, site2: 1, site3: 1},
-			wantDeleted: []string{"android-site-1-i1", "android-site-3-i1"},
+			wantDeleted: []string{"android-site-1-i1", "android-site-2-i1", "android-site-3-i1"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -337,4 +345,93 @@ func TestIsRetryableE2EInstallationError(t *testing.T) {
 			assert.Equal(t, tt.want, isRetryableE2EInstallationError(errors.New(tt.err)))
 		})
 	}
+}
+
+// groupLockedCloud emulates the provisioner with CloudGroupID set: each create takes a
+// non-blocking lock on the group while it inserts the installation, and answers 409 if the
+// lock is already held, by another create or (supervisorHolds) by the group supervisor.
+type groupLockedCloud struct {
+	group sync.Mutex
+
+	mu              sync.Mutex
+	supervisorHolds int
+	conflicts       int
+	requested       []string // DNS of every create request
+	deleted         []string
+}
+
+func newGroupLockedCloud(t *testing.T, supervisorHolds int) (*Server, *groupLockedCloud) {
+	t.Helper()
+	gc := &groupLockedCloud{supervisorHolds: supervisorHolds}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/installations":
+			var req struct{ DNS string }
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			gc.mu.Lock()
+			gc.requested = append(gc.requested, req.DNS)
+			n := len(gc.requested)
+			held := gc.supervisorHolds > 0
+			if held {
+				gc.supervisorHolds--
+			}
+			gc.mu.Unlock()
+			if held || !gc.group.TryLock() {
+				gc.mu.Lock()
+				gc.conflicts++
+				gc.mu.Unlock()
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			time.Sleep(20 * time.Millisecond) // the insert, under the group lock
+			gc.group.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]string{"ID": fmt.Sprintf("i%d", n), "State": "creation-requested"})
+		case r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]string{"ID": strings.TrimPrefix(r.URL.Path, "/api/installation/"), "State": "stable"})
+		case r.Method == http.MethodDelete:
+			gc.mu.Lock()
+			gc.deleted = append(gc.deleted, strings.TrimPrefix(r.URL.Path, "/api/installation/"))
+			gc.mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return &Server{
+		Config:      &MatterwickConfig{DNSNameTestServer: "test.example.com"},
+		CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""),
+		Logger:      logrus.New(),
+	}, gc
+}
+
+// Regression for desktop#4040 / Oxide#360: a set's creates were sent at once, all but one got
+// 409 from the group lock, and the run failed within seconds as "context canceled".
+func TestProvisionE2EInstances_GroupLockedCreatesDoNotConflict(t *testing.T) {
+	sleeps := stubProvisioningTimers(t)
+	s, gc := newGroupLockedCloud(t, 0)
+
+	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, oxideE2EPlatforms...), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+
+	require.NoError(t, err)
+	require.Len(t, instances, len(oxideE2EPlatforms))
+	assert.Zero(t, gc.conflicts, "a set's own creates must never collide on the group lock")
+	assert.Len(t, gc.requested, len(oxideE2EPlatforms), "one create per server")
+	assert.Empty(t, gc.deleted)
+	assert.Empty(t, *sleeps)
+}
+
+func TestProvisionE2EInstances_GroupLockedBySupervisorIsRetried(t *testing.T) {
+	sleeps := stubProvisioningTimers(t)
+	s, gc := newGroupLockedCloud(t, 2)
+
+	instances, err := s.provisionE2EInstances(context.Background(), oxideSlots(s, site1), "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	require.Len(t, gc.requested, 3)
+	assert.Equal(t, gc.requested[0], gc.requested[2], "nothing was created, so the same request is re-sent")
+	assert.Equal(t, []time.Duration{2 * time.Second, 5 * time.Second}, *sleeps, "a locked group is retried quickly, not replaced after the 15s backoff")
+	assert.Empty(t, gc.deleted)
 }

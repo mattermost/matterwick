@@ -575,8 +575,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		installationRequest.GroupID = s.Config.CloudGroupID
 	}
 
-	// Create installation
-	installation, err := s.CloudClient.CreateInstallation(installationRequest)
+	installation, err := s.sendCreateInstallation(ctx, installationRequest, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create installation %s: %w", name, err)
 	}
@@ -618,6 +617,34 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		InstallationID: installation.ID,
 		ServerVersion:  version,
 	}, nil
+}
+
+// e2eCreateConflictBackoff is the wait before re-sending a create the provisioner answered with
+// 409. Var so tests can change it.
+var e2eCreateConflictBackoff = []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
+
+// sendCreateInstallation sends one create request. With CloudGroupID set, the provisioner
+// takes a non-blocking lock on the group for every create and answers 409 to any create that
+// arrives while the lock is held. A server set's creates are sent in parallel, so they would
+// conflict with each other: send them one at a time. The provisioner's group supervisor also
+// holds that lock while it works, so a 409 is retried with the same request; nothing was
+// created, so there is nothing to clean up.
+func (s *Server) sendCreateInstallation(ctx context.Context, request *cloudModel.CreateInstallationRequest, logger logrus.FieldLogger) (*cloudModel.InstallationDTO, error) {
+	for attempt := 0; ; attempt++ {
+		s.e2eCreateMu.Lock()
+		installation, err := s.CloudClient.CreateInstallation(request)
+		s.e2eCreateMu.Unlock()
+		if err == nil || attempt == len(e2eCreateConflictBackoff) {
+			return installation, err
+		}
+		if code, ok := provisionerStatusCode(err); !ok || code != http.StatusConflict {
+			return installation, err
+		}
+		logger.WithError(err).WithField("backoff", e2eCreateConflictBackoff[attempt].String()).Warn("Provisioner group is locked; re-sending the create request")
+		if e2eRetrySleep(ctx, e2eCreateConflictBackoff[attempt]) != nil {
+			return nil, err
+		}
+	}
 }
 
 // waitForE2EInstallationStable polls the provisioner until the installation is stable.

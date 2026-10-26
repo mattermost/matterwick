@@ -63,6 +63,9 @@ type Server struct {
 	// to keep both requests on one server set. Zero value is ready to use.
 	e2ePRProvisionLocks sync.Map
 
+	// e2eCreateMu serializes installation create requests; see sendCreateInstallation.
+	e2eCreateMu sync.Mutex
+
 	// e2eLastDispatch holds the time.Time of the last E2E workflow dispatch per PR key, so a
 	// trigger right after a dispatch (before GitHub lists the run) never counts as idle.
 	e2eLastDispatch sync.Map
