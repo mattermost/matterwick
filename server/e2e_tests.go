@@ -6,9 +6,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
+	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -290,68 +295,113 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 	version := s.resolveMattermostServerVersion()
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
-	// Name format: {type}-pr-{pr}-{platform}-{hex6}
 
-	// Shared cancellable context: the first goroutine to fail cancels the rest so they
-	// exit their polling loop within one sleep interval (30s) instead of waiting up to 30min.
-	ctx, cancel := context.WithCancel(context.Background())
+	// Name format: {type}-pr-{pr}-{platform}-{hex8}. Fresh uid per attempt: a replacement
+	// must not reuse the failed installation's DNS name.
+	slots := make([]e2eSlot, len(platforms))
+	for i, platform := range platforms {
+		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
+			return e2eInstanceName(
+				s.Config.DNSNameTestServer,
+				instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, e2eUniqueSuffix(),
+			)
+		}}
+	}
+	logger.Info("Creating E2E instances")
+	return s.provisionE2EInstances(context.Background(), slots, version, username, password, instanceType, logger)
+}
+
+// e2eSlot is one server of a parallel E2E set.
+type e2eSlot struct {
+	platform string        // e.g. "android-site-2" or "linux"; becomes E2EInstance.Platform
+	nameFn   func() string // returns a fresh unique name for each attempt
+}
+
+// e2eSlotLabel names a slot for people: "android-site-2" -> "android site 2 server".
+func e2eSlotLabel(platform string) string {
+	return strings.ReplaceAll(platform, "-", " ") + " server"
+}
+
+// provisionE2EInstances creates one instance per slot in parallel and returns them in slot
+// order. Each slot replaces its own failed installations (createCloudInstallationWithRetry)
+// while its siblings keep going; only a slot that gives up cancels the others. Then every
+// instance that did come up is destroyed, and the error names the slot that gave up and why.
+func (s *Server) provisionE2EInstances(ctx context.Context, slots []e2eSlot, version, username, password, instanceType string, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	// Shared cancellable context: when a slot gives up, the others stop within one poll
+	// interval instead of waiting up to 30 minutes for a set that will be thrown away.
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	type result struct {
 		instance *E2EInstance
 		err      error
 	}
-	// Pre-allocate by index so each goroutine writes to its own slot — no mutex needed.
-	results := make([]result, len(platforms))
+	// Pre-allocate by index so each goroutine writes to its own slot.
+	results := make([]result, len(slots))
+	// failed lists failing slots in the order they gave up. The first one cancelled the rest,
+	// so it is the root cause; later failures are usually just that cancellation.
+	var failed []int
+	var failedMu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i, platform := range platforms {
+	for i, slot := range slots {
 		wg.Add(1)
-		go func(idx int, platform string) {
+		go func(idx int, slot e2eSlot) {
 			defer wg.Done()
-			// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
-			nameFn := func() string {
-				return e2eInstanceName(
-					s.Config.DNSNameTestServer,
-					instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, e2eUniqueSuffix(),
-				)
-			}
-			logger.WithField("platform", platform).Info("Creating E2E instance")
-			inst, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+			slotLogger := logger.WithField("platform", slot.platform)
+			inst, err := s.createCloudInstallationWithRetry(ctx, slot.nameFn, version, username, password, instanceType, slotLogger)
 			if err != nil {
-				cancel() // signal sibling goroutines to stop waiting
 				results[idx] = result{err: err}
+				failedMu.Lock()
+				failed = append(failed, idx)
+				failedMu.Unlock()
+				cancel()
 				return
 			}
-			inst.Platform = platform
+			inst.Platform = slot.platform
 			if instanceType == "desktop" {
-				inst.Runner = getRunnerForPlatform(platform)
+				inst.Runner = getRunnerForPlatform(slot.platform)
 			}
 			results[idx] = result{instance: inst}
-		}(i, platform)
+		}(i, slot)
 	}
 
 	wg.Wait()
 
-	// Collect results in platforms[] order. On any error, destroy all that succeeded.
 	var instances []*E2EInstance
-	var firstErr error
 	for _, r := range results {
-		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
-		} else {
+		if r.err == nil {
 			instances = append(instances, r.instance)
 		}
 	}
-
-	if firstErr != nil {
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
+	if len(failed) == 0 {
+		return instances, nil
 	}
 
-	return instances, nil
+	// Report the first slot that failed for a reason of its own. Only if every slot was
+	// cancelled (the caller cancelled) is the error a cancellation.
+	root := failed[0]
+	for _, idx := range failed {
+		if !errors.Is(results[idx].err, context.Canceled) {
+			root = idx
+			break
+		}
+	}
+
+	for i, r := range results {
+		slotLogger := logger.WithField("platform", slots[i].platform)
+		switch {
+		case r.err == nil:
+			slotLogger.WithField("installation_id", r.instance.InstallationID).Warn("E2E slot came up, destroying it because another slot failed")
+		case i == root:
+			slotLogger.WithError(r.err).Warn("E2E slot failed; cancelling the rest of the set")
+		default:
+			slotLogger.WithError(r.err).Warn("E2E slot did not come up")
+		}
+	}
+
+	s.destroyE2EInstances(instances, logger)
+	return nil, fmt.Errorf("%s: %w", e2eSlotLabel(slots[root].platform), results[root].err)
 }
 
 // installationDeleteAttempts is how many times cleanup tries to delete an installation it
@@ -394,33 +444,139 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 		installationID, name, installationDeleteAttempts, lastErr)
 }
 
-// createCloudInstallationAttempts is how many times a single instance is provisioned before
-// giving up. A fresh name per attempt avoids colliding with the failed attempt's DNS record.
-const createCloudInstallationAttempts = 2
+// createCloudInstallationAttempts is how many installations a slot tries before giving up.
+// Each failed one is deleted and replaced under a fresh name, so a retry never collides with
+// the failed attempt's DNS record.
+const createCloudInstallationAttempts = 3
 
-// createCloudInstallationWithRetry provisions one instance, retrying transient provisioner
-// failures. nameFn is called per attempt and must return a fresh unique name each time.
+// e2eInstallationRetryBackoff is the wait before replacing a failed installation (attempt 2,
+// attempt 3, ...; the last entry repeats). Without it a fast failure (provisioner 5xx or rate
+// limit, a DNS blip) burns every attempt within seconds. Var so tests can change it.
+var e2eInstallationRetryBackoff = []time.Duration{15 * time.Second, 45 * time.Second, 90 * time.Second}
+
+// e2eInstallationMaxDuration caps one slot's total time across all attempts, so a run cannot
+// hang. Each attempt keeps its own 30-minute stability timeout. Var so tests can shorten it.
+var e2eInstallationMaxDuration = 60 * time.Minute
+
+// e2eRetrySleep waits d, or returns ctx's error as soon as ctx is done. Var so tests can
+// record the backoff without waiting.
+var e2eRetrySleep = func(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// e2eInstallationRetryDelay returns the backoff before the given retry (1 = before attempt 2),
+// plus up to 20% jitter so slots that failed together do not retry in lockstep.
+func e2eInstallationRetryDelay(retry int) time.Duration {
+	i := retry - 1
+	if i >= len(e2eInstallationRetryBackoff) {
+		i = len(e2eInstallationRetryBackoff) - 1
+	}
+	base := e2eInstallationRetryBackoff[i]
+	if base <= 0 {
+		return 0
+	}
+	return base + time.Duration(rand.Int63n(int64(base)/5+1))
+}
+
+// provisionerStatusPattern matches the mattermost-cloud client's error for a non-success
+// response. The client drops the response body, so the status code is all there is.
+var provisionerStatusPattern = regexp.MustCompile(`failed with status code (\d+)`)
+
+// provisionerStatusCode returns the provisioner HTTP status carried by err, if any.
+func provisionerStatusCode(err error) (int, bool) {
+	m := provisionerStatusPattern.FindStringSubmatch(err.Error())
+	if m == nil {
+		return 0, false
+	}
+	code, convErr := strconv.Atoi(m[1])
+	return code, convErr == nil
+}
+
+// isRetryableE2EInstallationError reports whether replacing the installation can fix err.
+// A replacement is a fresh installation under a fresh name, so it fixes provisioner hiccups
+// (5xx, network errors), rate limiting (429), a DNS name conflict (409), and a server that
+// failed to become stable or to initialize. Any other provisioner 4xx means the request or
+// matterwick's credentials are wrong, and every attempt would fail the same way.
+func isRetryableE2EInstallationError(err error) bool {
+	code, ok := provisionerStatusCode(err)
+	if !ok || code < 400 || code >= 500 {
+		return true
+	}
+	return code == http.StatusConflict || code == http.StatusTooManyRequests
+}
+
+// createCloudInstallationWithRetry provisions one instance. A failed installation is deleted
+// (by createCloudInstallation) and, if the error is retryable, replaced after a backoff, up to
+// createCloudInstallationAttempts times within e2eInstallationMaxDuration. nameFn is called per
+// attempt and must return a fresh unique name each time. It never cancels anything itself;
+// the caller decides what a slot that gives up means for its siblings.
 func (s *Server) createCloudInstallationWithRetry(ctx context.Context, nameFn func() string, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
+	slotCtx, cancel := context.WithTimeout(ctx, e2eInstallationMaxDuration)
+	defer cancel()
+
 	var lastErr error
-	for attempt := 1; attempt <= createCloudInstallationAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			if lastErr != nil {
-				return nil, lastErr
+	attempts := 0
+	for attempts < createCloudInstallationAttempts {
+		if attempts > 0 {
+			delay := e2eInstallationRetryDelay(attempts)
+			logger.WithFields(logrus.Fields{
+				"next_attempt": attempts + 1,
+				"attempts":     createCloudInstallationAttempts,
+				"backoff":      delay.String(),
+			}).Warn("Replacing failed installation after backoff")
+			if e2eRetrySleep(slotCtx, delay) != nil {
+				break
 			}
-			return nil, fmt.Errorf("installation creation cancelled before attempt %d: %w", attempt, err)
 		}
-		instance, err := s.createCloudInstallation(ctx, nameFn(), version, username, password, instanceType, logger)
+		if slotCtx.Err() != nil {
+			break
+		}
+
+		attempts++
+		instance, err := s.createCloudInstallation(slotCtx, nameFn(), version, username, password, instanceType, logger)
 		if err == nil {
 			return instance, nil
 		}
 		lastErr = err
+		if slotCtx.Err() != nil {
+			break
+		}
 		logger.WithError(err).WithFields(logrus.Fields{
-			"attempt":  attempt,
+			"attempt":  attempts,
 			"attempts": createCloudInstallationAttempts,
 			"version":  version,
 		}).Warn("Installation attempt failed")
+		if !isRetryableE2EInstallationError(err) {
+			return nil, fmt.Errorf("not retryable: %w", err)
+		}
 	}
-	return nil, lastErr
+
+	switch {
+	case ctx.Err() != nil:
+		// The caller (or a sibling that gave up) cancelled. Keep it recognisable as a
+		// cancellation so it is never reported as this slot's own failure.
+		if lastErr == nil {
+			return nil, fmt.Errorf("installation creation cancelled before attempt %d: %w", attempts+1, ctx.Err())
+		}
+		if errors.Is(lastErr, context.Canceled) {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("installation creation cancelled after attempt %d failed (%v): %w", attempts, lastErr, ctx.Err())
+	case slotCtx.Err() != nil:
+		if lastErr == nil {
+			lastErr = slotCtx.Err()
+		}
+		return nil, fmt.Errorf("gave up after %s (%d attempts): %w", e2eInstallationMaxDuration, attempts, lastErr)
+	default:
+		return nil, fmt.Errorf("failed after %d attempts: %w", attempts, lastErr)
+	}
 }
 
 // createCloudInstallation creates one installation and polls until stable. Cancelling ctx aborts the wait so parallel callers can fail fast.
@@ -489,12 +645,14 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	// Create installation
 	installation, err := s.CloudClient.CreateInstallation(installationRequest)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create installation: %w", err)
+		return nil, fmt.Errorf("failed to create installation %s: %w", name, err)
 	}
 
+	// Delete the installation and name it in the error, so a failed run says which
+	// installation failed and at which step.
 	cleanupCreatedInstallation := func(cause error) error {
 		s.deleteInstallationWithRetry(installation.ID, name, logger)
-		return cause
+		return fmt.Errorf("installation %s (%s): %w", installation.ID, name, cause)
 	}
 
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
@@ -510,7 +668,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	adminClient, err := s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
+	adminClient, err := initializeE2EServer(s, spinwickURL, username, password, logger)
 	if err != nil {
 		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
 	}
@@ -626,6 +784,10 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	}
 	return password
 }
+
+// initializeE2EServer runs the post-stable setup (DNS, ping, admin user, team). Var so tests
+// can bring an installation up without a real Mattermost server.
+var initializeE2EServer = (*Server).initializeMattermostE2EServer
 
 // initializeMattermostE2EServer initializes a Mattermost server with E2E credentials and
 // returns a client logged in as the admin.

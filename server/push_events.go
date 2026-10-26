@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/google/go-github/v32/github"
 	"github.com/sirupsen/logrus"
@@ -40,6 +39,17 @@ func (s *Server) handlePushEvent(event *github.PushEvent) {
 	logger.Info("Push event received")
 
 	// Release-branch push trigger was removed; release stabilization is covered by PR-label E2E and CMT.
+
+	// Checked first: the Oxide repo name contains "mobile", and only its default branch runs push E2E.
+	if isOxideRepo(repoName) {
+		if reason := s.oxidePushE2ESkipReason(event, branch); reason != "" {
+			logger.WithField("reason", reason).Info("Push event does not trigger Oxide E2E")
+			return
+		}
+		logger.WithField("type", "default_branch").Info("Oxide default branch push detected, triggering E2E tests")
+		go s.handleOxidePushEventE2E(event, branch)
+		return
+	}
 
 	if s.Config.E2EAutoTriggerOnMaster && (branch == "master" || branch == "main") {
 		logger.WithField("type", "master_main").Info("Master/main branch detected, triggering E2E tests")
@@ -90,9 +100,9 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 	})
 
 	if isOxideRepo(repoName) {
-		// Oxide E2E is PR-label only; without this check the "mobile" substring below would
-		// provision mattermost-mobile's server set for every push to Oxide's default branch.
-		logger.Info("Push-triggered E2E is not enabled for Oxide, skipping")
+		// Oxide pushes go through handleOxidePushEventE2E; without this check the "mobile"
+		// substring below would provision mattermost-mobile's server set for an Oxide push.
+		logger.Info("Oxide push E2E is handled by handleOxidePushEventE2E, skipping")
 		return
 	}
 
@@ -170,9 +180,12 @@ func (s *Server) handlePushEventE2E(event *github.PushEvent, branch string) {
 // Results are returned in platforms[] order so index-based assignment is stable.
 func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, branch string) ([]*E2EInstance, error) {
 	var platforms []string
-	if instanceType == "desktop" {
+	switch instanceType {
+	case "desktop":
 		platforms = []string{"linux", "macos", "windows"}
-	} else {
+	case oxideE2EInstanceType:
+		platforms = oxideE2EPlatforms
+	default:
 		platforms = mobileE2EPlatforms
 	}
 
@@ -183,63 +196,29 @@ func (s *Server) createMultipleE2EInstancesForPushEvent(repoName, instanceType, 
 	})
 
 	serverVersion := s.serverVersionForPushEvent()
-	sanitizedVersion := sanitizeForDNS(serverVersion)
+	// Name format: {type}-{version}-{platform}-{uid}; Oxide uses oxide-main-{platform}-{uid}.
+	nameToken := sanitizeForDNS(serverVersion)
+	if instanceType == oxideE2EInstanceType {
+		nameToken = oxidePushE2ENameToken
+	}
 
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	type result struct {
-		instance *E2EInstance
-		err      error
-	}
-	results := make([]result, len(platforms))
-	var wg sync.WaitGroup
-
+	// Fresh uid per attempt: a replacement must not reuse the failed installation's DNS name.
+	slots := make([]e2eSlot, len(platforms))
 	for i, platform := range platforms {
-		wg.Add(1)
-		go func(idx int, platform string) {
-			defer wg.Done()
-			// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
-			nameFn := func() string {
-				return e2eInstanceName(
-					s.Config.DNSNameTestServer,
-					instanceType, sanitizedVersion, platform, e2eUniqueSuffix(),
-				)
-			}
-			inst, err := s.createCloudInstallationWithRetry(ctx, nameFn, serverVersion, username, password, instanceType, logger)
-			if err != nil {
-				cancel()
-				results[idx] = result{err: err}
-				return
-			}
-			inst.Platform = platform
-			if instanceType == "desktop" {
-				inst.Runner = getRunnerForPlatform(platform)
-			}
-			results[idx] = result{instance: inst}
-		}(i, platform)
+		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
+			return e2eInstanceName(
+				s.Config.DNSNameTestServer,
+				instanceType, nameToken, platform, e2eUniqueSuffix(),
+			)
+		}}
 	}
 
-	wg.Wait()
-
-	var instances []*E2EInstance
-	var firstErr error
-	for _, r := range results {
-		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
-		} else {
-			instances = append(instances, r.instance)
-		}
-	}
-
-	if firstErr != nil {
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
+	instances, err := s.provisionE2EInstances(context.Background(), slots, serverVersion, username, password, instanceType, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	logger.WithField("instanceCount", len(instances)).Info("All E2E instances created successfully")

@@ -349,9 +349,225 @@ func TestHandlePushEventE2E_SkipsOxide(t *testing.T) {
 
 	s.handlePushEventE2E(event, "main")
 
-	assert.Zero(t, fc.count(), "push events must never provision servers for Oxide")
+	assert.Zero(t, fc.count(), "the desktop/mobile push path must never provision servers for Oxide")
 	require.NotNil(t, hook.LastEntry())
-	assert.Equal(t, "Push-triggered E2E is not enabled for Oxide, skipping", hook.LastEntry().Message)
+	assert.Equal(t, "Oxide push E2E is handled by handleOxidePushEventE2E, skipping", hook.LastEntry().Message)
+}
+
+func oxidePushEvent(ref, defaultBranch, sha string, deleted bool) *gogithub.PushEvent {
+	repo := oxideRepoName
+	return &gogithub.PushEvent{
+		Ref:        &ref,
+		Deleted:    &deleted,
+		Repo:       &gogithub.PushEventRepository{Name: &repo, DefaultBranch: &defaultBranch},
+		HeadCommit: &gogithub.HeadCommit{ID: &sha},
+	}
+}
+
+func TestOxidePushE2ESkipReason(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		oxideEnabled  bool
+		autoTrigger   bool
+		branch        string
+		defaultBranch string
+		deleted       bool
+		want          string
+	}{
+		{"default branch push runs", true, true, "main", "main", false, ""},
+		{"non-main default branch runs", true, true, "trunk", "trunk", false, ""},
+		{"profile disabled", false, true, "main", "main", false, "Oxide E2E is disabled (E2EOxideEnabled=false)"},
+		{"auto-trigger disabled", true, false, "main", "main", false, "push E2E is disabled (E2EAutoTriggerOnMaster=false)"},
+		{"branch deleted", true, true, "main", "main", true, "branch was deleted"},
+		{"feature branch", true, true, "feature-x", "main", false, "push is not to the default branch"},
+		{"master is not the default branch", true, true, "master", "main", false, "push is not to the default branch"},
+		{"default branch unknown", true, true, "main", "", false, "push is not to the default branch"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{Config: &MatterwickConfig{E2EOxideEnabled: tt.oxideEnabled, E2EAutoTriggerOnMaster: tt.autoTrigger}}
+			event := oxidePushEvent("refs/heads/"+tt.branch, tt.defaultBranch, "abc", tt.deleted)
+			assert.Equal(t, tt.want, s.oxidePushE2ESkipReason(event, tt.branch))
+		})
+	}
+}
+
+func TestOxidePushInstanceNames(t *testing.T) {
+	const dns = "test.mattermost.cloud"
+	for _, p := range oxideE2EPlatforms {
+		full := strings.Join([]string{oxideE2EInstanceType, oxidePushE2ENameToken, p, "abcdef12"}, "-")
+		name := e2eInstanceName(dns, oxideE2EInstanceType, oxidePushE2ENameToken, p, "abcdef12")
+		assert.Equal(t, full, name, "push names must not be truncated")
+		assert.True(t, strings.HasPrefix(name, oxideE2EInstanceType+"-"), "the periodic scan must find push servers")
+		assert.NotContains(t, name, "-pr-", "push servers must use the non-PR max age and never match oxide-pr-<N>-%")
+	}
+}
+
+// fakeOxideGitHub serves the commits lookup (HEAD sha, or headStatus) and records dispatches.
+func fakeOxideGitHub(t *testing.T, head string, headStatus, dispatchStatus int) (*httptest.Server, *[]dispatchCapture) {
+	t.Helper()
+	dispatch, captures := mockGitHubServer(t, dispatchStatus)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/commits/") {
+			w.WriteHeader(headStatus)
+			_ = json.NewEncoder(w).Encode(map[string]string{"sha": head})
+			return
+		}
+		dispatch.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, captures
+}
+
+func deletedInstallationIDs(fc *fakeCloud) []string {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	var ids []string
+	for _, r := range fc.requests {
+		if r.Method == http.MethodDelete {
+			ids = append(ids, strings.TrimPrefix(r.URL.Path, "/api/installation/"))
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func instanceIDs(instances []*E2EInstance) []string {
+	var ids []string
+	for _, inst := range instances {
+		ids = append(ids, inst.InstallationID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func TestDispatchOxidePushRun(t *testing.T) {
+	const pushSHA = "1111111"
+	key := oxidePushInstanceKey(oxideRepoName, "main", pushSHA)
+
+	for _, tt := range []struct {
+		name           string
+		head           string
+		headStatus     int
+		dispatchStatus int
+		wantDispatch   bool
+		wantTracked    bool
+		wantDestroyed  bool
+	}{
+		{"head is the push: tracked and dispatched", pushSHA, http.StatusOK, http.StatusNoContent, true, true, false},
+		{"head lookup fails: dispatched with the push sha", "", http.StatusInternalServerError, http.StatusNoContent, true, true, false},
+		{"branch moved on: superseded, servers destroyed", "2222222", http.StatusOK, http.StatusNoContent, false, false, true},
+		{"dispatch fails: untracked, servers destroyed", pushSHA, http.StatusOK, http.StatusInternalServerError, true, false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s, fc := newFakeCloudServer(t, "[]")
+			s.Config.Org = "mattermost"
+			gh, captures := fakeOxideGitHub(t, tt.head, tt.headStatus, tt.dispatchStatus)
+			s.githubAPIBase = gh.URL + "/"
+			instances := makeOxideInstances()
+
+			s.dispatchOxidePushRun("mattermost", oxideRepoName, "main", pushSHA, instances, s.Logger)
+
+			if tt.wantDispatch {
+				require.Len(t, *captures, 1)
+				c := (*captures)[0]
+				assert.Equal(t, oxideE2EWorkflowFile, c.Workflow)
+				assert.Equal(t, oxideRepoName, c.Repo)
+				assert.Equal(t, "main", c.Ref)
+				assert.Equal(t, pushSHA, c.Inputs["MOBILE_VERSION"])
+				assert.Equal(t, "both", c.Inputs["PLATFORM"])
+				assert.Equal(t, "", c.Inputs["pr_number"], "an empty pr_number marks a default-branch run")
+				assert.Len(t, c.Inputs, 9, "inputs must exactly match e2e-matterwick.yml's declared inputs")
+				for i, p := range oxideE2EPlatforms {
+					assert.Equal(t, "https://"+p+".test.example.com", c.Inputs[oxideE2EWorkflowInputKeys[i]])
+				}
+			} else {
+				assert.Empty(t, *captures)
+			}
+
+			if tt.wantTracked {
+				assert.Equal(t, map[string][]*E2EInstance{key: instances}, s.e2eInstances)
+			} else {
+				assert.Empty(t, s.e2eInstances)
+			}
+
+			if tt.wantDestroyed {
+				assert.Equal(t, instanceIDs(instances), deletedInstallationIDs(fc))
+			} else {
+				assert.Empty(t, deletedInstallationIDs(fc))
+			}
+		})
+	}
+}
+
+func TestHandleWorkflowRunEvent_OxidePushCleanup(t *testing.T) {
+	const (
+		oxideWorkflowPath = ".github/workflows/" + oxideE2EWorkflowFile
+		doneKey           = "mattermost-mobile-oxide-push-main-sha1"
+		otherPushKey      = "mattermost-mobile-oxide-push-main-sha2"
+		prKey             = "mattermost-mobile-oxide-pr-5"
+	)
+	for _, tt := range []struct {
+		name       string
+		repo       string
+		action     string
+		path       string
+		headBranch string
+		headSHA    string
+		wantGone   []string
+	}{
+		{"main run completed", oxideRepoName, "completed", oxideWorkflowPath, "main", "sha1", []string{doneKey}},
+		{"path with ref suffix", oxideRepoName, "completed", oxideWorkflowPath + "@refs/heads/main", "main", "sha1", []string{doneKey}},
+		{"PR run on the same commit", oxideRepoName, "completed", oxideWorkflowPath, "feature-x", "sha1", nil},
+		{"main run still in progress", oxideRepoName, "in_progress", oxideWorkflowPath, "main", "sha1", nil},
+		{"other Oxide workflow", oxideRepoName, "completed", ".github/workflows/ci.yml", "main", "sha1", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s, fc := newFakeCloudServer(t, "[]")
+			s.Config.E2ETestWorkflowNames = []string{"E2E"}
+			tracked := map[string][]*E2EInstance{
+				doneKey:      {{InstallationID: "main-sha1"}},
+				otherPushKey: {{InstallationID: "main-sha2"}},
+				prKey:        {{InstallationID: "pr-5"}},
+			}
+			for k, v := range tracked {
+				s.e2eInstances[k] = v
+			}
+
+			s.handleWorkflowRunEventWithInputs(&WorkflowRunWebhookPayload{
+				Action: tt.action,
+				WorkflowRun: WorkflowRunWithInputs{
+					ID: 1, Name: "maestro", HeadBranch: tt.headBranch, HeadSHA: tt.headSHA, Path: tt.path,
+				},
+				Repository: map[string]interface{}{
+					"name":  tt.repo,
+					"owner": map[string]interface{}{"login": "mattermost"},
+				},
+			})
+
+			var wantDeleted []string
+			for k, v := range tracked {
+				gone := false
+				for _, g := range tt.wantGone {
+					gone = gone || g == k
+				}
+				if gone {
+					assert.NotContains(t, s.e2eInstances, k)
+					wantDeleted = append(wantDeleted, instanceIDs(v)...)
+				} else {
+					assert.Contains(t, s.e2eInstances, k)
+				}
+			}
+			sort.Strings(wantDeleted)
+			assert.Equal(t, wantDeleted, deletedInstallationIDs(fc))
+		})
+	}
+}
+
+func TestParseWorkflowRunEvent_Path(t *testing.T) {
+	payload, err := ParseWorkflowRunEventWithInputs(strings.NewReader(
+		`{"action":"completed","workflow_run":{"name":"maestro","head_branch":"main","head_sha":"abc","path":".github/workflows/e2e-matterwick.yml"}}`))
+	require.NoError(t, err)
+	assert.True(t, isOxideE2EWorkflowRun(oxideRepoName, payload.WorkflowRun.Path))
 }
 
 func TestHandleCMTTrigger_SkipsOxide(t *testing.T) {

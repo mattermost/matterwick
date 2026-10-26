@@ -130,9 +130,10 @@ type MatterwickConfig struct {
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
 
-	// E2EOxideEnabled enables PR-label E2E for mattermost-mobile-oxide (6 servers,
-	// e2e-matterwick.yml). When false, Oxide E2E labels are ignored; Oxide push and CMT
-	// events are always ignored, and PR-close cleanup only ever targets oxide-pr-<N>-*.
+	// E2EOxideEnabled enables E2E for mattermost-mobile-oxide (6 servers, e2e-matterwick.yml):
+	// PR labels, and pushes to its default branch when E2EAutoTriggerOnMaster is also true.
+	// When false, Oxide E2E labels and pushes are ignored. Oxide CMT is always off, and
+	// PR-close cleanup only ever targets oxide-pr-<N>-*.
 	E2EOxideEnabled bool
 
 	// CMTTriggerWorkflowName is the workflow name (the "name:" field) of the lightweight

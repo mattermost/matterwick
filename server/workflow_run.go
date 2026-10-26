@@ -29,6 +29,7 @@ type WorkflowRunWithInputs struct {
 	Name       string            `json:"name"`
 	HeadBranch string            `json:"head_branch"`
 	HeadSHA    string            `json:"head_sha"`
+	Path       string            `json:"path"`  // workflow file, e.g. ".github/workflows/e2e-matterwick.yml"
 	Event      string            `json:"event"` // triggering event: "push", "schedule", "workflow_dispatch", etc.
 	Inputs     map[string]string `json:"inputs"`
 }
@@ -96,6 +97,15 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 				}).Info("CMT trigger fired on non-RC-tag, non-release ref and not via manual dispatch; skipping")
 			}
 		}
+		return
+	}
+
+	// Oxide's e2e-matterwick.yml is matched by path, not name (it must stay out of
+	// E2ETestWorkflowNames so its PR runs never trigger SHA cleanup). Only the completed
+	// run's own push key is destroyed; PR servers are left for reuse. Runs regardless of
+	// E2EOxideEnabled so servers provisioned before the flag was turned off are reclaimed.
+	if payload.Action == "completed" && isOxideE2EWorkflowRun(repoName, payload.WorkflowRun.Path) {
+		s.destroyOxidePushInstances(repoName, headBranch, headSHA, logger)
 		return
 	}
 
