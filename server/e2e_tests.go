@@ -341,7 +341,7 @@ func (s *Server) provisionE2EInstances(ctx context.Context, slots []e2eSlot, ver
 }
 
 // defaultE2EMaxConcurrentProvisions is used when Config.E2EMaxConcurrentProvisions is 0.
-const defaultE2EMaxConcurrentProvisions = 24
+const defaultE2EMaxConcurrentProvisions = 64
 
 // provisionQueue returns the queue that bounds how many servers are being created at once
 // across every E2E flow (PR labels, pushes, CMT).

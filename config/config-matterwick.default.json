@@ -80,7 +80,7 @@
   "E2EServerVersion": "latest",
   "E2EAutoTriggerOnMaster": true,
   "E2EOxideEnabled": false,
-  "E2EMaxConcurrentProvisions": 24,
+  "E2EMaxConcurrentProvisions": 64,
   "E2EReleasePatternPrefix": "release-",
   "E2EInstanceMaxAge": 6,
   "E2EPRInstanceMaxAge": 8,
