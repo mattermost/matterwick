@@ -226,6 +226,7 @@ func TestHandleE2ETestRequest_FreshVsReuse(t *testing.T) {
 				assert.Equal(t, len(existing), deletes, "the PR's old servers must be torn down")
 				assert.Positive(t, creates, "fresh servers must be requested")
 				assert.False(t, dispatched, "the failed create must not dispatch")
+				assert.True(t, gh.has("POST /repos/mattermost/"+tt.repo+"/issues/5/comments"), "a provisioning failure must be reported on the PR")
 				assert.Empty(t, s.e2eInstances[tt.repo+"-pr-5"])
 			} else {
 				assert.Zero(t, deletes, "servers in use must not be torn down")

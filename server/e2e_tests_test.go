@@ -868,10 +868,10 @@ func TestCreateCloudInstallationWithRetry(t *testing.T) {
 		var requested []string
 		server := newServerWithProvisioner(func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
-				DNS string `json:"dns"`
+				DNSNames []string `json:"DNSNames"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			requested = append(requested, body.DNS)
+			requested = append(requested, strings.Join(body.DNSNames, ","))
 			w.WriteHeader(http.StatusInternalServerError)
 		})
 

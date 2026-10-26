@@ -387,10 +387,10 @@ func newGroupLockedCloud(t *testing.T, supervisorHolds int) (*Server, *groupLock
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/installations":
-			var req struct{ DNS string }
+			var req struct{ DNSNames []string }
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			gc.mu.Lock()
-			gc.requested = append(gc.requested, req.DNS)
+			gc.requested = append(gc.requested, strings.Join(req.DNSNames, ","))
 			n := len(gc.requested)
 			held := gc.supervisorHolds > 0
 			if held {
@@ -600,14 +600,18 @@ func TestDeleteInstallationWithRetry(t *testing.T) {
 func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
 	stubProvisioningTimers(t)
 	var mu sync.Mutex
-	var created, deleted []string
+	var created, deleted, requests []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost:
-			var req struct{ DNS string }
+			var req struct {
+				Name, DNS string
+				DNSNames  []string
+			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			mu.Lock()
-			created = append(created, req.DNS)
+			created = append(created, strings.Join(req.DNSNames, ","))
+			requests = append(requests, req.Name+"|"+req.DNS)
 			mu.Unlock()
 			// The provisioner creates it, then the connection drops before the 202 arrives.
 			conn, _, _ := w.(http.Hijacker).Hijack()
@@ -635,6 +639,8 @@ func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, []string{"ghost"}, deleted, "an installation created without an answer must be found and deleted")
+	assert.Equal(t, []string{"oxide-pr-1-x-abcdef12.test.example.com"}, created, "the name goes in DNSNames")
+	assert.Equal(t, []string{"oxide-pr-1-x-abcdef12|"}, requests, "Name is set and the deprecated DNS field is not")
 }
 
 func TestWakeUpHibernatingInstances_GoneServer(t *testing.T) {

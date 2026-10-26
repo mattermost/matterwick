@@ -196,8 +196,9 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	// 3. No existing instances — create fresh ones. PR close / reset stops this (startProvision).
 	provisionCtx, provisionDone := s.startProvision(key)
 	instances, err := s.provisionRun(provisionCtx, p, run, logger)
+	stoppedByCleanup := provisionCtx.Err() != nil // read before provisionDone, which cancels it
 	provisionDone()
-	if err != nil && provisionCtx.Err() != nil {
+	if err != nil && stoppedByCleanup {
 		logger.Info("PR E2E cleanup stopped provisioning")
 		return
 	}
@@ -691,10 +692,13 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		envVars["MM_EXPERIMENTALSETTINGS_RESTRICTSYSTEMADMIN"] = cloudModel.EnvVar{Value: "false"}
 	}
 
+	// DNS is deprecated: send DNSNames, and Name, which the provisioner only derives from DNS.
+	dnsName := fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer)
 	installationRequest := &cloudModel.CreateInstallationRequest{
+		Name:        name,
 		OwnerID:     name,
 		Version:     version,
-		DNS:         fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer),
+		DNSNames:    []string{dnsName},
 		Size:        "miniSingleton",
 		Affinity:    cloudModel.InstallationAffinityMultiTenant,
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
@@ -712,7 +716,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		if _, answered := provisionerStatusCode(err); !answered {
 			// No answer (cancelled, timed out, connection lost): the provisioner may have
 			// created it anyway. Look it up by name and delete it, or it bills unseen.
-			s.deleteInstallationsByDNS(installationRequest.DNS, logger)
+			s.deleteInstallationsByDNS(dnsName, logger)
 		}
 		return nil, fmt.Errorf("failed to create installation %s: %w", name, err)
 	}
