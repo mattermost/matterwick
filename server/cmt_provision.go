@@ -35,8 +35,10 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // cmtDroppedVersionRetryDelay waits for provisioner capacity before retrying failed versions. Var so tests can zero it.
 var cmtDroppedVersionRetryDelay = 5 * time.Minute
 
-// cmtMobileProvisionAcquireTimeout bounds how long a trigger waits for the mobile provision slot.
-var cmtMobileProvisionAcquireTimeout = 10 * time.Minute
+// cmtMobileProvisionAcquireTimeout bounds how long a trigger waits for the mobile provision
+// slot. 0: wait until it is free (or the server stops). A timeout dropped whole CMT runs when
+// two triggers overlapped; the shared provisioning queue already bounds load.
+var cmtMobileProvisionAcquireTimeout time.Duration
 
 // cmtMobileProvisionSem is a single-slot semaphore so primary + retry (or concurrent triggers)
 // cannot overlap CreateInstallation storms. Prefer this over a mutex so waiters honor context cancel.
@@ -430,7 +432,9 @@ func (s *Server) createSingleCMTInstance(ctx context.Context, repoName, instance
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	instance, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+	instance, err := s.provisionQueued(ctx, func() (*E2EInstance, error) {
+		return s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+	}, logger)
 	if instance != nil {
 		instance.Platform = platform
 	}

@@ -110,7 +110,9 @@ func (s *Server) handleWorkflowRunEventWithInputs(payload *WorkflowRunWebhookPay
 		// A push run of the repo's E2E workflow (matched by file, not name) destroys exactly
 		// its own servers. PR runs of the same workflow match no push key, so PR servers stay
 		// for reuse. Runs even when the profile is disabled, so no server is left behind.
-		if p := e2eProfileFor(repoName); p != nil && workflowFileOf(payload.WorkflowRun.Path) == p.workflow {
+		// Only matterwick's dispatches own servers: a manual or scheduled run of the same
+		// workflow on the same commit must not destroy them.
+		if p := e2eProfileFor(repoName); p != nil && workflowFileOf(payload.WorkflowRun.Path) == p.workflow && payload.WorkflowRun.Event == "workflow_dispatch" {
 			s.destroyPushRunInstances(repoName, headBranch, headSHA, logger)
 			return
 		}

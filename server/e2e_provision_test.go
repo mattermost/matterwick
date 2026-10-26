@@ -568,11 +568,16 @@ func TestDeleteInstallationWithRetry(t *testing.T) {
 		{"provisioner busy with the installation (409) is retried", []int{409, 409, 202}, 3},
 		{"already gone (404) counts as deleted", []int{404}, 1},
 		{"persistent failure uses every attempt", []int{500}, installationDeleteAttempts},
+		{"already being deleted (400) is not retried", []int{400}, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var mu sync.Mutex
 			calls := 0
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet { // state check after a 400
+					_ = json.NewEncoder(w).Encode(map[string]string{"ID": "i1", "State": "deletion-requested"})
+					return
+				}
 				mu.Lock()
 				i := calls
 				calls++
@@ -590,4 +595,55 @@ func TestDeleteInstallationWithRetry(t *testing.T) {
 			assert.Equal(t, tt.wantCalls, calls)
 		})
 	}
+}
+
+func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
+	stubProvisioningTimers(t)
+	var mu sync.Mutex
+	var created, deleted []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			var req struct{ DNS string }
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			created = append(created, req.DNS)
+			mu.Unlock()
+			// The provisioner creates it, then the connection drops before the 202 arrives.
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		case r.Method == http.MethodGet && r.URL.Path == "/api/installations":
+			mu.Lock()
+			found := len(created) > 0 && r.URL.Query().Get("dns_name") == created[0]
+			mu.Unlock()
+			if found {
+				_, _ = w.Write([]byte(`[{"ID":"ghost","OwnerID":"x","State":"creation-requested"}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodDelete:
+			mu.Lock()
+			deleted = append(deleted, strings.TrimPrefix(r.URL.Path, "/api/installation/"))
+			mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	s := &Server{Config: &MatterwickConfig{DNSNameTestServer: "test.example.com"}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+	_, err := s.createCloudInstallation(context.Background(), "oxide-pr-1-x-abcdef12", "11.9.0", "admin", "pw", desktopE2EProfile.kind, s.Logger)
+
+	require.Error(t, err)
+	assert.Equal(t, []string{"ghost"}, deleted, "an installation created without an answer must be found and deleted")
+}
+
+func TestWakeUpHibernatingInstances_GoneServer(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound) // the client returns nil, nil
+	}))
+	t.Cleanup(ts.Close)
+	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+	assert.False(t, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "gone"}}, s.Logger),
+		"a deleted server must be reported, not dereferenced (this used to panic and crash matterwick)")
 }

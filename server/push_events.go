@@ -90,6 +90,7 @@ func (s *Server) handlePushEventE2E(p *e2eProfile, event *github.PushEvent, bran
 		platform: "both",
 	}
 	logger := s.Logger.WithFields(logrus.Fields{"repo": run.repo, "branch": branch, "sha": run.sha, "kind": p.kind})
+	defer recoverE2E(logger)
 
 	if run.sha == "" || run.owner == "" {
 		logger.Error("Push event has no commit SHA or Org is not configured, skipping E2E dispatch")
@@ -102,7 +103,7 @@ func (s *Server) handlePushEventE2E(p *e2eProfile, event *github.PushEvent, bran
 		return
 	}
 
-	ctx, done := s.startPushProvision(run)
+	ctx, done := s.startProvision(run.repo + "/" + run.ref)
 	defer done()
 	instances, err := s.provisionRun(ctx, p, run, logger)
 	if err != nil {
@@ -120,36 +121,44 @@ func (s *Server) handlePushEventE2E(p *e2eProfile, event *github.PushEvent, bran
 	s.dispatchPushRun(p, run, instances, logger)
 }
 
-// pushProvision is a push run whose servers are being created.
-type pushProvision struct {
-	sha    string
+// provision is a run whose servers are being created.
+type provision struct {
 	cancel context.CancelFunc
 }
 
-// startPushProvision registers run as its branch's provisioning push and cancels the one it
-// replaces: in a burst of merges only the newest push gets servers. done unregisters run.
-func (s *Server) startPushProvision(run e2eRun) (context.Context, func()) {
-	key := run.repo + "/" + run.ref
+// startProvision registers a run being provisioned under key and cancels the one it replaces:
+// pushes use repo/branch, so in a burst of merges only the newest push gets servers; PRs use
+// the PR key, so PR close or reset (cancelProvision) stops it. done unregisters it.
+func (s *Server) startProvision(key string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
-	mine := &pushProvision{sha: run.sha, cancel: cancel}
+	mine := &provision{cancel: cancel}
 
-	s.e2ePushProvisionsMu.Lock()
-	if s.e2ePushProvisions == nil {
-		s.e2ePushProvisions = make(map[string]*pushProvision)
+	s.e2eProvisionsMu.Lock()
+	if s.e2eProvisions == nil {
+		s.e2eProvisions = make(map[string]*provision)
 	}
-	if older := s.e2ePushProvisions[key]; older != nil {
+	if older := s.e2eProvisions[key]; older != nil {
 		older.cancel()
 	}
-	s.e2ePushProvisions[key] = mine
-	s.e2ePushProvisionsMu.Unlock()
+	s.e2eProvisions[key] = mine
+	s.e2eProvisionsMu.Unlock()
 
 	return ctx, func() {
-		s.e2ePushProvisionsMu.Lock()
-		if s.e2ePushProvisions[key] == mine {
-			delete(s.e2ePushProvisions, key)
+		s.e2eProvisionsMu.Lock()
+		if s.e2eProvisions[key] == mine {
+			delete(s.e2eProvisions, key)
 		}
-		s.e2ePushProvisionsMu.Unlock()
+		s.e2eProvisionsMu.Unlock()
 		cancel()
+	}
+}
+
+// cancelProvision stops the run being provisioned under key, if any.
+func (s *Server) cancelProvision(key string) {
+	s.e2eProvisionsMu.Lock()
+	defer s.e2eProvisionsMu.Unlock()
+	if p := s.e2eProvisions[key]; p != nil {
+		p.cancel()
 	}
 }
 
@@ -169,13 +178,16 @@ func (s *Server) dispatchPushRun(p *e2eProfile, run e2eRun, instances []*E2EInst
 	}
 
 	// Store before dispatching so a fast-completing run doesn't race ahead of tracking.
+	// A redelivered push webhook for a commit that already has a run: keep that run's servers.
 	key := run.key()
 	s.e2eInstancesLock.Lock()
-	s.e2eInstances[key] = instances
-	if s.e2ePushRuns == nil {
-		s.e2ePushRuns = make(map[string]e2eRun)
+	if _, exists := s.e2eInstances[key]; exists {
+		s.e2eInstancesLock.Unlock()
+		logger.Info("This push already has an E2E run; destroying the duplicate servers")
+		s.destroyE2EInstances(instances, logger)
+		return
 	}
-	s.e2ePushRuns[key] = run
+	s.e2eInstances[key] = instances
 	s.e2eInstancesLock.Unlock()
 
 	if err := s.dispatchE2E(p, run, instances); err != nil {
@@ -195,7 +207,7 @@ func (s *Server) destroyPushRunInstances(repoName, headBranch, headSHA string, l
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
-	delete(s.e2ePushRuns, key)
+	delete(s.e2eTrackedRuns, key)
 	s.e2eInstancesLock.Unlock()
 
 	if len(instances) == 0 {

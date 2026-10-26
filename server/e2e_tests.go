@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		"type":  "e2e",
 	})
 	logger.Info("Handling E2E test request")
+	defer recoverE2E(logger)
 
 	p := e2eProfileFor(pr.RepoName)
 	if p == nil {
@@ -159,9 +161,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
+	if !fresh && len(existingInstances) > 0 && !s.wakeUpHibernatingInstances(existingInstances, logger) {
+		logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
+		s.untrackRun(key)
+		s.destroyE2EInstances(existingInstances, logger)
+		fresh = true
+	}
 	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-		s.wakeUpHibernatingInstances(existingInstances, logger)
 		if err := s.dispatchE2E(p, run, existingInstances); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
@@ -171,9 +178,8 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if !fresh {
-		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) {
+		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) && s.wakeUpHibernatingInstances(cloudInstances, logger) {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-			s.wakeUpHibernatingInstances(cloudInstances, logger)
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
 				s.destroyE2EInstances(cloudInstances, logger)
@@ -187,8 +193,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		}
 	}
 
-	// 3. No existing instances — create fresh ones.
-	instances, err := s.provisionRun(context.Background(), p, run, logger)
+	// 3. No existing instances — create fresh ones. PR close / reset stops this (startProvision).
+	provisionCtx, provisionDone := s.startProvision(key)
+	instances, err := s.provisionRun(provisionCtx, p, run, logger)
+	provisionDone()
+	if err != nil && provisionCtx.Err() != nil {
+		logger.Info("PR E2E cleanup stopped provisioning")
+		return
+	}
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to create E2E test instances: %v", err))
@@ -210,6 +222,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.Warn("PR was closed during E2E instance creation; destroying instances without tracking")
 		s.destroyE2EInstances(instances, logger)
 		return
+	} else if head := prInfo.GetHead().GetSHA(); head != "" && head != run.sha {
+		// The branch moved on while the servers came up; the workflow runs on the branch, so
+		// test its current commit (Oxide rejects any other MOBILE_VERSION).
+		logger.WithField("head_sha", head).Info("PR branch moved on during provisioning; testing its current commit")
+		run.sha = head
 	}
 
 	if !storeIfCurrent(instances) {
@@ -246,6 +263,14 @@ func (s *Server) provisionRun(ctx context.Context, p *e2eProfile, run e2eRun, lo
 	}
 	logger.WithField("servers", len(slots)).Info("Creating E2E instances")
 	return s.provisionE2EInstances(ctx, slots, s.resolveMattermostServerVersion(), s.Config.E2EUsername, s.getE2EPassword(p.kind), p.kind, logger)
+}
+
+// recoverE2E logs a panic in an E2E goroutine instead of letting it crash the process, which
+// would lose the tracking of every server in flight. Use as: defer recoverE2E(logger).
+func recoverE2E(logger logrus.FieldLogger) {
+	if r := recover(); r != nil {
+		logger.WithField("panic", r).Errorf("E2E handler panicked\n%s", debug.Stack())
+	}
 }
 
 // e2eSlot is one server of a parallel E2E set.
@@ -357,7 +382,7 @@ func (s *Server) provisionQueue() chan struct{} {
 }
 
 // provisionQueued runs create once a provisioning place is free. Any number of servers can
-// be requested: past the limit they wait their turn (in no particular order) instead of
+// be requested: past the limit they wait their turn instead of
 // piling onto the provisioner. A place is held only while one server is being created, never
 // across a whole set, so sets waiting for places cannot deadlock each other. The wait does
 // not count against e2eInstallationMaxDuration.
@@ -428,10 +453,8 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 	delay := installationDeleteRetryDelay
 	for attempt := 1; attempt <= installationDeleteAttempts; attempt++ {
 		lastErr = withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(installationID) })
-		if lastErr == nil {
-			return
-		}
-		if code, ok := provisionerStatusCode(lastErr); ok && code == http.StatusNotFound {
+		if lastErr == nil || s.installationGoneOrDeleting(installationID, lastErr) {
+			s.e2eCreated.Delete(installationID)
 			return
 		}
 		logger.WithError(lastErr).WithFields(logrus.Fields{
@@ -447,6 +470,43 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 	logger.WithError(lastErr).Error("Gave up deleting E2E installation; it is orphaned until the periodic stale scan reaps it")
 	s.logErrorToMattermost("Orphaned E2E installation %s (%s): delete failed %d times (%v). The periodic stale scan will retry, but it may need manual cleanup.",
 		installationID, name, installationDeleteAttempts, lastErr)
+}
+
+// installationGoneOrDeleting reports whether a failed delete needs no retry: the installation
+// is gone (404) or already being deleted (the provisioner answers 400 to a second delete).
+func (s *Server) installationGoneOrDeleting(installationID string, deleteErr error) bool {
+	code, ok := provisionerStatusCode(deleteErr)
+	if ok && code == http.StatusNotFound {
+		return true
+	}
+	if !ok || code != http.StatusBadRequest {
+		return false
+	}
+	var inst *cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		got, getErr := s.CloudClient.GetInstallation(installationID, nil)
+		inst = got
+		return getErr
+	})
+	return err == nil && (inst == nil || strings.HasPrefix(inst.State, "deletion"))
+}
+
+// deleteInstallationsByDNS deletes every installation with this DNS name.
+func (s *Server) deleteInstallationsByDNS(dns string, logger logrus.FieldLogger) {
+	var installations []*cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dns, Paging: cloudModel.AllPagesNotDeleted()})
+		installations = found
+		return getErr
+	})
+	if err != nil {
+		logger.WithError(err).WithField("dns", dns).Warn("Failed to look up an installation whose create got no answer; the stale scan will remove it if it exists")
+		return
+	}
+	for _, inst := range installations {
+		logger.WithField("installation_id", inst.ID).Warn("Deleting an installation whose create got no answer")
+		s.deleteInstallationWithRetry(inst.ID, inst.OwnerID, logger)
+	}
 }
 
 // createCloudInstallationAttempts is how many installations a slot tries before giving up.
@@ -649,8 +709,14 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	installation, err := s.sendCreateInstallation(ctx, installationRequest, logger)
 	if err != nil {
+		if _, answered := provisionerStatusCode(err); !answered {
+			// No answer (cancelled, timed out, connection lost): the provisioner may have
+			// created it anyway. Look it up by name and delete it, or it bills unseen.
+			s.deleteInstallationsByDNS(installationRequest.DNS, logger)
+		}
 		return nil, fmt.Errorf("failed to create installation %s: %w", name, err)
 	}
+	s.e2eCreated.Store(installation.ID, struct{}{})
 
 	// Delete the installation and name it in the error, so a failed run says which
 	// installation failed and at which step.
@@ -762,8 +828,10 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 			return fmt.Errorf("installation %s not found", installationID)
 		}
 
-		// The provisioner never retries these on its own, so waiting longer cannot help.
-		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed {
+		// The provisioner never retries these on its own, so waiting longer cannot help. A
+		// deletion state means someone (PR cleanup, a manual delete) is removing it.
+		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed ||
+			strings.HasPrefix(inst.State, "deletion") {
 			return fmt.Errorf("installation entered state %q", inst.State)
 		}
 
@@ -804,9 +872,10 @@ var e2eInstallationStableTimeout = 30 * time.Minute
 
 // e2eStatusPollErrorLimit consecutive failed status polls give up the installation;
 // e2eStatusPollRetryDelay is the pause after a failed poll.
-const e2eStatusPollErrorLimit = 3
+// 30 x 10s rides out a provisioner restart of about 5 minutes without replacing every server.
+const e2eStatusPollErrorLimit = 30
 
-var e2eStatusPollRetryDelay = 5 * time.Second
+var e2eStatusPollRetryDelay = 10 * time.Second
 
 // e2eInstallationPollInterval is the pause between installation status polls. Var, not
 // const, so tests can shorten it.
@@ -976,9 +1045,13 @@ func (s *Server) dispatchE2E(p *e2eProfile, run e2eRun, instances []*E2EInstance
 	if _, err := client.Do(context.Background(), req, nil); err != nil {
 		return fmt.Errorf("failed to dispatch %s: %w", p.workflow, err)
 	}
-	if run.prNumber > 0 {
-		s.e2eLastDispatch.Store(run.key(), time.Now())
+	s.e2eLastDispatch.Store(run.key(), time.Now())
+	s.e2eInstancesLock.Lock()
+	if s.e2eTrackedRuns == nil {
+		s.e2eTrackedRuns = make(map[string]e2eRun)
 	}
+	s.e2eTrackedRuns[run.key()] = run
+	s.e2eInstancesLock.Unlock()
 	s.Logger.WithFields(logrus.Fields{"repo": run.repo, "ref": run.ref, "workflow": p.workflow, "pr": run.prNumber}).Info("Dispatched E2E workflow")
 	return nil
 }
@@ -1025,11 +1098,13 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	s.e2ePRCleanupGenerationLock.Lock()
 	s.e2ePRCleanupGeneration[key]++
 	s.e2ePRCleanupGenerationLock.Unlock()
+	s.cancelProvision(key)
 
 	// Fast path: in-memory map
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
+	delete(s.e2eTrackedRuns, key)
 	s.e2eInstancesLock.Unlock()
 
 	if len(instances) > 0 {
@@ -1052,37 +1127,29 @@ func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logru
 
 	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number) // e.g. "mobile-pr-9587-%"
 
-	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
-		DNS:    dnsPattern,
-		Paging: cloudModel.AllPagesNotDeleted(),
+	var installations []*cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dnsPattern, Paging: cloudModel.AllPagesNotDeleted()})
+		installations = found
+		return getErr
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to query cloud API for orphaned E2E instances")
 		return
 	}
 
-	if len(installations) == 0 {
-		logger.Debug("No orphaned E2E instances found via cloud API")
-		return
-	}
-
-	logger.WithField("orphans", len(installations)).Warn("Found orphaned E2E instances via cloud API")
+	var orphans []*E2EInstance
 	for _, inst := range installations {
-		// Skip instances already progressing through deletion to avoid redundant API calls.
-		if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
-			inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
-			inst.State == cloudModel.InstallationStateDeletionPending ||
-			inst.State == cloudModel.InstallationStateDeletionRequested ||
-			inst.State == cloudModel.InstallationStateDeletionFailed ||
+		// deletion-failed is not retried by the provisioner, so it is deleted again here.
+		if inst.State != cloudModel.InstallationStateDeletionFailed && strings.HasPrefix(inst.State, "deletion") ||
 			inst.State == cloudModel.InstallationStateDeleted {
-			logger.WithField("installation_id", inst.ID).Debug("Skipping E2E instance already in deletion state")
 			continue
 		}
-		instLogger := logger.WithField("installation_id", inst.ID)
-		instLogger.Info("Destroying orphaned E2E instance")
-		if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
-			instLogger.WithError(err).Error("Failed to destroy orphaned E2E instance")
-		}
+		orphans = append(orphans, &E2EInstance{Name: inst.OwnerID, InstallationID: inst.ID})
+	}
+	if len(orphans) > 0 {
+		logger.WithField("orphans", len(orphans)).Warn("Destroying orphaned E2E instances found via cloud API")
+		s.destroyE2EInstances(orphans, logger)
 	}
 }
 
@@ -1118,8 +1185,6 @@ func (s *Server) cleanupStaleE2EInstances() {
 	}).Info("Scanning for stale E2E instances")
 
 	now := time.Now()
-	nonPRCutoffMs := now.Add(-nonPRMaxAge).UnixMilli()
-	prCutoffMs := now.Add(-prMaxAge).UnixMilli()
 
 	var reapedPRInstallationIDs []string
 	owners := s.trackedRunOwners()
@@ -1144,62 +1209,23 @@ func (s *Server) cleanupStaleE2EInstances() {
 				logger.Warn("Skipping instance with nil Installation pointer in cleanup scan")
 				continue
 			}
-
-			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...")
-			// and use the longer PR max-age; everything else uses the non-PR max-age.
-			isPR := strings.Contains(inst.OwnerID, "-pr-")
-			cutoffMs := nonPRCutoffMs
-			if isPR {
-				cutoffMs = prCutoffMs
-			}
-
-			// Skip instances younger than their max age — a test may still be using them,
-			// or (for PRs) the servers are being kept alive for reuse.
-			if inst.CreateAt > cutoffMs {
-				logger.WithFields(logrus.Fields{
-					"installation_id": inst.ID,
-					"owner_id":        inst.OwnerID,
-					"is_pr":           isPR,
-				}).Debug("Skipping instance younger than its max age")
-				continue
-			}
-
-			// Skip instances already progressing through deletion.
-			if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
-				inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
-				inst.State == cloudModel.InstallationStateDeletionPending ||
-				inst.State == cloudModel.InstallationStateDeletionRequested ||
-				inst.State == cloudModel.InstallationStateDeletionFailed ||
+			// Skip instances already being deleted. deletion-failed is not retried by the
+			// provisioner, so it is deleted again here.
+			if inst.State != cloudModel.InstallationStateDeletionFailed && strings.HasPrefix(inst.State, "deletion") ||
 				inst.State == cloudModel.InstallationStateDeleted {
 				continue
 			}
 
+			isPR := strings.Contains(inst.OwnerID, "-pr-")
 			instLogger := logger.WithFields(logrus.Fields{
 				"installation_id": inst.ID,
 				"owner_id":        inst.OwnerID,
 				"state":           inst.State,
 				"is_pr":           isPR,
 			})
-
-			// A push or CMT server is old but may still be in use: its run can sit in the
-			// workflow's queue behind other runs. Keep it while that run is queued or running
-			// (or its state cannot be read), up to e2eOwnedInstanceMaxAge.
-			ownerKey, owned := owners[inst.ID]
-			if owned && inst.CreateAt > now.Add(-e2eOwnedInstanceMaxAge).UnixMilli() {
-				active, seen := runActive[ownerKey]
-				if !seen {
-					var err error
-					active, err = s.isTrackedRunActive(ownerKey)
-					if err != nil {
-						instLogger.WithError(err).Warn("Failed to read the state of the server's run; keeping it")
-						active = true
-					}
-					runActive[ownerKey] = active
-				}
-				if active {
-					instLogger.WithField("tracking_key", ownerKey).Info("Keeping stale E2E instance: its run is still queued or running")
-					continue
-				}
+			if keep, why := s.keepE2EInstance(inst, isPR, owners, runActive, now); keep {
+				instLogger.WithField("reason", why).Debug("Keeping E2E instance")
+				continue
 			}
 
 			instLogger.Warn("Destroying stale E2E instance")
@@ -1207,10 +1233,11 @@ func (s *Server) cleanupStaleE2EInstances() {
 				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
 				continue
 			}
+			s.e2eCreated.Delete(inst.ID)
 			if isPR {
 				reapedPRInstallationIDs = append(reapedPRInstallationIDs, inst.ID)
 			}
-			if owned {
+			if ownerKey, owned := owners[inst.ID]; owned {
 				s.untrackRun(ownerKey)
 			}
 		}
@@ -1226,17 +1253,64 @@ func (s *Server) cleanupStaleE2EInstances() {
 	logger.Info("E2E instance cleanup scan complete")
 }
 
-// e2eOwnedInstanceMaxAge is how long the stale scan keeps a push or CMT server whose run is
-// still queued or running. Past it the run is presumed stuck and the server is removed.
+// keepE2EInstance decides whether the stale scan keeps a server, and why.
+//   - Tracked servers (a dispatched PR, push or CMT run) are kept while their run is queued or
+//     running, or its state cannot be read, and for E2EPRIdleTimeoutMinutes after the last
+//     dispatch. Age alone never removes them, so a long run keeps its servers. A run stuck for
+//     e2eOwnedInstanceMaxAge loses them.
+//   - Servers this process created but has not tracked yet (a set still provisioning) are
+//     kept up to e2eOwnedInstanceMaxAge.
+//   - Anything else (servers from before a restart) goes by age: E2EPRInstanceMaxAge for PR
+//     servers, E2EInstanceMaxAge for the rest.
+func (s *Server) keepE2EInstance(inst *cloudModel.InstallationDTO, isPR bool, owners map[string]string, runActive map[string]bool, now time.Time) (bool, string) {
+	ownedCutoff := now.Add(-e2eOwnedInstanceMaxAge).UnixMilli()
+	if key, owned := owners[inst.ID]; owned {
+		if inst.CreateAt <= ownedCutoff {
+			return false, ""
+		}
+		if last, ok := s.e2eLastDispatch.Load(key); ok && now.Sub(last.(time.Time)) < s.e2ePRIdleTimeout() {
+			return true, "dispatched recently"
+		}
+		active, seen := runActive[key]
+		if !seen {
+			var err error
+			if active, err = s.isTrackedRunActive(key); err != nil {
+				s.Logger.WithError(err).WithField("tracking_key", key).Warn("Failed to read the state of an E2E run; keeping its servers")
+				active = true
+			}
+			runActive[key] = active
+		}
+		return active, "its run is queued or running"
+	}
+	if _, ours := s.e2eCreated.Load(inst.ID); ours && inst.CreateAt > ownedCutoff {
+		return true, "still being provisioned"
+	}
+	maxAge := s.e2eInstanceMaxAge()
+	if isPR {
+		maxAge = s.e2ePRInstanceMaxAge()
+	}
+	return inst.CreateAt > now.Add(-maxAge).UnixMilli(), "younger than its max age"
+}
+
+// e2ePRIdleTimeout returns Config.E2EPRIdleTimeoutMinutes, default 60 minutes.
+func (s *Server) e2ePRIdleTimeout() time.Duration {
+	if s.Config.E2EPRIdleTimeoutMinutes > 0 {
+		return time.Duration(s.Config.E2EPRIdleTimeoutMinutes) * time.Minute
+	}
+	return time.Hour
+}
+
+// e2eOwnedInstanceMaxAge is the most the stale scan keeps a server matterwick is using. Past
+// it the run is presumed stuck and the server is removed.
 const e2eOwnedInstanceMaxAge = 24 * time.Hour
 
-// trackedRunOwners maps each tracked push or CMT server to its run's e2eInstances key.
+// trackedRunOwners maps each server of a dispatched PR, push or CMT run to its e2eInstances key.
 func (s *Server) trackedRunOwners() map[string]string {
 	s.e2eInstancesLock.Lock()
 	defer s.e2eInstancesLock.Unlock()
 	owners := map[string]string{}
 	for key, instances := range s.e2eInstances {
-		if _, push := s.e2ePushRuns[key]; !push && !strings.Contains(key, "-cmt-") {
+		if _, tracked := s.e2eTrackedRuns[key]; !tracked && !strings.Contains(key, "-cmt-") {
 			continue
 		}
 		for _, inst := range instances {
@@ -1253,32 +1327,36 @@ func (s *Server) untrackRun(key string) {
 	s.e2eInstancesLock.Lock()
 	defer s.e2eInstancesLock.Unlock()
 	delete(s.e2eInstances, key)
-	delete(s.e2ePushRuns, key)
+	delete(s.e2eTrackedRuns, key)
 }
 
-// isTrackedRunActive reports whether the workflow run owning a tracked push or CMT key is
+// isTrackedRunActive reports whether the workflow run owning a tracked PR, push or CMT key is
 // queued or running on GitHub.
 func (s *Server) isTrackedRunActive(key string) (bool, error) {
 	s.e2eInstancesLock.Lock()
-	run, push := s.e2ePushRuns[key]
+	run, tracked := s.e2eTrackedRuns[key]
 	s.e2eInstancesLock.Unlock()
 
 	client := s.e2eGithubClient()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if push {
+	if tracked {
 		p := e2eProfileFor(run.repo)
 		if p == nil {
 			return false, nil
+		}
+		// A PR's runs are any dispatch on its branch; a push run is the one for its commit.
+		query := "branch=" + url.QueryEscape(run.ref) + "&event=workflow_dispatch&per_page=50"
+		if run.prNumber == 0 {
+			query += "&head_sha=" + run.sha
 		}
 		var runs struct {
 			WorkflowRuns []struct {
 				Status string `json:"status"`
 			} `json:"workflow_runs"`
 		}
-		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?branch=%s&head_sha=%s&per_page=20",
-			run.owner, run.repo, p.workflow, url.QueryEscape(run.ref), run.sha), nil)
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?%s", run.owner, run.repo, p.workflow, query), nil)
 		if err != nil {
 			return false, err
 		}
@@ -1454,14 +1532,24 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 	return result, nil
 }
 
-// wakeUpHibernatingInstances checks each instance and wakes any that are hibernating,
-// waiting up to 10 minutes for stable state. Logs warnings on failure and proceeds.
-func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
+// wakeUpHibernatingInstances wakes any hibernating instance, waiting up to 10 minutes for it
+// to be stable, and reports false if any instance no longer exists. Other failures are logged
+// and the instance is used as it is.
+func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
 	for _, inst := range instances {
-		installation, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+		var installation *cloudModel.InstallationDTO
+		err := withCloudTimeout(context.Background(), func() error {
+			got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+			installation = got
+			return getErr
+		})
 		if err != nil {
 			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to check installation state before wake-up")
 			continue
+		}
+		if installation == nil || strings.HasPrefix(installation.State, "deletion") {
+			logger.WithField("installation_id", inst.InstallationID).Warn("E2E instance no longer exists")
+			return false
 		}
 		if installation.State != cloudModel.InstallationStateHibernating {
 			continue
@@ -1473,10 +1561,18 @@ func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger log
 		}
 		timeout := time.Now().Add(10 * time.Minute)
 		for {
-			updated, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+			var updated *cloudModel.InstallationDTO
+			err := withCloudTimeout(context.Background(), func() error {
+				got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+				updated = got
+				return getErr
+			})
 			if err != nil {
 				logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Error polling installation state during wake-up")
 				break
+			}
+			if updated == nil {
+				return false
 			}
 			if updated.State == cloudModel.InstallationStateStable {
 				logger.WithField("installation_id", inst.InstallationID).Info("Hibernating E2E instance is now stable")
@@ -1489,6 +1585,7 @@ func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger log
 			time.Sleep(15 * time.Second)
 		}
 	}
+	return true
 }
 
 // postE2EStartedComment posts a comment when E2E tests start

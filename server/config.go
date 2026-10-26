@@ -129,6 +129,11 @@ type MatterwickConfig struct {
 	// Default (0): 24 hours.
 	E2EPRInstanceMaxAge int
 
+	// E2EPRIdleTimeoutMinutes: a PR's servers are removed once no E2E run on the PR is queued
+	// or running and the last one was dispatched longer ago than this. Never while a run uses
+	// them. Default (0): 60.
+	E2EPRIdleTimeoutMinutes int
+
 	// E2EMaxConcurrentProvisions is how many E2E servers may be in creation at once across
 	// all flows (PR labels, pushes, CMT). More are queued, not refused. Default (0): 64,
 	// sized from 60 days of dispatches plus Oxide main pushes (peak about 40-63 at once).

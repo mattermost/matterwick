@@ -41,8 +41,8 @@ Every E2E flow uses the repo's profile (`server/e2e_profiles.go`). Adding a repo
 | `mattermost-mobile-oxide` (exact name, checked first) | `android-site-1..3`, `ios-site-1..3` | `e2e-matterwick.yml` | no |
 
 Same rules for every repo:
-- **PR labels** (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`): servers `<kind>-pr-<N>-*`. A run gets fresh servers when nothing else is using the PR's servers, otherwise it reuses them. Each workflow cancels its own superseded runs. PR close and `E2E/Reset-Servers` delete `<kind>-pr-<N>-*`.
+- **PR labels** (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`): servers `<kind>-pr-<N>-*`. A run gets fresh servers when nothing else is using the PR's servers, otherwise it reuses them. Each workflow cancels its own superseded runs. PR close and `E2E/Reset-Servers` delete `<kind>-pr-<N>-*` and stop any provisioning. A PR's servers are removed once no run on it is queued or running and the last one was dispatched more than `E2EPRIdleTimeoutMinutes` (60) ago — never while a run is using them.
 - **Pushes to the default branch** (`E2EAutoTriggerOnMaster`): fresh `<kind>-push-*` servers, dispatched on that branch with the pushed SHA. A push superseded while its servers came up is skipped. Its servers are destroyed when that run completes, or by the stale scan after `E2EInstanceMaxAge`.
-- **Provisioning**: a failed server is deleted and replaced after a backoff; the set fails only when one server gives up, and the error names it.
+- **Provisioning**: at most `E2EMaxConcurrentProvisions` (64) servers are created at once; more wait their turn. A failed server is deleted and replaced after a backoff; the set fails only when one server gives up, and the error names it.
 
 Oxide is off unless `E2EOxideEnabled` is `true`; its servers are cleaned up either way.

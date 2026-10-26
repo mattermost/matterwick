@@ -55,7 +55,9 @@ func NewCloudClient(address, clientID, clientSecret, tokenEndpoint, apiKey strin
 			TokenURL:       tokenEndpoint,
 			EndpointParams: url.Values{"grant_type": {"client_credentials"}},
 		}
-		c.httpClient.Transport = &oauth2.Transport{Source: creds.TokenSource(context.Background()), Base: http.DefaultTransport}
+		// A token request is bounded too, or a hung token endpoint would hang every create.
+		tokenCtx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 30 * time.Second})
+		c.httpClient.Transport = &oauth2.Transport{Source: creds.TokenSource(tokenCtx), Base: http.DefaultTransport}
 	}
 	return c
 }

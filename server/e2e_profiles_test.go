@@ -476,18 +476,23 @@ func TestHandleWorkflowRunEvent_PushCleanup(t *testing.T) {
 		path       string
 		action     string
 		headBranch string
-		wantGone   bool // the run's own push servers are destroyed
+		wantGone   bool   // the run's own push servers are destroyed
+		event      string // defaults to workflow_dispatch
 	}{
-		{"oxide main run completed", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", true},
-		{"path with ref suffix", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml@refs/heads/main", "completed", "main", true},
-		{"mobile main run completed", "mattermost-mobile", "E2E", ".github/workflows/e2e-detox-pr.yml", "completed", "main", true},
-		{"desktop master run completed", "desktop", "Electron Playwright Tests", ".github/workflows/e2e-functional.yml", "completed", "master", true},
-		{"PR run on the same commit keeps main's servers", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "feature-x", false},
-		{"run still in progress", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "in_progress", "main", false},
-		{"another workflow", oxideRepoName, "ci", ".github/workflows/ci.yml", "completed", "main", false},
-		{"another repo's workflow file", "mattermost-mobile", "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", false},
+		{"manual run of the same workflow on the same commit keeps them", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", false, "push"},
+		{"oxide main run completed", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", true, ""},
+		{"path with ref suffix", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml@refs/heads/main", "completed", "main", true, ""},
+		{"mobile main run completed", "mattermost-mobile", "E2E", ".github/workflows/e2e-detox-pr.yml", "completed", "main", true, ""},
+		{"desktop master run completed", "desktop", "Electron Playwright Tests", ".github/workflows/e2e-functional.yml", "completed", "master", true, ""},
+		{"PR run on the same commit keeps main's servers", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "feature-x", false, ""},
+		{"run still in progress", oxideRepoName, "maestro", ".github/workflows/e2e-matterwick.yml", "in_progress", "main", false, ""},
+		{"another workflow", oxideRepoName, "ci", ".github/workflows/ci.yml", "completed", "main", false, ""},
+		{"another repo's workflow file", "mattermost-mobile", "maestro", ".github/workflows/e2e-matterwick.yml", "completed", "main", false, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.event == "" {
+				tt.event = "workflow_dispatch"
+			}
 			s, fc := newFakeCloudServer(t, "[]")
 			doneKey := pushRunKey(tt.repo, "main", "sha1")
 			if tt.headBranch == "master" {
@@ -501,7 +506,7 @@ func TestHandleWorkflowRunEvent_PushCleanup(t *testing.T) {
 
 			s.handleWorkflowRunEventWithInputs(&WorkflowRunWebhookPayload{
 				Action:      tt.action,
-				WorkflowRun: WorkflowRunWithInputs{ID: 1, Name: tt.workflow, HeadBranch: tt.headBranch, HeadSHA: "sha1", Path: tt.path},
+				WorkflowRun: WorkflowRunWithInputs{ID: 1, Name: tt.workflow, HeadBranch: tt.headBranch, HeadSHA: "sha1", Path: tt.path, Event: tt.event},
 				Repository:  map[string]interface{}{"name": tt.repo, "owner": map[string]interface{}{"login": "mattermost"}},
 			})
 
@@ -575,11 +580,11 @@ func TestLockE2EPRProvisioning(t *testing.T) {
 	}
 }
 
-func TestStartPushProvision(t *testing.T) {
+func TestStartProvision(t *testing.T) {
 	s := &Server{}
-	older, olderDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "a"})
-	other, otherDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "release-1", sha: "a"})
-	newer, newerDone := s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "b"})
+	older, olderDone := s.startProvision("oxide/main")
+	other, otherDone := s.startProvision("oxide/release-1")
+	newer, newerDone := s.startProvision("oxide/main")
 	defer otherDone()
 
 	assert.Error(t, older.Err(), "a newer push to the same branch stops the older one's provisioning")
@@ -587,9 +592,19 @@ func TestStartPushProvision(t *testing.T) {
 	assert.NoError(t, newer.Err())
 
 	olderDone() // the older run finishing must not unregister the newer one
-	_, _ = s.startPushProvision(e2eRun{repo: oxideRepoName, ref: "main", sha: "c"})
-	assert.Error(t, newer.Err(), "the newer run was still registered, so the next push stopped it")
+	s.cancelProvision("oxide/main")
+	assert.Error(t, newer.Err(), "the newer run was still registered, so cancelling the key stopped it")
 	newerDone()
+
+	t.Run("PR cleanup stops the PR's provisioning", func(t *testing.T) {
+		s, _ := newFakeCloudServer(t, "[]")
+		s.e2ePRCleanupGeneration = map[string]int64{}
+		pr := &model.PullRequest{RepoOwner: "mattermost", RepoName: oxideRepoName, Number: 9}
+		ctx, done := s.startProvision(oxideRepoName + "-pr-9")
+		defer done()
+		s.handleE2ECleanup(pr)
+		assert.Error(t, ctx.Err())
+	})
 }
 
 func TestHandlePushEventE2E_SkipsSupersededPushBeforeProvisioning(t *testing.T) {
@@ -639,7 +654,7 @@ func TestCleanupStaleE2EInstances_KeepsServersOfActiveRuns(t *testing.T) {
 			base, _ := newFakeGitHub(t, tt.runsStatus, tt.runsJSON)
 			s.githubAPIBase = base
 			s.e2eInstances[run.key()] = []*E2EInstance{{InstallationID: "owned"}}
-			s.e2ePushRuns = map[string]e2eRun{run.key(): run}
+			s.e2eTrackedRuns = map[string]e2eRun{run.key(): run}
 
 			s.cleanupStaleE2EInstances()
 
@@ -648,4 +663,72 @@ func TestCleanupStaleE2EInstances_KeepsServersOfActiveRuns(t *testing.T) {
 			assert.Equal(t, len(tt.wantDeleted) == 1, stillTracked, "a removed run's tracking is dropped with it")
 		})
 	}
+}
+
+// The user's case: a PR run that starts late must never lose its servers to an age limit,
+// and idle PR servers must not linger for hours.
+func TestCleanupStaleE2EInstances_PRServersGoWhenIdleNotByAge(t *testing.T) {
+	nineHoursAgo := time.Now().Add(-9 * time.Hour).UnixMilli() // older than E2EPRInstanceMaxAge (8h)
+	twoHoursAgo := time.Now().Add(-2 * time.Hour).UnixMilli()
+	run := e2eRun{owner: "mattermost", repo: oxideRepoName, ref: "feature-x", sha: "abc", prNumber: 5}
+
+	for _, tt := range []struct {
+		name         string
+		createdAt    int64
+		runsJSON     string
+		dispatchedAt time.Duration // ago
+		wantDeleted  bool
+	}{
+		{"run in progress on 9h-old servers: kept", nineHoursAgo, `{"workflow_runs":[{"status":"in_progress"}]}`, 3 * time.Hour, false},
+		{"no run, last dispatch 3h ago: idle, removed", twoHoursAgo, `{"workflow_runs":[{"status":"completed"}]}`, 3 * time.Hour, true},
+		{"no run, dispatched 10m ago: kept for a re-run", twoHoursAgo, `{"workflow_runs":[{"status":"completed"}]}`, 10 * time.Minute, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			list := fmt.Sprintf(`[{"ID":"pr-server","OwnerID":"oxide-pr-5-ios-site-1-aaaaaaaa","State":"stable","CreateAt":%d}]`, tt.createdAt)
+			s, fc := newFakeCloudServer(t, "[]")
+			oxide := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fc.record(r)
+				switch {
+				case r.Method == http.MethodGet && r.URL.Query().Get("dns_name") == "oxide-%":
+					_, _ = w.Write([]byte(list))
+				case r.Method == http.MethodGet:
+					_, _ = w.Write([]byte("[]"))
+				default:
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			t.Cleanup(oxide.Close)
+			s.CloudClient = model.NewCloudClient(oxide.URL, "", "", "", "")
+			base, _ := newFakeGitHub(t, http.StatusOK, tt.runsJSON)
+			s.githubAPIBase = base
+			s.e2eInstances[run.key()] = []*E2EInstance{{InstallationID: "pr-server"}}
+			s.e2eTrackedRuns = map[string]e2eRun{run.key(): run}
+			s.e2eLastDispatch.Store(run.key(), time.Now().Add(-tt.dispatchedAt))
+
+			s.cleanupStaleE2EInstances()
+
+			if tt.wantDeleted {
+				assert.Equal(t, []string{"pr-server"}, deletedInstallationIDs(fc))
+				assert.NotContains(t, s.e2eInstances, run.key(), "a removed set must not be reused")
+			} else {
+				assert.Empty(t, deletedInstallationIDs(fc))
+			}
+		})
+	}
+}
+
+func TestDispatchPushRun_DuplicatePushKeepsTheFirstRun(t *testing.T) {
+	s, fc := newFakeCloudServer(t, "[]")
+	gh, captures := fakePushGitHub(t, "1111111", http.StatusOK, http.StatusNoContent)
+	s.githubAPIBase = gh.URL + "/"
+	run := e2eRun{owner: "mattermost", repo: oxideRepoName, ref: "main", sha: "1111111", platform: "both"}
+	first := makeOxideInstances()
+	s.e2eInstances[run.key()] = first
+
+	second := []*E2EInstance{{InstallationID: "dup"}}
+	s.dispatchPushRun(oxideE2EProfile, run, second, s.Logger)
+
+	assert.Equal(t, first, s.e2eInstances[run.key()], "the first run's servers stay tracked")
+	assert.Equal(t, []string{"dup"}, deletedInstallationIDs(fc))
+	assert.Empty(t, *captures, "no second dispatch")
 }
