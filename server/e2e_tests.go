@@ -6,9 +6,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
+	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,40 +27,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// E2EInstance represents a single E2E test server instance
-// Note: Platform field has different meanings for desktop vs mobile:
-//   - Desktop: Platform = OS runner (linux/macos/windows) where tests execute
-//   - Mobile: Platform = platform/site identifier for the test server
+// E2EInstance is one E2E test server.
 type E2EInstance struct {
 	Name           string `json:"name"`
-	Platform       string `json:"platform"` // Desktop: linux/macos/windows (OS runner), Mobile: platform/site instance ID
-	Runner         string `json:"runner"`   // For desktop only: GitHub Actions runner label
+	Platform       string `json:"platform"` // the profile slot: desktop OS (linux/macos/windows) or mobile site
 	URL            string `json:"url"`
 	InstallationID string `json:"installation_id"`
 	ServerVersion  string `json:"server_version"`
-}
-
-var mobileE2EPlatforms = []string{
-	"android-site-1",
-	"android-site-2",
-	"ios-site-1",
-	"ios-site-2",
-	"site-3",
-}
-
-var mobileE2EWorkflowInputKeys = []string{
-	"ANDROID_SITE_1_URL",
-	"ANDROID_SITE_2_URL",
-	"IOS_SITE_1_URL",
-	"IOS_SITE_2_URL",
-	"SITE_3_URL",
-}
-
-// buildMobileURLInputs maps each mobile instance's Platform to its workflow input URL.
-// It validates that exactly the canonical platforms are present and pairs them with
-// mobileE2EWorkflowInputKeys so callers cannot drift from the canonical order.
-func buildMobileURLInputs(instances []*E2EInstance) (map[string]string, error) {
-	return buildURLInputs("mobile", instances, mobileE2EPlatforms, mobileE2EWorkflowInputKeys)
 }
 
 // e2eUniqueSuffix returns an 8-char random hex suffix for unique instance names.
@@ -102,35 +81,19 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		"type":  "e2e",
 	})
 	logger.Info("Handling E2E test request")
+	defer recoverE2E(logger)
 
-	// Determine instance type and platforms first — needed for both reuse lookup and creation.
-	var instanceType string
-	var platforms []string
-	var testPlatform string // For mobile: which OS to test (ios/android/both). For desktop: unused (tests all OS platforms)
-
-	if isOxideRepo(pr.RepoName) {
-		// Checked first: the Oxide repo name also contains "mobile".
-		if !s.Config.E2EOxideEnabled {
-			logger.Info("Oxide E2E is disabled (E2EOxideEnabled=false), ignoring E2E label")
-			return
-		}
-		instanceType = oxideE2EInstanceType
-		platforms = oxideE2EPlatforms
-		testPlatform = s.extractPlatformFromLabel(label)
-		logger.WithField("testPlatform", testPlatform).Info("Detected Oxide test platform from label (ios/android/both)")
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		instanceType = "desktop"
-		platforms = []string{"linux", "macos", "windows"}
-		testPlatform = "all"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		instanceType = "mobile"
-		platforms = mobileE2EPlatforms
-		testPlatform = s.extractPlatformFromLabel(label)
-		logger.WithField("testPlatform", testPlatform).Info("Detected mobile test platform from label (ios/android/both)")
-	} else {
-		logger.Error("Unable to determine E2E instance type from repository name")
+	p := e2eProfileFor(pr.RepoName)
+	if p == nil {
+		logger.Error("Repository has no E2E profile")
 		return
 	}
+	if !s.e2eEnabled(p) {
+		logger.WithField("kind", p.kind).Info("E2E is disabled for this repository, ignoring E2E label")
+		return
+	}
+	run := e2eRun{owner: pr.RepoOwner, repo: pr.RepoName, ref: pr.Ref, sha: pr.Sha, prNumber: pr.Number, platform: s.extractPlatformFromLabel(label)}
+	logger = logger.WithFields(logrus.Fields{"kind": p.kind, "testPlatform": run.platform})
 
 	// The dispatch targets a branch of the base repo and the workflow holds secrets, so fork PRs
 	// never get servers.
@@ -142,10 +105,10 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		return
 	}
 
-	key := fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number)
+	key := run.key()
 
 	// Guard against duplicate webhook deliveries. Key includes platform so E2E/Run-Android and E2E/Run-iOS run independently.
-	inProgressKey := fmt.Sprintf("%s-%s", key, testPlatform)
+	inProgressKey := fmt.Sprintf("%s-%s", key, run.platform)
 	s.e2eInProgressLock.Lock()
 	if s.e2eInProgress[inProgressKey] {
 		s.e2eInProgressLock.Unlock()
@@ -165,10 +128,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	unlock := s.lockE2EPRProvisioning(key)
 	defer unlock()
 
-	// Desktop and mobile start every run on fresh servers, but only when no other E2E run or
-	// provisioning is active on the PR: Android and iOS runs share one server set, so tearing
-	// it down mid-run would break the other platform's run. Otherwise reuse, as before.
-	fresh := instanceType != oxideE2EInstanceType && s.isPRE2EIdle(pr, key, inProgressKey, logger)
+	// Every run starts on fresh servers, but only when no other E2E run or provisioning is
+	// active on the PR: Android and iOS runs share one server set, so tearing it down mid-run
+	// would break the other platform's run. Otherwise reuse. Superseded runs are cancelled by
+	// each workflow's own concurrency group.
+	fresh := s.isPRE2EIdle(pr, p.workflow, key, inProgressKey, logger)
 	if fresh {
 		logger.Info("No other E2E run active on this PR; replacing its servers with fresh ones")
 		s.handleE2ECleanup(pr)
@@ -197,11 +161,15 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
+	if !fresh && len(existingInstances) > 0 && !s.wakeUpHibernatingInstances(existingInstances, logger) {
+		logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
+		s.untrackRun(key)
+		s.destroyE2EInstances(existingInstances, logger)
+		fresh = true
+	}
 	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
-		s.cancelPRWorkflowRuns(pr, logger)
-		s.wakeUpHibernatingInstances(existingInstances, logger)
-		if err := s.triggerE2EWorkflow(pr, existingInstances, instanceType, testPlatform); err != nil {
+		if err := s.dispatchE2E(p, run, existingInstances); err != nil {
 			logger.WithError(err).Error("Failed to trigger E2E workflow with existing instances")
 			s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 		}
@@ -210,16 +178,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if !fresh {
-		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, instanceType, platforms); err == nil && len(cloudInstances) == len(platforms) {
+		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) && s.wakeUpHibernatingInstances(cloudInstances, logger) {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
-			s.cancelPRWorkflowRuns(pr, logger)
-			s.wakeUpHibernatingInstances(cloudInstances, logger)
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
 				s.destroyE2EInstances(cloudInstances, logger)
 				return
 			}
-			if err := s.triggerE2EWorkflow(pr, cloudInstances, instanceType, testPlatform); err != nil {
+			if err := s.dispatchE2E(p, run, cloudInstances); err != nil {
 				logger.WithError(err).Error("Failed to trigger E2E workflow with cloud instances")
 				s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 			}
@@ -227,8 +193,15 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		}
 	}
 
-	// 3. No existing instances — create fresh ones.
-	instances, err := s.createMultipleE2EInstances(pr, instanceType, platforms)
+	// 3. No existing instances — create fresh ones. PR close / reset stops this (startProvision).
+	provisionCtx, provisionDone := s.startProvision(key)
+	instances, err := s.provisionRun(provisionCtx, p, run, logger)
+	stoppedByCleanup := provisionCtx.Err() != nil // read before provisionDone, which cancels it
+	provisionDone()
+	if err != nil && stoppedByCleanup {
+		logger.Info("PR E2E cleanup stopped provisioning")
+		return
+	}
 	if err != nil {
 		logger.WithError(err).Error("Failed to create E2E instances")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to create E2E test instances: %v", err))
@@ -250,6 +223,11 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 		logger.Warn("PR was closed during E2E instance creation; destroying instances without tracking")
 		s.destroyE2EInstances(instances, logger)
 		return
+	} else if head := prInfo.GetHead().GetSHA(); head != "" && head != run.sha {
+		// The branch moved on while the servers came up; the workflow runs on the branch, so
+		// test its current commit (Oxide rejects any other MOBILE_VERSION).
+		logger.WithField("head_sha", head).Info("PR branch moved on during provisioning; testing its current commit")
+		run.sha = head
 	}
 
 	if !storeIfCurrent(instances) {
@@ -260,7 +238,7 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	logger.WithField("instances", len(instances)).Info("Successfully created E2E instances")
 
-	if err = s.triggerE2EWorkflow(pr, instances, instanceType, testPlatform); err != nil {
+	if err = s.dispatchE2E(p, run, instances); err != nil {
 		logger.WithError(err).Error("Failed to trigger E2E workflow")
 		s.postE2EErrorComment(pr, fmt.Sprintf("Failed to trigger E2E workflow: %v", err))
 		// Remove from tracking before cleanup to avoid double-destroy on later cleanup.
@@ -274,84 +252,180 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	logger.Info("Successfully triggered E2E workflow")
 }
 
-// createMultipleE2EInstances creates instances in parallel; results are in platforms[] order for stable index assignment.
-func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
-	if len(platforms) == 0 {
-		return nil, fmt.Errorf("no platforms specified")
+// provisionRun creates one fresh server per profile slot for run.
+// Names: <kind>-pr-<N>-<platform>-<uid> or <kind>-push-<platform>-<uid>.
+func (s *Server) provisionRun(ctx context.Context, p *e2eProfile, run e2eRun, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	slots := make([]e2eSlot, len(p.platforms))
+	for i, platform := range p.platforms {
+		// Fresh uid per attempt: a replacement must not reuse the failed installation's DNS name.
+		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
+			return e2eInstanceName(s.Config.DNSNameTestServer, p.kind, run.nameToken(), platform, e2eUniqueSuffix())
+		}}
 	}
+	logger.WithField("servers", len(slots)).Info("Creating E2E instances")
+	return s.provisionE2EInstances(ctx, slots, s.resolveMattermostServerVersion(), s.Config.E2EUsername, s.getE2EPassword(p.kind), p.kind, logger)
+}
 
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":      pr.RepoName,
-		"pr":        pr.Number,
-		"type":      instanceType,
-		"platforms": len(platforms),
-	})
+// recoverE2E logs a panic in an E2E goroutine instead of letting it crash the process, which
+// would lose the tracking of every server in flight. Use as: defer recoverE2E(logger).
+func recoverE2E(logger logrus.FieldLogger) {
+	if r := recover(); r != nil {
+		logger.WithField("panic", r).Errorf("E2E handler panicked\n%s", debug.Stack())
+	}
+}
 
-	version := s.resolveMattermostServerVersion()
-	username := s.Config.E2EUsername
-	password := s.getE2EPassword(instanceType)
-	// Name format: {type}-pr-{pr}-{platform}-{hex6}
+// e2eSlot is one server of a parallel E2E set.
+type e2eSlot struct {
+	platform string        // e.g. "android-site-2" or "linux"; becomes E2EInstance.Platform
+	nameFn   func() string // returns a fresh unique name for each attempt
+}
 
-	// Shared cancellable context: the first goroutine to fail cancels the rest so they
-	// exit their polling loop within one sleep interval (30s) instead of waiting up to 30min.
-	ctx, cancel := context.WithCancel(context.Background())
+// e2eSlotLabel names a slot for people: "android-site-2" -> "android site 2 server".
+func e2eSlotLabel(platform string) string {
+	return strings.ReplaceAll(platform, "-", " ") + " server"
+}
+
+// provisionE2EInstances creates one instance per slot in parallel and returns them in slot
+// order. Each slot replaces its own failed installations (createCloudInstallationWithRetry)
+// while its siblings keep going; only a slot that gives up cancels the others. Then every
+// instance that did come up is destroyed, and the error names the slot that gave up and why.
+func (s *Server) provisionE2EInstances(ctx context.Context, slots []e2eSlot, version, username, password, instanceType string, logger logrus.FieldLogger) ([]*E2EInstance, error) {
+	// Shared cancellable context: when a slot gives up, the others stop within one poll
+	// interval instead of waiting up to 30 minutes for a set that will be thrown away.
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	type result struct {
 		instance *E2EInstance
 		err      error
 	}
-	// Pre-allocate by index so each goroutine writes to its own slot — no mutex needed.
-	results := make([]result, len(platforms))
+	// Pre-allocate by index so each goroutine writes to its own slot.
+	results := make([]result, len(slots))
+	// failed lists failing slots in the order they gave up. The first one cancelled the rest,
+	// so it is the root cause; later failures are usually just that cancellation.
+	var failed []int
+	var failedMu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i, platform := range platforms {
+	for i, slot := range slots {
 		wg.Add(1)
-		go func(idx int, platform string) {
+		go func(idx int, slot e2eSlot) {
 			defer wg.Done()
-			// Fresh uid per attempt: a retry must not reuse the failed attempt's DNS name.
-			nameFn := func() string {
-				return e2eInstanceName(
-					s.Config.DNSNameTestServer,
-					instanceType, fmt.Sprintf("pr-%d", pr.Number), platform, e2eUniqueSuffix(),
-				)
-			}
-			logger.WithField("platform", platform).Info("Creating E2E instance")
-			inst, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+			slotLogger := logger.WithField("platform", slot.platform)
+			inst, err := s.provisionQueued(ctx, func() (*E2EInstance, error) {
+				return s.createCloudInstallationWithRetry(ctx, slot.nameFn, version, username, password, instanceType, slotLogger)
+			}, slotLogger)
 			if err != nil {
-				cancel() // signal sibling goroutines to stop waiting
 				results[idx] = result{err: err}
+				failedMu.Lock()
+				failed = append(failed, idx)
+				failedMu.Unlock()
+				cancel()
 				return
 			}
-			inst.Platform = platform
-			if instanceType == "desktop" {
-				inst.Runner = getRunnerForPlatform(platform)
-			}
+			inst.Platform = slot.platform
 			results[idx] = result{instance: inst}
-		}(i, platform)
+		}(i, slot)
 	}
 
 	wg.Wait()
 
-	// Collect results in platforms[] order. On any error, destroy all that succeeded.
 	var instances []*E2EInstance
-	var firstErr error
 	for _, r := range results {
-		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
-		} else {
+		if r.err == nil {
 			instances = append(instances, r.instance)
 		}
 	}
-
-	if firstErr != nil {
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
+	if len(failed) == 0 {
+		return instances, nil
 	}
 
-	return instances, nil
+	// Report the first slot that failed for a reason of its own. Only if every slot was
+	// cancelled (the caller cancelled) is the error a cancellation.
+	root := failed[0]
+	for _, idx := range failed {
+		if !errors.Is(results[idx].err, context.Canceled) {
+			root = idx
+			break
+		}
+	}
+
+	for i, r := range results {
+		slotLogger := logger.WithField("platform", slots[i].platform)
+		switch {
+		case r.err == nil:
+			slotLogger.WithField("installation_id", r.instance.InstallationID).Warn("E2E slot came up, destroying it because another slot failed")
+		case i == root:
+			slotLogger.WithError(r.err).Warn("E2E slot failed; cancelling the rest of the set")
+		default:
+			slotLogger.WithError(r.err).Warn("E2E slot did not come up")
+		}
+	}
+
+	s.destroyE2EInstances(instances, logger)
+	return nil, fmt.Errorf("%s: %w", e2eSlotLabel(slots[root].platform), results[root].err)
+}
+
+// defaultE2EMaxConcurrentProvisions is used when Config.E2EMaxConcurrentProvisions is 0.
+const defaultE2EMaxConcurrentProvisions = 64
+
+// provisionQueue returns the queue that bounds how many servers are being created at once
+// across every E2E flow (PR labels, pushes, CMT).
+func (s *Server) provisionQueue() chan struct{} {
+	s.e2eProvisionQueueOnce.Do(func() {
+		size := defaultE2EMaxConcurrentProvisions
+		if s.Config != nil && s.Config.E2EMaxConcurrentProvisions > 0 {
+			size = s.Config.E2EMaxConcurrentProvisions
+		}
+		s.e2eProvisionQueue = make(chan struct{}, size)
+	})
+	return s.e2eProvisionQueue
+}
+
+// provisionQueued runs create once a provisioning place is free. Any number of servers can
+// be requested: past the limit they wait their turn instead of
+// piling onto the provisioner. A place is held only while one server is being created, never
+// across a whole set, so sets waiting for places cannot deadlock each other. The wait does
+// not count against e2eInstallationMaxDuration.
+func (s *Server) provisionQueued(ctx context.Context, create func() (*E2EInstance, error), logger logrus.FieldLogger) (*E2EInstance, error) {
+	queue := s.provisionQueue()
+	select {
+	case queue <- struct{}{}:
+	default:
+		logger.WithField("limit", cap(queue)).Info("E2E provisioning limit reached; waiting for a free place")
+		select {
+		case queue <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("cancelled while waiting to provision: %w", ctx.Err())
+		}
+	}
+	defer func() { <-queue }()
+	return create()
+}
+
+// e2eCloudCallTimeout bounds one provisioner request. The cloud client has no HTTP timeout,
+// so a hung request would otherwise stall its server forever and, for a create, every create
+// queued behind it. Var so tests can shorten it.
+var e2eCloudCallTimeout = 2 * time.Minute
+
+// withCloudTimeout runs call, returning its error, or an error once ctx is done or
+// e2eCloudCallTimeout passes. A call that times out keeps running in the background; call
+// must therefore only write variables the caller reads after a nil return. A create that
+// times out and later succeeds leaves a server with a matterwick name, which PR-close
+// cleanup or the stale scan removes.
+func withCloudTimeout(ctx context.Context, call func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	timer := time.NewTimer(e2eCloudCallTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("provisioner request abandoned: %w", ctx.Err())
+	case <-timer.C:
+		return fmt.Errorf("provisioner request timed out after %s", e2eCloudCallTimeout)
+	}
 }
 
 // installationDeleteAttempts is how many times cleanup tries to delete an installation it
@@ -359,16 +433,17 @@ func (s *Server) createMultipleE2EInstances(pr *model.PullRequest, instanceType 
 // server: the caller has already discarded the ID by the time it returns, and a retry
 // provisions under a fresh name, so nothing else references the old one until the periodic
 // stale scan reaps it hours later.
-const installationDeleteAttempts = 3
+const installationDeleteAttempts = 6
 
-// installationDeleteRetryDelay is the pause between delete attempts. Var, not const, so
-// tests can shorten it.
+// installationDeleteRetryDelay is the first pause between delete attempts; it doubles each
+// time (2s, 4s, ... about a minute in all). The provisioner answers 409 while it is working
+// on the installation, which is likely right after creation. Var so tests can shorten it.
 var installationDeleteRetryDelay = 2 * time.Second
 
 // deleteInstallationWithRetry deletes installationID, retrying transient provisioner
-// failures. If every attempt fails the installation is orphaned, so it reports to
-// Mattermost with the ID — the periodic stale scan is the backstop, but it runs hours
-// later and a silent orphan bills until then.
+// failures. An installation that is already gone (404) counts as deleted. If every attempt
+// fails the installation is orphaned, so it reports to Mattermost with the ID — the periodic
+// stale scan is the backstop, but it runs hours later and a silent orphan bills until then.
 func (s *Server) deleteInstallationWithRetry(installationID, name string, logger logrus.FieldLogger) {
 	logger = logger.WithFields(logrus.Fields{
 		"installation_id": installationID,
@@ -376,51 +451,199 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 	})
 
 	var lastErr error
+	delay := installationDeleteRetryDelay
 	for attempt := 1; attempt <= installationDeleteAttempts; attempt++ {
-		if lastErr = s.CloudClient.DeleteInstallation(installationID); lastErr == nil {
+		lastErr = withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(installationID) })
+		if lastErr == nil || s.installationGoneOrDeleting(installationID, lastErr) {
+			s.e2eCreated.Delete(installationID)
 			return
 		}
 		logger.WithError(lastErr).WithFields(logrus.Fields{
 			"attempt":  attempt,
 			"attempts": installationDeleteAttempts,
-		}).Warn("Failed to clean up partially created installation")
+		}).Warn("Failed to delete E2E installation")
 		if attempt < installationDeleteAttempts {
-			time.Sleep(installationDeleteRetryDelay)
+			time.Sleep(delay)
+			delay *= 2
 		}
 	}
 
-	logger.WithError(lastErr).Error("Gave up deleting partially created installation; it is orphaned until the periodic stale scan reaps it")
+	logger.WithError(lastErr).Error("Gave up deleting E2E installation; it is orphaned until the periodic stale scan reaps it")
 	s.logErrorToMattermost("Orphaned E2E installation %s (%s): delete failed %d times (%v). The periodic stale scan will retry, but it may need manual cleanup.",
 		installationID, name, installationDeleteAttempts, lastErr)
 }
 
-// createCloudInstallationAttempts is how many times a single instance is provisioned before
-// giving up. A fresh name per attempt avoids colliding with the failed attempt's DNS record.
-const createCloudInstallationAttempts = 2
+// installationGoneOrDeleting reports whether a failed delete needs no retry: the installation
+// is gone (404) or already being deleted (the provisioner answers 400 to a second delete).
+func (s *Server) installationGoneOrDeleting(installationID string, deleteErr error) bool {
+	code, ok := provisionerStatusCode(deleteErr)
+	if ok && code == http.StatusNotFound {
+		return true
+	}
+	if !ok || code != http.StatusBadRequest {
+		return false
+	}
+	var inst *cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		got, getErr := s.CloudClient.GetInstallation(installationID, nil)
+		inst = got
+		return getErr
+	})
+	return err == nil && (inst == nil || strings.HasPrefix(inst.State, "deletion"))
+}
 
-// createCloudInstallationWithRetry provisions one instance, retrying transient provisioner
-// failures. nameFn is called per attempt and must return a fresh unique name each time.
+// deleteInstallationsByDNS deletes every installation with this DNS name.
+func (s *Server) deleteInstallationsByDNS(dns string, logger logrus.FieldLogger) {
+	var installations []*cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dns, Paging: cloudModel.AllPagesNotDeleted()})
+		installations = found
+		return getErr
+	})
+	if err != nil {
+		logger.WithError(err).WithField("dns", dns).Warn("Failed to look up an installation whose create got no answer; the stale scan will remove it if it exists")
+		return
+	}
+	for _, inst := range installations {
+		logger.WithField("installation_id", inst.ID).Warn("Deleting an installation whose create got no answer")
+		s.deleteInstallationWithRetry(inst.ID, inst.OwnerID, logger)
+	}
+}
+
+// createCloudInstallationAttempts is how many installations a slot tries before giving up.
+// Each failed one is deleted and replaced under a fresh name, so a retry never collides with
+// the failed attempt's DNS record.
+const createCloudInstallationAttempts = 3
+
+// e2eInstallationRetryBackoff is the wait before replacing a failed installation (attempt 2,
+// attempt 3, ...; the last entry repeats). Without it a fast failure (provisioner 5xx or rate
+// limit, a DNS blip) burns every attempt within seconds. Var so tests can change it.
+var e2eInstallationRetryBackoff = []time.Duration{15 * time.Second, 45 * time.Second, 90 * time.Second}
+
+// e2eInstallationMaxDuration caps one slot's total time across all attempts, so a run cannot
+// hang. It covers waiting for cluster capacity, so it is longer than one attempt's
+// stability timeout. Var so tests can shorten it.
+var e2eInstallationMaxDuration = 2 * time.Hour
+
+// e2eRetrySleep waits d, or returns ctx's error as soon as ctx is done. Var so tests can
+// record the backoff without waiting.
+var e2eRetrySleep = func(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// e2eInstallationRetryDelay returns the backoff before the given retry (1 = before attempt 2),
+// plus up to 20% jitter so slots that failed together do not retry in lockstep.
+func e2eInstallationRetryDelay(retry int) time.Duration {
+	i := retry - 1
+	if i >= len(e2eInstallationRetryBackoff) {
+		i = len(e2eInstallationRetryBackoff) - 1
+	}
+	base := e2eInstallationRetryBackoff[i]
+	if base <= 0 {
+		return 0
+	}
+	return base + time.Duration(rand.Int63n(int64(base)/5+1))
+}
+
+// provisionerStatusPattern matches the mattermost-cloud client's error for a non-success
+// response. The client drops the response body, so the status code is all there is.
+var provisionerStatusPattern = regexp.MustCompile(`failed with status code (\d+)`)
+
+// provisionerStatusCode returns the provisioner HTTP status carried by err, if any.
+func provisionerStatusCode(err error) (int, bool) {
+	m := provisionerStatusPattern.FindStringSubmatch(err.Error())
+	if m == nil {
+		return 0, false
+	}
+	code, convErr := strconv.Atoi(m[1])
+	return code, convErr == nil
+}
+
+// isRetryableE2EInstallationError reports whether replacing the installation can fix err.
+// A replacement is a fresh installation under a fresh name, so it fixes provisioner hiccups
+// (5xx, network errors), rate limiting (429), a DNS name conflict (409), and a server that
+// failed to become stable or to initialize. Any other provisioner 4xx means the request or
+// matterwick's credentials are wrong, and every attempt would fail the same way.
+func isRetryableE2EInstallationError(err error) bool {
+	code, ok := provisionerStatusCode(err)
+	if !ok || code < 400 || code >= 500 {
+		return true
+	}
+	return code == http.StatusConflict || code == http.StatusTooManyRequests
+}
+
+// createCloudInstallationWithRetry provisions one instance. A failed installation is deleted
+// (by createCloudInstallation) and, if the error is retryable, replaced after a backoff, up to
+// createCloudInstallationAttempts times within e2eInstallationMaxDuration. nameFn is called per
+// attempt and must return a fresh unique name each time. It never cancels anything itself;
+// the caller decides what a slot that gives up means for its siblings.
 func (s *Server) createCloudInstallationWithRetry(ctx context.Context, nameFn func() string, version, username, password, instanceType string, logger logrus.FieldLogger) (*E2EInstance, error) {
+	slotCtx, cancel := context.WithTimeout(ctx, e2eInstallationMaxDuration)
+	defer cancel()
+
 	var lastErr error
-	for attempt := 1; attempt <= createCloudInstallationAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			if lastErr != nil {
-				return nil, lastErr
+	attempts := 0
+	for attempts < createCloudInstallationAttempts {
+		if attempts > 0 {
+			delay := e2eInstallationRetryDelay(attempts)
+			logger.WithFields(logrus.Fields{
+				"next_attempt": attempts + 1,
+				"attempts":     createCloudInstallationAttempts,
+				"backoff":      delay.String(),
+			}).Warn("Replacing failed installation after backoff")
+			if e2eRetrySleep(slotCtx, delay) != nil {
+				break
 			}
-			return nil, fmt.Errorf("installation creation cancelled before attempt %d: %w", attempt, err)
 		}
-		instance, err := s.createCloudInstallation(ctx, nameFn(), version, username, password, instanceType, logger)
+		if slotCtx.Err() != nil {
+			break
+		}
+
+		attempts++
+		instance, err := s.createCloudInstallation(slotCtx, nameFn(), version, username, password, instanceType, logger)
 		if err == nil {
 			return instance, nil
 		}
 		lastErr = err
+		if slotCtx.Err() != nil {
+			break
+		}
 		logger.WithError(err).WithFields(logrus.Fields{
-			"attempt":  attempt,
+			"attempt":  attempts,
 			"attempts": createCloudInstallationAttempts,
 			"version":  version,
 		}).Warn("Installation attempt failed")
+		if !isRetryableE2EInstallationError(err) {
+			return nil, fmt.Errorf("not retryable: %w", err)
+		}
 	}
-	return nil, lastErr
+
+	switch {
+	case ctx.Err() != nil:
+		// The caller (or a sibling that gave up) cancelled. Keep it recognisable as a
+		// cancellation so it is never reported as this slot's own failure.
+		if lastErr == nil {
+			return nil, fmt.Errorf("installation creation cancelled before attempt %d: %w", attempts+1, ctx.Err())
+		}
+		if errors.Is(lastErr, context.Canceled) {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("installation creation cancelled after attempt %d failed (%v): %w", attempts, lastErr, ctx.Err())
+	case slotCtx.Err() != nil:
+		if lastErr == nil {
+			lastErr = slotCtx.Err()
+		}
+		return nil, fmt.Errorf("gave up after %s (%d attempts): %w", e2eInstallationMaxDuration, attempts, lastErr)
+	default:
+		return nil, fmt.Errorf("failed after %d attempts: %w", attempts, lastErr)
+	}
 }
 
 // createCloudInstallation creates one installation and polls until stable. Cancelling ctx aborts the wait so parallel callers can fail fast.
@@ -445,8 +668,7 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		"MM_RATELIMITSETTINGS_VARYBYUSER":                    cloudModel.EnvVar{Value: "false"},
 		"MM_TEAMSETTINGS_EXPERIMENTALENABLEAUTOMATICREPLIES": cloudModel.EnvVar{Value: "true"},
 	}
-	// Oxide gets the mobile baseline unchanged; no Oxide-only server settings.
-	if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
+	if mobileServerKind(instanceType) {
 		envVars["MM_FEATUREFLAGS_CHANNELBOOKMARKS"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_CUSTOMPROFILEATTRIBUTES"] = cloudModel.EnvVar{Value: "true"}
 		envVars["MM_FEATUREFLAGS_INTERACTIVEDIALOGAPPSFORM"] = cloudModel.EnvVar{Value: "true"}
@@ -470,10 +692,13 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		envVars["MM_EXPERIMENTALSETTINGS_RESTRICTSYSTEMADMIN"] = cloudModel.EnvVar{Value: "false"}
 	}
 
+	// DNS is deprecated: send DNSNames, and Name, which the provisioner only derives from DNS.
+	dnsName := fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer)
 	installationRequest := &cloudModel.CreateInstallationRequest{
+		Name:        name,
 		OwnerID:     name,
 		Version:     version,
-		DNS:         fmt.Sprintf("%s.%s", name, s.Config.DNSNameTestServer),
+		DNSNames:    []string{dnsName},
 		Size:        "miniSingleton",
 		Affinity:    cloudModel.InstallationAffinityMultiTenant,
 		Database:    cloudModel.InstallationDatabaseMultiTenantRDSPostgresPGBouncer,
@@ -486,15 +711,22 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 		installationRequest.GroupID = s.Config.CloudGroupID
 	}
 
-	// Create installation
-	installation, err := s.CloudClient.CreateInstallation(installationRequest)
+	installation, err := s.sendCreateInstallation(ctx, installationRequest, logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create installation: %w", err)
+		if _, answered := provisionerStatusCode(err); !answered {
+			// No answer (cancelled, timed out, connection lost): the provisioner may have
+			// created it anyway. Look it up by name and delete it, or it bills unseen.
+			s.deleteInstallationsByDNS(dnsName, logger)
+		}
+		return nil, fmt.Errorf("failed to create installation %s: %w", name, err)
 	}
+	s.e2eCreated.Store(installation.ID, struct{}{})
 
+	// Delete the installation and name it in the error, so a failed run says which
+	// installation failed and at which step.
 	cleanupCreatedInstallation := func(cause error) error {
 		s.deleteInstallationWithRetry(installation.ID, name, logger)
-		return cause
+		return fmt.Errorf("installation %s (%s): %w", installation.ID, name, cause)
 	}
 
 	logger.WithField("installation_id", installation.ID).Info("Installation created, waiting for stable state")
@@ -510,12 +742,12 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 
 	// Initialize Mattermost server with provided credentials
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	adminClient, err := s.initializeMattermostE2EServer(spinwickURL, username, password, logger)
+	adminClient, err := initializeE2EServer(s, spinwickURL, username, password, logger)
 	if err != nil {
 		return nil, cleanupCreatedInstallation(fmt.Errorf("failed to initialize Mattermost server: %w", err))
 	}
 
-	if instanceType == "mobile" {
+	if mobileServerKind(instanceType) {
 		if err := s.restartWithSharedChannels(ctx, adminClient, installation.ID, logger); err != nil {
 			return nil, cleanupCreatedInstallation(fmt.Errorf("failed to enable Shared Channels: %w", err))
 		}
@@ -529,21 +761,81 @@ func (s *Server) createCloudInstallation(ctx context.Context, name, version, use
 	}, nil
 }
 
+// e2eCreateConflictBackoff is the wait before re-sending a create the provisioner answered with
+// 409. Var so tests can change it.
+var e2eCreateConflictBackoff = []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
+
+// sendCreateInstallation sends one create request. With CloudGroupID set, the provisioner
+// takes a non-blocking lock on the group for every create and answers 409 to any create that
+// arrives while the lock is held. A server set's creates are sent in parallel, so they would
+// conflict with each other: send them one at a time. The provisioner's group supervisor also
+// holds that lock while it works, so a 409 is retried with the same request; nothing was
+// created, so there is nothing to clean up. Waiting for the turn and the request itself both
+// end as soon as ctx is cancelled; a cancelled caller never sends a create.
+func (s *Server) sendCreateInstallation(ctx context.Context, request *cloudModel.CreateInstallationRequest, logger logrus.FieldLogger) (*cloudModel.InstallationDTO, error) {
+	gate := s.createGate()
+	for attempt := 0; ; attempt++ {
+		select {
+		case gate <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("installation create cancelled: %w", ctx.Err())
+		}
+		installation, err := s.CloudClient.CreateInstallationContext(ctx, request)
+		<-gate
+		if err == nil || ctx.Err() != nil || attempt == len(e2eCreateConflictBackoff) {
+			return installation, err
+		}
+		if code, ok := provisionerStatusCode(err); !ok || code != http.StatusConflict {
+			return installation, err
+		}
+		logger.WithError(err).WithField("backoff", e2eCreateConflictBackoff[attempt].String()).Warn("Provisioner group is locked; re-sending the create request")
+		if e2eRetrySleep(ctx, e2eCreateConflictBackoff[attempt]) != nil {
+			return nil, err
+		}
+	}
+}
+
+// createGate is the one-at-a-time gate for create requests.
+func (s *Server) createGate() chan struct{} {
+	s.e2eCreateGateOnce.Do(func() { s.e2eCreateGate = make(chan struct{}, 1) })
+	return s.e2eCreateGate
+}
+
 // waitForE2EInstallationStable polls the provisioner until the installation is stable.
 // Cancelling ctx aborts the wait so parallel callers can fail fast.
 func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationID string, logger logrus.FieldLogger) error {
-	timeout := time.Now().Add(30 * time.Minute)
+	deadline := time.Now().Add(e2eInstallationStableTimeout)
+	pollErrors := 0
+	waitingForCapacity := false
 	for {
-		inst, err := s.CloudClient.GetInstallation(installationID, nil)
+		var inst *cloudModel.InstallationDTO
+		err := withCloudTimeout(ctx, func() error {
+			got, getErr := s.CloudClient.GetInstallation(installationID, nil)
+			inst = got
+			return getErr
+		})
 		if err != nil {
-			return fmt.Errorf("failed to get installation status: %w", err)
+			// A busy provisioner can fail a poll; only a run of transient failures (or one
+			// non-retryable 4xx) gives up the server.
+			pollErrors++
+			if pollErrors >= e2eStatusPollErrorLimit || ctx.Err() != nil || !isRetryableE2EInstallationError(err) {
+				return fmt.Errorf("failed to get installation status: %w", err)
+			}
+			logger.WithError(err).WithField("consecutive_errors", pollErrors).Warn("Installation status poll failed; retrying")
+			if e2eRetrySleep(ctx, e2eStatusPollRetryDelay) != nil {
+				return fmt.Errorf("failed to get installation status: %w", err)
+			}
+			continue
 		}
+		pollErrors = 0
 		if inst == nil {
 			return fmt.Errorf("installation %s not found", installationID)
 		}
 
-		// The provisioner never retries these on its own, so waiting longer cannot help.
-		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed {
+		// The provisioner never retries these on its own, so waiting longer cannot help. A
+		// deletion state means someone (PR cleanup, a manual delete) is removing it.
+		if inst.State == cloudModel.InstallationStateCreationFailed || inst.State == cloudModel.InstallationStateUpdateFailed ||
+			strings.HasPrefix(inst.State, "deletion") {
 			return fmt.Errorf("installation entered state %q", inst.State)
 		}
 
@@ -552,7 +844,20 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 			return nil
 		}
 
-		if time.Now().After(timeout) {
+		// No cluster has room yet; the provisioner places the installation once one does. A
+		// replacement would only wait in the same line, so wait here, outside the stability
+		// timeout (the slot's e2eInstallationMaxDuration still bounds it).
+		if inst.State == cloudModel.InstallationStateCreationNoCompatibleClusters {
+			if !waitingForCapacity {
+				logger.Warn("No cluster has capacity for the installation yet; waiting")
+				waitingForCapacity = true
+			}
+			deadline = time.Now().Add(e2eInstallationStableTimeout)
+		} else {
+			waitingForCapacity = false
+		}
+
+		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for installation to become stable")
 		}
 
@@ -564,6 +869,17 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 		}
 	}
 }
+
+// e2eInstallationStableTimeout is how long one installation may take to become stable, not
+// counting time spent waiting for cluster capacity. Var so tests can shorten it.
+var e2eInstallationStableTimeout = 30 * time.Minute
+
+// e2eStatusPollErrorLimit consecutive failed status polls give up the installation;
+// e2eStatusPollRetryDelay is the pause after a failed poll.
+// 30 x 10s rides out a provisioner restart of about 5 minutes without replacing every server.
+const e2eStatusPollErrorLimit = 30
+
+var e2eStatusPollRetryDelay = 10 * time.Second
 
 // e2eInstallationPollInterval is the pause between installation status polls. Var, not
 // const, so tests can shorten it.
@@ -586,8 +902,11 @@ func (s *Server) restartWithSharedChannels(ctx context.Context, client *mattermo
 	// Changing a PriorityEnv value makes the operator restart the pod. The patch merges,
 	// so the existing env vars stay.
 	logger.Info("Restarting server so Shared Channels starts at boot")
-	_, err = s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
-		PriorityEnv: cloudModel.EnvVarMap{"MATTERWICK_E2E_RESTART_NONCE": cloudModel.EnvVar{Value: cloudModel.NewID()}},
+	err = withCloudTimeout(ctx, func() error {
+		_, updateErr := s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
+			PriorityEnv: cloudModel.EnvVarMap{"MATTERWICK_E2E_RESTART_NONCE": cloudModel.EnvVar{Value: cloudModel.NewID()}},
+		})
+		return updateErr
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update installation to restart the server: %w", err)
@@ -614,7 +933,7 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	// Try config first, then fall back to environment variables
 	password = s.Config.E2EPassword
 	if password == "" {
-		if instanceType == "mobile" || instanceType == oxideE2EInstanceType {
+		if mobileServerKind(instanceType) {
 			password = os.Getenv("MM_MOBILE_E2E_ADMIN_PASSWORD")
 		} else {
 			password = os.Getenv("MM_DESKTOP_E2E_USER_CREDENTIALS")
@@ -626,6 +945,10 @@ func (s *Server) getE2EPassword(instanceType string) string {
 	}
 	return password
 }
+
+// initializeE2EServer runs the post-stable setup (DNS, ping, admin user, team). Var so tests
+// can bring an installation up without a real Mattermost server.
+var initializeE2EServer = (*Server).initializeMattermostE2EServer
 
 // initializeMattermostE2EServer initializes a Mattermost server with E2E credentials and
 // returns a client logged in as the admin.
@@ -708,30 +1031,33 @@ func (s *Server) setupE2EServerCredentials(spinwickURL, username, password strin
 	return client, nil
 }
 
-// triggerE2EWorkflow triggers the appropriate E2E workflow with instance details
-// testPlatform parameter:
-//   - For desktop: "all" (tests run on linux/macos/windows automatically)
-//   - For mobile: "ios", "android", or "both" (determines which mobile OS to test)
-func (s *Server) triggerE2EWorkflow(pr *model.PullRequest, instances []*E2EInstance, instanceType string, testPlatform string) error {
-	ctx := context.Background()
+// dispatchE2E dispatches p's workflow for run on run.ref with the profile's inputs.
+func (s *Server) dispatchE2E(p *e2eProfile, run e2eRun, instances []*E2EInstance) error {
+	if len(instances) != len(p.platforms) {
+		return fmt.Errorf("%s E2E requires exactly %d instances, got %d", p.kind, len(p.platforms), len(instances))
+	}
+	inputs, err := p.inputs(s, run, instances)
+	if err != nil {
+		return err
+	}
 	client := s.e2eGithubClient()
-
-	var err error
-	if instanceType == "desktop" {
-		// Desktop ignores testPlatform - always tests all OS platforms (linux/macos/windows)
-		err = s.triggerDesktopE2EWorkflow(ctx, client, pr, instances)
-	} else if instanceType == "mobile" {
-		// Mobile uses testPlatform to determine which mobile OS to test (ios/android/both)
-		err = s.triggerMobileE2EWorkflow(ctx, client, pr, instances, testPlatform)
-	} else if instanceType == oxideE2EInstanceType {
-		err = s.triggerOxideE2EWorkflow(ctx, client, pr, instances, testPlatform)
-	} else {
-		return fmt.Errorf("unknown instance type: %s", instanceType)
+	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/dispatches", run.owner, run.repo, p.workflow),
+		map[string]interface{}{"ref": run.ref, "inputs": inputs})
+	if err != nil {
+		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
 	}
-	if err == nil {
-		s.e2eLastDispatch.Store(fmt.Sprintf("%s-pr-%d", pr.RepoName, pr.Number), time.Now())
+	if _, err := client.Do(context.Background(), req, nil); err != nil {
+		return fmt.Errorf("failed to dispatch %s: %w", p.workflow, err)
 	}
-	return err
+	s.e2eLastDispatch.Store(run.key(), time.Now())
+	s.e2eInstancesLock.Lock()
+	if s.e2eTrackedRuns == nil {
+		s.e2eTrackedRuns = make(map[string]e2eRun)
+	}
+	s.e2eTrackedRuns[run.key()] = run
+	s.e2eInstancesLock.Unlock()
+	s.Logger.WithFields(logrus.Fields{"repo": run.repo, "ref": run.ref, "workflow": p.workflow, "pr": run.prNumber}).Info("Dispatched E2E workflow")
+	return nil
 }
 
 // e2eGithubClient returns a GitHub client, pointed at the test server when one is set.
@@ -757,99 +1083,6 @@ func (s *Server) lockE2EPRProvisioning(key string) func() {
 	return mu.Unlock
 }
 
-// triggerDesktopE2EWorkflow triggers the desktop E2E workflow
-func (s *Server) triggerDesktopE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance) error {
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
-		"type": "desktop",
-	})
-
-	// Convert instances to JSON for workflow input using consistent schema
-	instanceDetailsJSON, err := s.buildInstanceDetailsJSON(instances)
-	if err != nil {
-		return fmt.Errorf("failed to marshal instance details: %w", err)
-	}
-
-	// Use the github REST API to trigger the workflow_dispatch event
-	body := map[string]interface{}{
-		"ref": pr.Ref,
-		"inputs": map[string]interface{}{
-			"instance_details":  instanceDetailsJSON,
-			"version_name":      pr.Ref,
-			"MM_TEST_USER_NAME": s.Config.E2EUsername,
-			"MM_SERVER_VERSION": instances[0].ServerVersion,
-			"pr_number":         fmt.Sprintf("%d", pr.Number),
-		},
-	}
-
-	logger.WithField("instances_json", string(instanceDetailsJSON)).Debug("Triggering desktop E2E workflow")
-
-	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", pr.RepoOwner, pr.RepoName), body)
-	if err != nil {
-		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
-	}
-
-	_, err = client.Do(ctx, req, nil)
-	if err != nil {
-		return fmt.Errorf("failed to trigger desktop e2e workflow: %w", err)
-	}
-
-	logger.Info("Successfully triggered desktop E2E workflow")
-	return nil
-}
-
-// triggerMobileE2EWorkflow triggers the mobile E2E workflow
-// testPlatform specifies which mobile OS to test: "ios", "android", or "both"
-func (s *Server) triggerMobileE2EWorkflow(ctx context.Context, client *github.Client, pr *model.PullRequest, instances []*E2EInstance, testPlatform string) error {
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo":         pr.RepoName,
-		"pr":           pr.Number,
-		"type":         "mobile",
-		"testPlatform": testPlatform, // ios/android/both
-	})
-
-	if len(instances) != len(mobileE2EPlatforms) {
-		return fmt.Errorf("mobile E2E requires exactly %d instances, got %d", len(mobileE2EPlatforms), len(instances))
-	}
-
-	// Build workflow inputs keyed by Platform so dispatch order is independent of slice order.
-	mobileInputs, err := buildMobileURLInputs(instances)
-	if err != nil {
-		return err
-	}
-
-	inputs := map[string]interface{}{
-		"MOBILE_VERSION": pr.Sha,
-		"PLATFORM":       testPlatform, // Workflow input: which mobile OS to test (ios/android/both)
-		"pr_number":      fmt.Sprintf("%d", pr.Number),
-	}
-	for inputKey, url := range mobileInputs {
-		inputs[inputKey] = url
-	}
-
-	// Use the github REST API to trigger the workflow_dispatch event
-	body := map[string]interface{}{
-		"ref":    pr.Ref,
-		"inputs": inputs,
-	}
-
-	logger.WithField("workflow", "e2e-detox-pr.yml").Debug("Triggering mobile E2E workflow")
-
-	req, err := client.NewRequest("POST", fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", pr.RepoOwner, pr.RepoName), body)
-	if err != nil {
-		return fmt.Errorf("failed to create workflow dispatch request: %w", err)
-	}
-
-	_, err = client.Do(ctx, req, nil)
-	if err != nil {
-		return fmt.Errorf("failed to trigger mobile e2e workflow: %w", err)
-	}
-
-	logger.Info("Successfully triggered mobile E2E workflow")
-	return nil
-}
-
 // handleE2ECleanup destroys tracked E2E instances, then queries the cloud API by DNS pattern to catch orphans.
 func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	logger := s.Logger.WithFields(logrus.Fields{
@@ -869,11 +1102,13 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 	s.e2ePRCleanupGenerationLock.Lock()
 	s.e2ePRCleanupGeneration[key]++
 	s.e2ePRCleanupGenerationLock.Unlock()
+	s.cancelProvision(key)
 
 	// Fast path: in-memory map
 	s.e2eInstancesLock.Lock()
 	instances := s.e2eInstances[key]
 	delete(s.e2eInstances, key)
+	delete(s.e2eTrackedRuns, key)
 	s.e2eInstancesLock.Unlock()
 
 	if len(instances) > 0 {
@@ -887,54 +1122,38 @@ func (s *Server) handleE2ECleanup(pr *model.PullRequest) {
 
 // cleanupOrphanedE2EInstances queries the cloud API by DNS LIKE pattern and destroys any matches.
 func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logrus.FieldLogger) {
-	var instanceType string
-	if isOxideRepo(pr.RepoName) {
-		// Checked first so an Oxide PR close never matches mobile-pr-<N>-% (mattermost-mobile's
-		// servers for the same PR number). Runs even when E2EOxideEnabled is false so servers
-		// created before the flag was turned off are still removed.
-		instanceType = oxideE2EInstanceType
-	} else if strings.Contains(pr.RepoName, "desktop") {
-		instanceType = "desktop"
-	} else if strings.Contains(pr.RepoName, "mobile") {
-		instanceType = "mobile"
-	} else {
+	// Runs even when the profile is disabled, so servers created before then are removed.
+	p := e2eProfileFor(pr.RepoName)
+	if p == nil {
 		logger.Debug("Skipping orphan E2E cleanup for non-E2E repo")
 		return
 	}
 
-	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number) // e.g. "mobile-pr-9587-%"
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number) // e.g. "mobile-pr-9587-%"
 
-	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
-		DNS:    dnsPattern,
-		Paging: cloudModel.AllPagesNotDeleted(),
+	var installations []*cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dnsPattern, Paging: cloudModel.AllPagesNotDeleted()})
+		installations = found
+		return getErr
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to query cloud API for orphaned E2E instances")
 		return
 	}
 
-	if len(installations) == 0 {
-		logger.Debug("No orphaned E2E instances found via cloud API")
-		return
-	}
-
-	logger.WithField("orphans", len(installations)).Warn("Found orphaned E2E instances via cloud API")
+	var orphans []*E2EInstance
 	for _, inst := range installations {
-		// Skip instances already progressing through deletion to avoid redundant API calls.
-		if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
-			inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
-			inst.State == cloudModel.InstallationStateDeletionPending ||
-			inst.State == cloudModel.InstallationStateDeletionRequested ||
-			inst.State == cloudModel.InstallationStateDeletionFailed ||
+		// deletion-failed is not retried by the provisioner, so it is deleted again here.
+		if inst.State != cloudModel.InstallationStateDeletionFailed && strings.HasPrefix(inst.State, "deletion") ||
 			inst.State == cloudModel.InstallationStateDeleted {
-			logger.WithField("installation_id", inst.ID).Debug("Skipping E2E instance already in deletion state")
 			continue
 		}
-		instLogger := logger.WithField("installation_id", inst.ID)
-		instLogger.Info("Destroying orphaned E2E instance")
-		if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
-			instLogger.WithError(err).Error("Failed to destroy orphaned E2E instance")
-		}
+		orphans = append(orphans, &E2EInstance{Name: inst.OwnerID, InstallationID: inst.ID})
+	}
+	if len(orphans) > 0 {
+		logger.WithField("orphans", len(orphans)).Warn("Destroying orphaned E2E instances found via cloud API")
+		s.destroyE2EInstances(orphans, logger)
 	}
 }
 
@@ -970,12 +1189,13 @@ func (s *Server) cleanupStaleE2EInstances() {
 	}).Info("Scanning for stale E2E instances")
 
 	now := time.Now()
-	nonPRCutoffMs := now.Add(-nonPRMaxAge).UnixMilli()
-	prCutoffMs := now.Add(-prMaxAge).UnixMilli()
 
 	var reapedPRInstallationIDs []string
+	owners := s.trackedRunOwners()
+	runActive := map[string]bool{} // per run key, looked up once per scan
 
-	for _, instanceType := range []string{"desktop", "mobile", oxideE2EInstanceType} {
+	for _, p := range e2eProfiles {
+		instanceType := p.kind
 		pattern := instanceType + "-%"
 		installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 			DNS:    pattern,
@@ -993,49 +1213,36 @@ func (s *Server) cleanupStaleE2EInstances() {
 				logger.Warn("Skipping instance with nil Installation pointer in cleanup scan")
 				continue
 			}
-
-			// PR instances have "-pr-" in their OwnerID (e.g. "mobile-pr-123-site-1-...")
-			// and use the longer PR max-age; everything else uses the non-PR max-age.
-			isPR := strings.Contains(inst.OwnerID, "-pr-")
-			cutoffMs := nonPRCutoffMs
-			if isPR {
-				cutoffMs = prCutoffMs
-			}
-
-			// Skip instances younger than their max age — a test may still be using them,
-			// or (for PRs) the servers are being kept alive for reuse.
-			if inst.CreateAt > cutoffMs {
-				logger.WithFields(logrus.Fields{
-					"installation_id": inst.ID,
-					"owner_id":        inst.OwnerID,
-					"is_pr":           isPR,
-				}).Debug("Skipping instance younger than its max age")
-				continue
-			}
-
-			// Skip instances already progressing through deletion.
-			if inst.State == cloudModel.InstallationStateDeletionPendingRequested ||
-				inst.State == cloudModel.InstallationStateDeletionPendingInProgress ||
-				inst.State == cloudModel.InstallationStateDeletionPending ||
-				inst.State == cloudModel.InstallationStateDeletionRequested ||
-				inst.State == cloudModel.InstallationStateDeletionFailed ||
+			// Skip instances already being deleted. deletion-failed is not retried by the
+			// provisioner, so it is deleted again here.
+			if inst.State != cloudModel.InstallationStateDeletionFailed && strings.HasPrefix(inst.State, "deletion") ||
 				inst.State == cloudModel.InstallationStateDeleted {
 				continue
 			}
 
+			isPR := strings.Contains(inst.OwnerID, "-pr-")
 			instLogger := logger.WithFields(logrus.Fields{
 				"installation_id": inst.ID,
 				"owner_id":        inst.OwnerID,
 				"state":           inst.State,
 				"is_pr":           isPR,
 			})
+			if keep, why := s.keepE2EInstance(inst, isPR, owners, runActive, now); keep {
+				instLogger.WithField("reason", why).Debug("Keeping E2E instance")
+				continue
+			}
+
 			instLogger.Warn("Destroying stale E2E instance")
-			if err := s.CloudClient.DeleteInstallation(inst.ID); err != nil {
+			if err := withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(inst.ID) }); err != nil {
 				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
 				continue
 			}
+			s.e2eCreated.Delete(inst.ID)
 			if isPR {
 				reapedPRInstallationIDs = append(reapedPRInstallationIDs, inst.ID)
+			}
+			if ownerKey, owned := owners[inst.ID]; owned {
+				s.untrackRun(ownerKey)
 			}
 		}
 	}
@@ -1048,6 +1255,142 @@ func (s *Server) cleanupStaleE2EInstances() {
 	}
 
 	logger.Info("E2E instance cleanup scan complete")
+}
+
+// keepE2EInstance decides whether the stale scan keeps a server, and why.
+//   - Tracked servers (a dispatched PR, push or CMT run) are kept while their run is queued or
+//     running, or its state cannot be read, and for E2EPRIdleTimeoutMinutes after the last
+//     dispatch. Age alone never removes them, so a long run keeps its servers. A run stuck for
+//     e2eOwnedInstanceMaxAge loses them.
+//   - Servers this process created but has not tracked yet (a set still provisioning) are
+//     kept up to e2eOwnedInstanceMaxAge.
+//   - Anything else (servers from before a restart) goes by age: E2EPRInstanceMaxAge for PR
+//     servers, E2EInstanceMaxAge for the rest.
+func (s *Server) keepE2EInstance(inst *cloudModel.InstallationDTO, isPR bool, owners map[string]string, runActive map[string]bool, now time.Time) (bool, string) {
+	ownedCutoff := now.Add(-e2eOwnedInstanceMaxAge).UnixMilli()
+	if key, owned := owners[inst.ID]; owned {
+		if inst.CreateAt <= ownedCutoff {
+			return false, ""
+		}
+		if last, ok := s.e2eLastDispatch.Load(key); ok && now.Sub(last.(time.Time)) < s.e2ePRIdleTimeout() {
+			return true, "dispatched recently"
+		}
+		active, seen := runActive[key]
+		if !seen {
+			var err error
+			if active, err = s.isTrackedRunActive(key); err != nil {
+				s.Logger.WithError(err).WithField("tracking_key", key).Warn("Failed to read the state of an E2E run; keeping its servers")
+				active = true
+			}
+			runActive[key] = active
+		}
+		return active, "its run is queued or running"
+	}
+	if _, ours := s.e2eCreated.Load(inst.ID); ours && inst.CreateAt > ownedCutoff {
+		return true, "still being provisioned"
+	}
+	maxAge := s.e2eInstanceMaxAge()
+	if isPR {
+		maxAge = s.e2ePRInstanceMaxAge()
+	}
+	return inst.CreateAt > now.Add(-maxAge).UnixMilli(), "younger than its max age"
+}
+
+// e2ePRIdleTimeout returns Config.E2EPRIdleTimeoutMinutes, default 60 minutes.
+func (s *Server) e2ePRIdleTimeout() time.Duration {
+	if s.Config.E2EPRIdleTimeoutMinutes > 0 {
+		return time.Duration(s.Config.E2EPRIdleTimeoutMinutes) * time.Minute
+	}
+	return time.Hour
+}
+
+// e2eOwnedInstanceMaxAge is the most the stale scan keeps a server matterwick is using. Past
+// it the run is presumed stuck and the server is removed.
+const e2eOwnedInstanceMaxAge = 24 * time.Hour
+
+// trackedRunOwners maps each server of a dispatched PR, push or CMT run to its e2eInstances key.
+func (s *Server) trackedRunOwners() map[string]string {
+	s.e2eInstancesLock.Lock()
+	defer s.e2eInstancesLock.Unlock()
+	owners := map[string]string{}
+	for key, instances := range s.e2eInstances {
+		if _, tracked := s.e2eTrackedRuns[key]; !tracked && !strings.Contains(key, "-cmt-") {
+			continue
+		}
+		for _, inst := range instances {
+			if inst != nil {
+				owners[inst.InstallationID] = key
+			}
+		}
+	}
+	return owners
+}
+
+// untrackRun drops a run's tracking once the stale scan has removed its servers.
+func (s *Server) untrackRun(key string) {
+	s.e2eInstancesLock.Lock()
+	defer s.e2eInstancesLock.Unlock()
+	delete(s.e2eInstances, key)
+	delete(s.e2eTrackedRuns, key)
+}
+
+// isTrackedRunActive reports whether the workflow run owning a tracked PR, push or CMT key is
+// queued or running on GitHub.
+func (s *Server) isTrackedRunActive(key string) (bool, error) {
+	s.e2eInstancesLock.Lock()
+	run, tracked := s.e2eTrackedRuns[key]
+	s.e2eInstancesLock.Unlock()
+
+	client := s.e2eGithubClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if tracked {
+		p := e2eProfileFor(run.repo)
+		if p == nil {
+			return false, nil
+		}
+		// A PR's runs are any dispatch on its branch; a push run is the one for its commit.
+		query := "branch=" + url.QueryEscape(run.ref) + "&event=workflow_dispatch&per_page=50"
+		if run.prNumber == 0 {
+			query += "&head_sha=" + run.sha
+		}
+		var runs struct {
+			WorkflowRuns []struct {
+				Status string `json:"status"`
+			} `json:"workflow_runs"`
+		}
+		req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?%s", run.owner, run.repo, p.workflow, query), nil)
+		if err != nil {
+			return false, err
+		}
+		if _, err := client.Do(ctx, req, &runs); err != nil {
+			return false, err
+		}
+		for _, r := range runs.WorkflowRuns {
+			if r.Status != "completed" {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	// CMT keys are "<repo>-cmt-<run id>".
+	i := strings.LastIndex(key, "-cmt-")
+	if i < 0 {
+		return false, fmt.Errorf("unrecognised tracking key %q", key)
+	}
+	var cmtRun struct {
+		Status string `json:"status"`
+	}
+	req, err := client.NewRequest("GET", fmt.Sprintf("/repos/%s/%s/actions/runs/%s", s.Config.Org, key[:i], key[i+len("-cmt-"):]), nil)
+	if err != nil {
+		return false, err
+	}
+	if _, err := client.Do(ctx, req, &cmtRun); err != nil {
+		return false, err
+	}
+	return cmtRun.Status != "completed", nil
 }
 
 // evictReapedPRInstances removes PR tracking entries when any member was reaped, so the reuse path never returns a partially-deleted set.
@@ -1102,27 +1445,30 @@ func (s *Server) resolveBranchHeadSHA(owner, repoName, branch string) (string, e
 	return commit.SHA, nil
 }
 
-// destroyE2EInstances destroys all given E2E instances
+// destroyE2EInstances destroys all given E2E instances in parallel, each with
+// deleteInstallationWithRetry, so a busy provisioner does not leave billed servers behind.
 func (s *Server) destroyE2EInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
+	var wg sync.WaitGroup
 	for _, instance := range instances {
-		logger := logger.WithField("instance_id", instance.InstallationID)
-		logger.Info("Destroying E2E instance")
-
-		err := s.CloudClient.DeleteInstallation(instance.InstallationID)
-		if err != nil {
-			logger.WithError(err).Error("Failed to destroy E2E instance")
+		if instance == nil {
 			continue
 		}
-
-		logger.Info("Successfully destroyed E2E instance")
+		wg.Add(1)
+		go func(instance *E2EInstance) {
+			defer wg.Done()
+			logger.WithField("instance_id", instance.InstallationID).Info("Destroying E2E instance")
+			s.deleteInstallationWithRetry(instance.InstallationID, instance.Name, logger)
+		}(instance)
 	}
+	wg.Wait()
 }
 
 // findExistingE2EInstancesInCloud queries the cloud API for E2E instances that match a PR and
 // reconstructs E2EInstance objects for reuse. Returns an error if the count doesn't match
 // the expected number of platforms (indicating a partial or fully absent set).
-func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instanceType string, platforms []string) ([]*E2EInstance, error) {
-	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", instanceType, pr.Number)
+func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2eProfile) ([]*E2EInstance, error) {
+	platforms := p.platforms
+	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number)
 
 	installations, err := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{
 		DNS:    dnsPattern,
@@ -1179,29 +1525,35 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, instance
 	result := make([]*E2EInstance, len(platforms))
 	for i, platform := range platforms {
 		inst := platformByInst[platform]
-		e2eInst := &E2EInstance{
+		result[i] = &E2EInstance{
 			Name:           inst.OwnerID,
 			Platform:       platform,
 			URL:            fmt.Sprintf("https://%s.%s", inst.OwnerID, s.Config.DNSNameTestServer),
 			InstallationID: inst.ID,
 			ServerVersion:  inst.Version,
 		}
-		if instanceType == "desktop" {
-			e2eInst.Runner = getRunnerForPlatform(platform)
-		}
-		result[i] = e2eInst
 	}
 	return result, nil
 }
 
-// wakeUpHibernatingInstances checks each instance and wakes any that are hibernating,
-// waiting up to 10 minutes for stable state. Logs warnings on failure and proceeds.
-func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) {
+// wakeUpHibernatingInstances wakes any hibernating instance, waiting up to 10 minutes for it
+// to be stable, and reports false if any instance no longer exists. Other failures are logged
+// and the instance is used as it is.
+func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
 	for _, inst := range instances {
-		installation, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+		var installation *cloudModel.InstallationDTO
+		err := withCloudTimeout(context.Background(), func() error {
+			got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+			installation = got
+			return getErr
+		})
 		if err != nil {
 			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to check installation state before wake-up")
 			continue
+		}
+		if installation == nil || strings.HasPrefix(installation.State, "deletion") {
+			logger.WithField("installation_id", inst.InstallationID).Warn("E2E instance no longer exists")
+			return false
 		}
 		if installation.State != cloudModel.InstallationStateHibernating {
 			continue
@@ -1213,10 +1565,18 @@ func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger log
 		}
 		timeout := time.Now().Add(10 * time.Minute)
 		for {
-			updated, err := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+			var updated *cloudModel.InstallationDTO
+			err := withCloudTimeout(context.Background(), func() error {
+				got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+				updated = got
+				return getErr
+			})
 			if err != nil {
 				logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Error polling installation state during wake-up")
 				break
+			}
+			if updated == nil {
+				return false
 			}
 			if updated.State == cloudModel.InstallationStateStable {
 				logger.WithField("installation_id", inst.InstallationID).Info("Hibernating E2E instance is now stable")
@@ -1229,6 +1589,7 @@ func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger log
 			time.Sleep(15 * time.Second)
 		}
 	}
+	return true
 }
 
 // postE2EStartedComment posts a comment when E2E tests start
@@ -1288,7 +1649,7 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	for i, inst := range instances {
 		details[i] = instanceDetail{
 			Platform:       inst.Platform,
-			Runner:         inst.Runner,
+			Runner:         getRunnerForPlatform(inst.Platform),
 			URL:            inst.URL,
 			InstallationID: inst.InstallationID,
 			ServerVersion:  inst.ServerVersion,
@@ -1303,135 +1664,6 @@ func (s *Server) buildInstanceDetailsJSON(instances []*E2EInstance) (string, err
 	return string(jsonBytes), nil
 }
 
-// dispatchDesktopE2EWorkflow triggers e2e-functional.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
-func (s *Server) dispatchDesktopE2EWorkflow(repoOwner, repoName, ref, sha, instanceDetailsJSON, runType string) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"ref":  ref,
-	})
-
-	// Determine the server version to use for the workflow.
-	// Default to the configured E2E server version, but prefer the actual
-	// provisioned version from the instance details when available.
-	serverVersion := s.resolveMattermostServerVersion()
-	if instanceDetailsJSON != "" {
-		var instances []struct {
-			ServerVersion string `json:"server_version"`
-		}
-		if err := json.Unmarshal([]byte(instanceDetailsJSON), &instances); err == nil {
-			if len(instances) > 0 && instances[0].ServerVersion != "" {
-				serverVersion = instances[0].ServerVersion
-			}
-		}
-	}
-
-	// Build the workflow dispatch request
-	workflowInputs := map[string]interface{}{
-		"instance_details":  instanceDetailsJSON,
-		"version_name":      ref,
-		"MM_TEST_USER_NAME": s.Config.E2EUsername,
-		"MM_SERVER_VERSION": serverVersion,
-		"run_type":          runType,
-	}
-
-	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-functional.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger desktop E2E workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Desktop E2E workflow dispatched successfully")
-	return nil
-}
-
-// dispatchMobileE2EWorkflow triggers e2e-detox-pr.yml. No tracking key in inputs — GitHub rejects undeclared workflow_dispatch inputs with 422.
-func (s *Server) dispatchMobileE2EWorkflow(
-	repoOwner, repoName, ref, sha string,
-	instances []*E2EInstance,
-	platform, runType string,
-) error {
-	ctx := context.Background()
-	client := newGithubClient(s.Config.GithubAccessToken)
-
-	mobileInputs, err := buildMobileURLInputs(instances)
-	if err != nil {
-		return err
-	}
-
-	logger := s.Logger.WithFields(logrus.Fields{
-		"repo": repoName,
-		"ref":  ref,
-	})
-
-	// Build the workflow dispatch request
-	workflowInputs := map[string]interface{}{
-		"MOBILE_VERSION": sha,
-		"PLATFORM":       platform,
-		"run_type":       runType,
-	}
-	for inputKey, url := range mobileInputs {
-		workflowInputs[inputKey] = url
-	}
-
-	// Use REST API to trigger workflow dispatch (v32 go-github compatibility)
-	req, err := client.NewRequest("POST",
-		fmt.Sprintf("/repos/%s/%s/actions/workflows/e2e-detox-pr.yml/dispatches", repoOwner, repoName),
-		map[string]interface{}{
-			"ref":    ref,
-			"inputs": workflowInputs,
-		})
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow dispatch request")
-		return err
-	}
-
-	resp, err := client.Do(ctx, req, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to trigger mobile E2E workflow")
-		return err
-	}
-
-	if resp.StatusCode != 204 {
-		logger.WithField("status_code", resp.StatusCode).Error("Unexpected response from workflow dispatch")
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	logger.Info("Mobile E2E workflow dispatched successfully")
-	return nil
-}
-
-// prE2EWorkflowFile returns the PR E2E workflow file for a desktop or mobile repo, or "".
-func prE2EWorkflowFile(repoName string) string {
-	if isOxideRepo(repoName) {
-		return ""
-	} else if strings.Contains(repoName, "desktop") {
-		return "e2e-functional.yml"
-	} else if strings.Contains(repoName, "mobile") {
-		return "e2e-detox-pr.yml"
-	}
-	return ""
-}
-
 // e2eDispatchGracePeriod covers the delay between a workflow dispatch and GitHub listing
 // the run: a trigger within it counts as busy.
 const e2eDispatchGracePeriod = 5 * time.Minute
@@ -1440,7 +1672,7 @@ const e2eDispatchGracePeriod = 5 * time.Minute
 // platform's request is provisioning, no E2E workflow was dispatched for the PR in the last
 // e2eDispatchGracePeriod, and no E2E workflow run on the PR branch is queued or running.
 // Any error counts as busy, so an unknown state never tears servers down.
-func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, logger logrus.FieldLogger) bool {
+func (s *Server) isPRE2EIdle(pr *model.PullRequest, workflowFile, key, inProgressKey string, logger logrus.FieldLogger) bool {
 	s.e2eInProgressLock.Lock()
 	for k := range s.e2eInProgress {
 		if k != inProgressKey && strings.HasPrefix(k, key+"-") {
@@ -1453,11 +1685,6 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 
 	if last, ok := s.e2eLastDispatch.Load(key); ok && time.Since(last.(time.Time)) < e2eDispatchGracePeriod {
 		logger.Info("An E2E workflow was dispatched for this PR moments ago; reusing servers")
-		return false
-	}
-
-	workflowFile := prE2EWorkflowFile(pr.RepoName)
-	if workflowFile == "" {
 		return false
 	}
 
@@ -1489,87 +1716,4 @@ func (s *Server) isPRE2EIdle(pr *model.PullRequest, key, inProgressKey string, l
 		}
 	}
 	return true
-}
-
-// cancelPRWorkflowRuns cancels any in-progress E2E workflow runs for a PR
-// This is called when a new E2E run is triggered for the same PR
-func (s *Server) cancelPRWorkflowRuns(pr *model.PullRequest, logger logrus.FieldLogger) {
-	ctx := context.Background()
-	client := s.e2eGithubClient()
-
-	logger = logger.WithFields(logrus.Fields{
-		"repo": pr.RepoName,
-		"pr":   pr.Number,
-	})
-
-	logger.Info("Attempting to cancel in-progress E2E workflow runs")
-
-	if isOxideRepo(pr.RepoName) {
-		// Oxide runs Android and iOS as separate dispatches (E2E/Run-Android, E2E/Run-iOS) and
-		// cancels superseded runs itself with per-PR/per-platform concurrency groups. Cancelling
-		// every in-progress run on the branch here would kill the other platform's run.
-		logger.Info("Skipping workflow-run cancellation for Oxide (handled by workflow concurrency)")
-		return
-	}
-	workflowFile := prE2EWorkflowFile(pr.RepoName)
-	if workflowFile == "" {
-		logger.Warn("Unable to determine workflow file for repository")
-		return
-	}
-
-	// List workflow runs for this workflow file
-	// GitHub API v32 limitation: we need to use REST API directly
-	listURL := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?status=in_progress&event=workflow_dispatch",
-		pr.RepoOwner, pr.RepoName, workflowFile)
-
-	req, err := client.NewRequest("GET", listURL, nil)
-	if err != nil {
-		logger.WithError(err).Error("Failed to create workflow runs list request")
-		return
-	}
-
-	var workflowRuns struct {
-		WorkflowRuns []struct {
-			ID         int64  `json:"id"`
-			HeadBranch string `json:"head_branch"`
-			Status     string `json:"status"`
-		} `json:"workflow_runs"`
-	}
-
-	_, err = client.Do(ctx, req, &workflowRuns)
-	if err != nil {
-		logger.WithError(err).Error("Failed to list workflow runs")
-		return
-	}
-
-	// Cancel workflow runs that match this PR's branch
-	cancelCount := 0
-	for _, run := range workflowRuns.WorkflowRuns {
-		// Check if this run is for the PR's branch
-		if run.HeadBranch == pr.Ref && run.Status == "in_progress" {
-			cancelURL := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/cancel",
-				pr.RepoOwner, pr.RepoName, run.ID)
-
-			cancelReq, err := client.NewRequest("POST", cancelURL, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to create cancel request")
-				continue
-			}
-
-			_, err = client.Do(ctx, cancelReq, nil)
-			if err != nil {
-				logger.WithError(err).WithField("run_id", run.ID).Error("Failed to cancel workflow run")
-				continue
-			}
-
-			logger.WithField("run_id", run.ID).Info("Cancelled workflow run")
-			cancelCount++
-		}
-	}
-
-	if cancelCount > 0 {
-		logger.WithField("cancelled_runs", cancelCount).Info("Successfully cancelled workflow runs")
-	} else {
-		logger.Debug("No in-progress workflow runs found to cancel")
-	}
 }

@@ -36,7 +36,6 @@ func TestBuildInstanceDetailsJSON(t *testing.T) {
 			instances: []*E2EInstance{
 				{
 					Platform:       "linux",
-					Runner:         "ubuntu-latest",
 					URL:            "https://example.com/instance1",
 					InstallationID: "install-123",
 					ServerVersion:  "master", // CRITICAL FIX: ServerVersion must be included
@@ -51,21 +50,18 @@ func TestBuildInstanceDetailsJSON(t *testing.T) {
 			instances: []*E2EInstance{
 				{
 					Platform:       "linux",
-					Runner:         "ubuntu-latest",
 					URL:            "https://example.com/instance1",
 					InstallationID: "install-123",
 					ServerVersion:  "v11.1.0",
 				},
 				{
 					Platform:       "macos",
-					Runner:         "macos-latest",
 					URL:            "https://example.com/instance2",
 					InstallationID: "install-456",
 					ServerVersion:  "v11.2.0",
 				},
 				{
 					Platform:       "windows",
-					Runner:         "windows-2022",
 					URL:            "https://example.com/instance3",
 					InstallationID: "install-789",
 					ServerVersion:  "v12.0.0",
@@ -203,7 +199,6 @@ func TestE2EInstanceValidation(t *testing.T) {
 			name: "Valid desktop instance",
 			instance: &E2EInstance{
 				Platform:       "linux",
-				Runner:         "ubuntu-latest",
 				URL:            "https://example.com",
 				InstallationID: "id-123",
 				ServerVersion:  "master",
@@ -352,21 +347,18 @@ func TestDesktopInstanceDetailsFormat(t *testing.T) {
 			instances: []*E2EInstance{
 				{
 					Platform:       "linux",
-					Runner:         "ubuntu-latest",
 					URL:            "https://linux.example.com",
 					InstallationID: "id-1",
 					ServerVersion:  "v11.1.0",
 				},
 				{
 					Platform:       "macos",
-					Runner:         "macos-latest",
 					URL:            "https://macos.example.com",
 					InstallationID: "id-2",
 					ServerVersion:  "v11.1.0",
 				},
 				{
 					Platform:       "windows",
-					Runner:         "windows-2022",
 					URL:            "https://windows.example.com",
 					InstallationID: "id-3",
 					ServerVersion:  "v11.1.0",
@@ -876,10 +868,10 @@ func TestCreateCloudInstallationWithRetry(t *testing.T) {
 		var requested []string
 		server := newServerWithProvisioner(func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
-				DNS string `json:"dns"`
+				DNSNames []string `json:"DNSNames"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			requested = append(requested, body.DNS)
+			requested = append(requested, strings.Join(body.DNSNames, ","))
 			w.WriteHeader(http.StatusInternalServerError)
 		})
 

@@ -142,7 +142,7 @@ func TestIsPRE2EIdle(t *testing.T) {
 				s.e2eLastDispatch.Store(key, time.Now().Add(-tt.dispatchedAgo))
 			}
 
-			assert.Equal(t, tt.want, s.isPRE2EIdle(pr, key, key+"-android", s.Logger))
+			assert.Equal(t, tt.want, s.isPRE2EIdle(pr, mobileE2EProfile.workflow, key, key+"-android", s.Logger))
 			if tt.wantListCalled {
 				assert.Equal(t, []string{"GET /repos/mattermost/mattermost-mobile/actions/workflows/e2e-detox-pr.yml/runs"}, gh.snapshot())
 				assert.Equal(t, []string{"branch=feature%2Fx&event=workflow_dispatch&per_page=100"}, gh.listQueries)
@@ -209,7 +209,8 @@ func TestHandleE2ETestRequest_FreshVsReuse(t *testing.T) {
 		{"desktop idle PR gets fresh servers", "mattermost-desktop", []string{"linux", "macos", "windows"}, noRuns, true, "e2e-functional.yml"},
 		{"mobile busy PR reuses its servers", "mattermost-mobile", mobileE2EPlatforms, activeRun, false, "e2e-detox-pr.yml"},
 		{"desktop busy PR reuses its servers", "mattermost-desktop", []string{"linux", "macos", "windows"}, activeRun, false, "e2e-functional.yml"},
-		{"Oxide always reuses, with no idle check", "mattermost-mobile-oxide", oxideE2EPlatforms, noRuns, false, "e2e-matterwick.yml"},
+		{"Oxide idle PR gets fresh servers", "mattermost-mobile-oxide", oxideE2EPlatforms, noRuns, true, "e2e-matterwick.yml"},
+		{"Oxide busy PR reuses its servers", "mattermost-mobile-oxide", oxideE2EPlatforms, activeRun, false, "e2e-matterwick.yml"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			existing := makeE2EInstances("x-", tt.platforms)
@@ -225,15 +226,13 @@ func TestHandleE2ETestRequest_FreshVsReuse(t *testing.T) {
 				assert.Equal(t, len(existing), deletes, "the PR's old servers must be torn down")
 				assert.Positive(t, creates, "fresh servers must be requested")
 				assert.False(t, dispatched, "the failed create must not dispatch")
+				assert.True(t, gh.has("POST /repos/mattermost/"+tt.repo+"/issues/5/comments"), "a provisioning failure must be reported on the PR")
 				assert.Empty(t, s.e2eInstances[tt.repo+"-pr-5"])
 			} else {
 				assert.Zero(t, deletes, "servers in use must not be torn down")
 				assert.Zero(t, creates)
 				assert.True(t, dispatched, "the run must be dispatched on the existing servers")
 				assert.Equal(t, existing, s.e2eInstances[tt.repo+"-pr-5"])
-			}
-			if tt.repo == "mattermost-mobile-oxide" {
-				assert.False(t, gh.has("GET /repos/mattermost/mattermost-mobile-oxide/actions/workflows/"), "Oxide must not run the idle check")
 			}
 		})
 	}

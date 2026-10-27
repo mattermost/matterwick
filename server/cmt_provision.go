@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -17,20 +16,12 @@ import (
 
 // handleCMTTrigger resolves instance type and server versions, then delegates to handleCMTWithServerVersions.
 func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int64, logger logrus.FieldLogger) {
-	if isOxideRepo(repoName) {
-		// Oxide has no compatibility-matrix testing; the "mobile" substring below would
-		// otherwise provision mattermost-mobile's CMT servers.
-		logger.Warn("CMT is not enabled for Oxide, skipping CMT trigger")
+	p := e2eProfileFor(repoName)
+	if p == nil || !p.cmt {
+		logger.Warn("Repository has no CMT, skipping CMT trigger")
 		return
 	}
-
-	instanceType := "desktop"
-	if strings.Contains(repoName, "mobile") {
-		instanceType = "mobile"
-	} else if !strings.Contains(repoName, "desktop") {
-		logger.Warn("Repository is neither desktop nor mobile, skipping CMT trigger")
-		return
-	}
+	instanceType := p.kind
 
 	versions := s.cmtServerVersions(instanceType)
 	logger.WithFields(logrus.Fields{
@@ -44,8 +35,10 @@ func (s *Server) handleCMTTrigger(owner, repoName, branch, sha string, runID int
 // cmtDroppedVersionRetryDelay waits for provisioner capacity before retrying failed versions. Var so tests can zero it.
 var cmtDroppedVersionRetryDelay = 5 * time.Minute
 
-// cmtMobileProvisionAcquireTimeout bounds how long a trigger waits for the mobile provision slot.
-var cmtMobileProvisionAcquireTimeout = 10 * time.Minute
+// cmtMobileProvisionAcquireTimeout bounds how long a trigger waits for the mobile provision
+// slot. 0: wait until it is free (or the server stops). A timeout dropped whole CMT runs when
+// two triggers overlapped; the shared provisioning queue already bounds load.
+var cmtMobileProvisionAcquireTimeout time.Duration
 
 // cmtMobileProvisionSem is a single-slot semaphore so primary + retry (or concurrent triggers)
 // cannot overlap CreateInstallation storms. Prefer this over a mutex so waiters honor context cancel.
@@ -439,7 +432,9 @@ func (s *Server) createSingleCMTInstance(ctx context.Context, repoName, instance
 	username := s.Config.E2EUsername
 	password := s.getE2EPassword(instanceType)
 
-	instance, err := s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+	instance, err := s.provisionQueued(ctx, func() (*E2EInstance, error) {
+		return s.createCloudInstallationWithRetry(ctx, nameFn, version, username, password, instanceType, logger)
+	}, logger)
 	if instance != nil {
 		instance.Platform = platform
 	}
@@ -453,47 +448,13 @@ func (s *Server) createMobileCMTInstances(ctx context.Context, repoName, version
 		platforms = mobileE2EPlatforms
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	type result struct {
-		instance *E2EInstance
-		err      error
-	}
-	results := make([]result, len(platforms))
-	var wg sync.WaitGroup
-	var firstErr error
-	var errMu sync.Mutex
+	slots := make([]e2eSlot, len(platforms))
 	for i, platform := range platforms {
-		wg.Add(1)
-		go func(idx int, platform string) {
-			defer wg.Done()
-			instance, err := s.createSingleCMTInstance(ctx, repoName, "mobile", version, platform, logger)
-			results[idx] = result{instance: instance, err: err}
-			if err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
-				}
-				errMu.Unlock()
-			}
-		}(i, platform)
+		slots[i] = e2eSlot{platform: platform, nameFn: func() string {
+			return e2eInstanceName(s.Config.DNSNameTestServer, "mobile", sanitizeForDNS(version), platform, e2eUniqueSuffix())
+		}}
 	}
-	wg.Wait()
-
-	instances := make([]*E2EInstance, 0, len(results))
-	for _, result := range results {
-		if result.err != nil {
-			continue
-		}
-		instances = append(instances, result.instance)
-	}
-	if firstErr != nil {
-		s.destroyE2EInstances(instances, logger)
-		return nil, firstErr
-	}
-	return instances, nil
+	return s.provisionE2EInstances(ctx, slots, version, s.Config.E2EUsername, s.getE2EPassword("mobile"), "mobile", logger)
 }
 
 // dispatchCMTWorkflow dispatches compatibility-matrix-testing.yml and polls for the run id used to key cleanup.

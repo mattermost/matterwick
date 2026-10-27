@@ -32,12 +32,17 @@ You do not need to rebuild the docker image unless you make changes to the Docke
 
 ### E2E repo profiles
 
-PR labels (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`, `E2E/Reset-Servers`) provision Mattermost Cloud test servers and dispatch the repo's test workflow:
+Every E2E flow uses the repo's profile (`server/e2e_profiles.go`). Adding a repo means adding a profile:
 
-| Repo | Servers per PR | Dispatched workflow | Push / CMT |
+| Repo | Servers | Workflow | CMT |
 |---|---|---|---|
-| `*desktop*` | 3 (`linux`, `macos`, `windows`) | `e2e-functional.yml` | yes |
-| `*mobile*` | 5 (`android-site-1/2`, `ios-site-1/2`, `site-3`) | `e2e-detox-pr.yml` | yes |
-| `mattermost-mobile-oxide` (exact name, checked before `*mobile*`) | 6 (`android-site-1..3`, `ios-site-1..3`), DNS prefix `oxide-` | `e2e-matterwick.yml` | no |
+| `*desktop*` | `linux`, `macos`, `windows` | `e2e-functional.yml` | yes |
+| `*mobile*` | `android-site-1/2`, `ios-site-1/2`, `site-3` | `e2e-detox-pr.yml` | yes |
+| `mattermost-mobile-oxide` (exact name, checked first) | `android-site-1..3`, `ios-site-1..3` | `e2e-matterwick.yml` | no |
 
-The Oxide profile is off unless `E2EOxideEnabled` is `true`; while off, Oxide labels are ignored. PR close and `E2E/Reset-Servers` only ever delete `oxide-pr-<N>-*` for Oxide.
+Same rules for every repo:
+- **PR labels** (`E2E/Run`, `E2E/Run-iOS`, `E2E/Run-Android`): servers `<kind>-pr-<N>-*`. A run gets fresh servers when nothing else is using the PR's servers, otherwise it reuses them. Each workflow cancels its own superseded runs. PR close and `E2E/Reset-Servers` delete `<kind>-pr-<N>-*` and stop any provisioning. A PR's servers are removed once no run on it is queued or running and the last one was dispatched more than `E2EPRIdleTimeoutMinutes` (60) ago — never while a run is using them.
+- **Pushes to the default branch** (`E2EAutoTriggerOnMaster`): fresh `<kind>-push-*` servers, dispatched on that branch with the pushed SHA. A push superseded while its servers came up is skipped. Its servers are destroyed when that run completes, or by the stale scan after `E2EInstanceMaxAge`.
+- **Provisioning**: at most `E2EMaxConcurrentProvisions` (64) servers are created at once; more wait their turn. A failed server is deleted and replaced after a backoff; the set fails only when one server gives up, and the error names it.
+
+Oxide is off unless `E2EOxideEnabled` is `true`; its servers are cleaned up either way.

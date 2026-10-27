@@ -36,7 +36,7 @@ type Server struct {
 
 	Logger logrus.FieldLogger
 
-	CloudClient *cloudModel.Client
+	CloudClient *model.CloudClient
 
 	// envMaps is a map of environment variables for each active installation.
 	envMaps     map[string]cloudModel.EnvVarMap
@@ -62,6 +62,27 @@ type Server struct {
 	// from separate labels, so provisioning/reuse is serialized per PR (not per platform)
 	// to keep both requests on one server set. Zero value is ready to use.
 	e2ePRProvisionLocks sync.Map
+
+	// e2eCreateGate serializes installation create requests; see sendCreateInstallation.
+	e2eCreateGate     chan struct{}
+	e2eCreateGateOnce sync.Once
+
+	// e2eProvisionQueue bounds concurrent server creation; see provisionQueue.
+	e2eProvisionQueue     chan struct{}
+	e2eProvisionQueueOnce sync.Once
+
+	// e2eTrackedRuns holds the dispatched run of each tracked PR or push key (guarded by
+	// e2eInstancesLock), so the stale scan can check whether that run is still queued or running.
+	e2eTrackedRuns map[string]e2eRun
+
+	// e2eCreated holds the IDs of installations this process created and has not deleted, so
+	// the stale scan never removes a set that is still being provisioned.
+	e2eCreated sync.Map
+
+	// e2eProvisions holds the cancel func of each run being provisioned (per PR, or per
+	// repo/branch for pushes); see startProvision.
+	e2eProvisions   map[string]*provision
+	e2eProvisionsMu sync.Mutex
 
 	// e2eLastDispatch holds the time.Time of the last E2E workflow dispatch per PR key, so a
 	// trigger right after a dispatch (before GitHub lists the run) never counts as idle.
@@ -133,14 +154,11 @@ func New(config *MatterwickConfig) *Server {
 func (s *Server) Start() {
 	s.Logger.Info("Starting MatterWick Server")
 
-	// Clean up stale instances from any previous run immediately, then scan periodically.
-	s.cleanupStaleE2EInstances()
+	// Clean up stale instances from any previous run straight away, then every 15 minutes, so
+	// idle PR servers go soon after E2EPRIdleTimeoutMinutes.
 	go func() {
-		interval := s.e2eInstanceMaxAge() / 2
-		if interval < 30*time.Minute {
-			interval = 30 * time.Minute
-		}
-		ticker := time.NewTicker(interval)
+		s.cleanupStaleE2EInstances()
+		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
