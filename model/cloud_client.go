@@ -93,3 +93,31 @@ func (c *CloudClient) CreateInstallationContext(ctx context.Context, request *cl
 	}
 	return &installation, nil
 }
+
+// GetInstallationContext is GetInstallation bound to ctx: cancelling ctx aborts the
+// in-flight HTTP request.
+func (c *CloudClient) GetInstallationContext(ctx context.Context, installationID string) (*cloudModel.InstallationDTO, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.address+"/api/installation/"+installationID, nil)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range c.headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed with status code %d", resp.StatusCode)
+	}
+	var installation cloudModel.InstallationDTO
+	if err := json.NewDecoder(resp.Body).Decode(&installation); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to decode installation: %w", err)
+	}
+	return &installation, nil
+}

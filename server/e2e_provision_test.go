@@ -643,13 +643,59 @@ func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
 	assert.Equal(t, []string{"oxide-pr-1-x-abcdef12|"}, requests, "Name is set and the deprecated DNS field is not")
 }
 
-func TestWakeUpHibernatingInstances_GoneServer(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound) // the client returns nil, nil
+func TestCheckReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer string // the installation's state; "404" and "500" are statuses
+		want   reuseCheck
+	}{
+		{"stable", "stable", reuseOK},
+		{"state cannot be read", "500", reuseOK},
+		{"hibernating", "hibernating", reuseNotReady},
+		{"going to sleep", "hibernation-in-progress", reuseNotReady},
+		{"mid-update", "update-in-progress", reuseNotReady},
+		{"failed update", "update-failed", reuseNotReady},
+		{"being deleted", "deletion-in-progress", reuseGone},
+		{"deleted", "deleted", reuseGone},
+		// The client returns nil, nil: reported, not dereferenced (this once crashed matterwick).
+		{"gone", "404", reuseGone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch tc.answer {
+				case "404":
+					w.WriteHeader(http.StatusNotFound)
+				case "500":
+					w.WriteHeader(http.StatusInternalServerError)
+				default:
+					_, _ = w.Write([]byte(`{"ID":"i","State":"` + tc.answer + `"}`))
+				}
+			}))
+			t.Cleanup(ts.Close)
+			s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+			assert.Equal(t, tc.want, s.checkReuse([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
+		})
+	}
+}
+
+func TestCheckReuse_AHungStateCheckIsAbortedAndReused(t *testing.T) {
+	orig := e2eCloudCallTimeout
+	e2eCloudCallTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { e2eCloudCallTimeout = orig })
+	aborted := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		close(aborted)
 	}))
 	t.Cleanup(ts.Close)
-	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+	s := &Server{CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
 
-	assert.False(t, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "gone"}}, s.Logger),
-		"a deleted server must be reported, not dereferenced (this used to panic and crash matterwick)")
+	assert.Equal(t, reuseOK, s.checkReuse([]*E2EInstance{{InstallationID: "i"}}, s.Logger),
+		"a state that cannot be read must not tear down servers a run may be using")
+	select {
+	case <-aborted:
+	case <-time.After(time.Second):
+		t.Fatal("the timed-out state request must be aborted, not left running")
+	}
 }

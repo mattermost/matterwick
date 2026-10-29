@@ -73,6 +73,15 @@ func newFakeCloudServer(t *testing.T, listJSON string) (*Server, *fakeCloud) {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
+		// The servers makeE2EInstances tracks are up; "cold-" ones hibernate.
+		if id, ok := strings.CutPrefix(r.URL.Path, "/api/installation/"); ok && r.Method == http.MethodGet {
+			state := "stable"
+			if strings.HasPrefix(id, "cold-") {
+				state = "hibernating"
+			}
+			_, _ = w.Write([]byte(`{"ID":"` + id + `","State":"` + state + `"}`))
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(ts.Close)

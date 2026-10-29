@@ -161,11 +161,17 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
-	if !fresh && len(existingInstances) > 0 && !s.wakeUpHibernatingInstances(existingInstances, logger) {
-		logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
-		s.untrackRun(key)
-		s.destroyE2EInstances(existingInstances, logger)
-		fresh = true
+	if !fresh && len(existingInstances) > 0 {
+		switch s.checkReuse(existingInstances, logger) {
+		case reuseGone:
+			logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
+			s.untrackRun(key)
+			s.destroyE2EInstances(existingInstances, logger)
+			fresh = true
+		case reuseNotReady:
+			s.postE2EErrorComment(pr, e2eServersNotReady)
+			return
+		}
 	}
 	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
@@ -178,7 +184,18 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if !fresh {
-		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) && s.wakeUpHibernatingInstances(cloudInstances, logger) {
+		cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p)
+		reusable := err == nil && len(cloudInstances) == len(p.platforms)
+		if reusable {
+			switch s.checkReuse(cloudInstances, logger) {
+			case reuseGone:
+				reusable = false // fresh servers below; the rest go when the PR is idle
+			case reuseNotReady:
+				s.postE2EErrorComment(pr, e2eServersNotReady)
+				return
+			}
+		}
+		if reusable {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
@@ -409,13 +426,15 @@ func (s *Server) provisionQueued(ctx context.Context, create func() (*E2EInstanc
 var e2eCloudCallTimeout = 2 * time.Minute
 
 // withCloudTimeout runs call, returning its error, or an error once ctx is done or
-// e2eCloudCallTimeout passes. A call that times out keeps running in the background; call
-// must therefore only write variables the caller reads after a nil return. A create that
-// times out and later succeeds leaves a server with a matterwick name, which PR-close
-// cleanup or the stale scan removes.
-func withCloudTimeout(ctx context.Context, call func() error) error {
+// e2eCloudCallTimeout passes. It cancels the callback context on either condition, but calls
+// that ignore that context may keep running in the background. A create that times out and
+// later succeeds leaves a server with a matterwick name, which PR-close cleanup or the stale
+// scan removes.
+func withCloudTimeout(ctx context.Context, call func(context.Context) error) error {
+	callCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- call() }()
+	go func() { done <- call(callCtx) }()
 	timer := time.NewTimer(e2eCloudCallTimeout)
 	defer timer.Stop()
 	select {
@@ -424,6 +443,7 @@ func withCloudTimeout(ctx context.Context, call func() error) error {
 	case <-ctx.Done():
 		return fmt.Errorf("provisioner request abandoned: %w", ctx.Err())
 	case <-timer.C:
+		cancel()
 		return fmt.Errorf("provisioner request timed out after %s", e2eCloudCallTimeout)
 	}
 }
@@ -453,7 +473,7 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 	var lastErr error
 	delay := installationDeleteRetryDelay
 	for attempt := 1; attempt <= installationDeleteAttempts; attempt++ {
-		lastErr = withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(installationID) })
+		lastErr = withCloudTimeout(context.Background(), func(context.Context) error { return s.CloudClient.DeleteInstallation(installationID) })
 		if lastErr == nil || s.installationGoneOrDeleting(installationID, lastErr) {
 			s.e2eCreated.Delete(installationID)
 			return
@@ -484,7 +504,7 @@ func (s *Server) installationGoneOrDeleting(installationID string, deleteErr err
 		return false
 	}
 	var inst *cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		got, getErr := s.CloudClient.GetInstallation(installationID, nil)
 		inst = got
 		return getErr
@@ -495,7 +515,7 @@ func (s *Server) installationGoneOrDeleting(installationID string, deleteErr err
 // deleteInstallationsByDNS deletes every installation with this DNS name.
 func (s *Server) deleteInstallationsByDNS(dns string, logger logrus.FieldLogger) {
 	var installations []*cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dns, Paging: cloudModel.AllPagesNotDeleted()})
 		installations = found
 		return getErr
@@ -809,7 +829,7 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 	waitingForCapacity := false
 	for {
 		var inst *cloudModel.InstallationDTO
-		err := withCloudTimeout(ctx, func() error {
+		err := withCloudTimeout(ctx, func(context.Context) error {
 			got, getErr := s.CloudClient.GetInstallation(installationID, nil)
 			inst = got
 			return getErr
@@ -902,7 +922,7 @@ func (s *Server) restartWithSharedChannels(ctx context.Context, client *mattermo
 	// Changing a PriorityEnv value makes the operator restart the pod. The patch merges,
 	// so the existing env vars stay.
 	logger.Info("Restarting server so Shared Channels starts at boot")
-	err = withCloudTimeout(ctx, func() error {
+	err = withCloudTimeout(ctx, func(context.Context) error {
 		_, updateErr := s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
 			PriorityEnv: cloudModel.EnvVarMap{"MATTERWICK_E2E_RESTART_NONCE": cloudModel.EnvVar{Value: cloudModel.NewID()}},
 		})
@@ -1132,7 +1152,7 @@ func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logru
 	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number) // e.g. "mobile-pr-9587-%"
 
 	var installations []*cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dnsPattern, Paging: cloudModel.AllPagesNotDeleted()})
 		installations = found
 		return getErr
@@ -1233,7 +1253,7 @@ func (s *Server) cleanupStaleE2EInstances() {
 			}
 
 			instLogger.Warn("Destroying stale E2E instance")
-			if err := withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(inst.ID) }); err != nil {
+			if err := withCloudTimeout(context.Background(), func(context.Context) error { return s.CloudClient.DeleteInstallation(inst.ID) }); err != nil {
 				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
 				continue
 			}
@@ -1536,60 +1556,48 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 	return result, nil
 }
 
-// wakeUpHibernatingInstances wakes any hibernating instance, waiting up to 10 minutes for it
-// to be stable, and reports false if any instance no longer exists. Other failures are logged
-// and the instance is used as it is.
-func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
+// reuseCheck is whether a run can be dispatched to a PR's existing servers.
+type reuseCheck int
+
+const (
+	// reuseOK: every server is up, or its state could not be read (as in isPRE2EIdle, an
+	// unknown state never tears servers down).
+	reuseOK reuseCheck = iota
+	// reuseGone: a server no longer exists, so no run can be using it: replace the set.
+	reuseGone
+	// reuseNotReady: a server exists but is not up (hibernating, updating, failed). Another
+	// run may be using the set, so it is neither torn down nor dispatched to; once the PR is
+	// idle, the next request gets fresh servers.
+	reuseNotReady
+)
+
+// e2eServersNotReady is the PR comment for reuseNotReady.
+const e2eServersNotReady = "This PR's E2E servers are not running, and another E2E run on the PR may still be using them, " +
+	"so they were not replaced. Add the label again once that run has finished: the PR then gets fresh servers."
+
+func (s *Server) checkReuse(instances []*E2EInstance, logger logrus.FieldLogger) reuseCheck {
+	verdict := reuseOK
 	for _, inst := range instances {
 		var installation *cloudModel.InstallationDTO
-		err := withCloudTimeout(context.Background(), func() error {
-			got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
+		err := withCloudTimeout(context.Background(), func(ctx context.Context) error {
+			got, getErr := s.CloudClient.GetInstallationContext(ctx, inst.InstallationID)
 			installation = got
 			return getErr
 		})
-		if err != nil {
-			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to check installation state before wake-up")
-			continue
-		}
-		if installation == nil || strings.HasPrefix(installation.State, "deletion") {
-			logger.WithField("installation_id", inst.InstallationID).Warn("E2E instance no longer exists")
-			return false
-		}
-		if installation.State != cloudModel.InstallationStateHibernating {
-			continue
-		}
-		logger.WithField("installation_id", inst.InstallationID).Info("Waking up hibernating E2E instance")
-		if _, err := s.CloudClient.WakeupInstallation(inst.InstallationID, nil); err != nil {
-			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to wake up hibernating E2E instance")
-			continue
-		}
-		timeout := time.Now().Add(10 * time.Minute)
-		for {
-			var updated *cloudModel.InstallationDTO
-			err := withCloudTimeout(context.Background(), func() error {
-				got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
-				updated = got
-				return getErr
-			})
-			if err != nil {
-				logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Error polling installation state during wake-up")
-				break
-			}
-			if updated == nil {
-				return false
-			}
-			if updated.State == cloudModel.InstallationStateStable {
-				logger.WithField("installation_id", inst.InstallationID).Info("Hibernating E2E instance is now stable")
-				break
-			}
-			if time.Now().After(timeout) {
-				logger.WithField("installation_id", inst.InstallationID).Warn("Timeout waiting for E2E instance to wake up")
-				break
-			}
-			time.Sleep(15 * time.Second)
+		log := logger.WithField("installation_id", inst.InstallationID)
+		switch {
+		case err != nil:
+			log.WithError(err).Warn("Failed to check E2E instance state; reusing it")
+		case installation == nil || installation.State == cloudModel.InstallationStateDeleted ||
+			strings.HasPrefix(installation.State, "deletion"):
+			log.Warn("E2E instance no longer exists")
+			return reuseGone
+		case installation.State != cloudModel.InstallationStateStable:
+			log.WithField("state", installation.State).Warn("E2E instance is not running")
+			verdict = reuseNotReady
 		}
 	}
-	return true
+	return verdict
 }
 
 // postE2EStartedComment posts a comment when E2E tests start
