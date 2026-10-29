@@ -268,14 +268,13 @@ func TestWaitForE2EInstallationStable_FailsFast(t *testing.T) {
 	}
 }
 
-func TestHandleE2ETestRequest_CloudServersThatCannotWakeAreReplaced(t *testing.T) {
+func TestHandleE2ETestRequest_HibernatingCloudServersAreReplaced(t *testing.T) {
 	const activeRun = `{"workflow_runs":[{"id":3,"head_branch":"b","status":"in_progress"}]}`
-	// Found after a matterwick restart, hibernating; the fake cloud never answers their state check.
+	// Found after a matterwick restart, hibernating.
 	const list = `[{"ID":"cold-linux","OwnerID":"desktop-pr-5-linux-abcdef12","State":"hibernating"},` +
 		`{"ID":"cold-macos","OwnerID":"desktop-pr-5-macos-abcdef12","State":"hibernating"},` +
 		`{"ID":"cold-windows","OwnerID":"desktop-pr-5-windows-abcdef12","State":"hibernating"}]`
 	stubProvisioningTimers(t)
-	stubWakeTimeout(t)
 	s, fc := newFakeCloudServer(t, list)
 	base, gh := newFakeGitHub(t, http.StatusOK, activeRun)
 	s.githubAPIBase = base
@@ -286,7 +285,7 @@ func TestHandleE2ETestRequest_CloudServersThatCannotWakeAreReplaced(t *testing.T
 	s.handleE2ETestRequest(pr, "E2E/Run")
 
 	for _, id := range []string{"cold-linux", "cold-macos", "cold-windows"} {
-		assert.Positive(t, cloudCalls(fc, http.MethodDelete, "/api/installation/"+id), "%s cannot be woken, so it must be torn down, not leaked", id)
+		assert.Positive(t, cloudCalls(fc, http.MethodDelete, "/api/installation/"+id), "%s is not serving, so it must be torn down, not leaked", id)
 	}
 	assert.Positive(t, cloudCalls(fc, http.MethodPost, "/api/installations"), "fresh servers must be requested")
 	assert.False(t, gh.has("POST /repos/mattermost/mattermost-desktop/actions/workflows/e2e-functional.yml/dispatches"), "no run on servers that are not serving")

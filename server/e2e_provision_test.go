@@ -559,61 +559,6 @@ func TestSendCreateInstallation_Cancellation(t *testing.T) {
 	})
 }
 
-func TestInstallationState_Cancellation(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		cancel      bool
-		wantTimeout bool
-	}{
-		{name: "caller cancellation", cancel: true},
-		{name: "cloud timeout", wantTimeout: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantTimeout {
-				originalTimeout := e2eCloudCallTimeout
-				e2eCloudCallTimeout = 20 * time.Millisecond
-				t.Cleanup(func() { e2eCloudCallTimeout = originalTimeout })
-			}
-			started := make(chan struct{})
-			cancelled := make(chan struct{})
-			ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-				close(started)
-				<-r.Context().Done()
-				close(cancelled)
-			}))
-			t.Cleanup(ts.Close)
-			s := &Server{CloudClient: model.NewCloudClient(ts.URL, "", "", "", "")}
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			done := make(chan error, 1)
-			go func() {
-				_, err := s.installationState(ctx, "i1")
-				done <- err
-			}()
-
-			select {
-			case <-started:
-			case <-time.After(time.Second):
-				t.Fatal("installation status request did not start")
-			}
-			if tt.cancel {
-				cancel()
-			}
-			select {
-			case <-cancelled:
-			case <-time.After(time.Second):
-				t.Fatal("stopping the installation state wait did not abort the request")
-			}
-			err := <-done
-			if tt.cancel {
-				require.ErrorIs(t, err, context.Canceled)
-			} else {
-				require.ErrorContains(t, err, "timed out")
-			}
-		})
-	}
-}
-
 func TestDeleteInstallationWithRetry(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -698,108 +643,57 @@ func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
 	assert.Equal(t, []string{"oxide-pr-1-x-abcdef12|"}, requests, "Name is set and the deprecated DNS field is not")
 }
 
-func TestWakeUpHibernatingInstances_GoneServer(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound) // the client returns nil, nil
-	}))
-	t.Cleanup(ts.Close)
-	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
-
-	assert.False(t, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "gone"}}, s.Logger),
-		"a deleted server must be reported, not dereferenced (this used to panic and crash matterwick)")
-}
-
-// stubWakeTimeout lets a wait for a server that never serves end quickly.
-func stubWakeTimeout(t *testing.T) {
-	t.Helper()
-	orig := e2eWakeTimeout
-	t.Cleanup(func() { e2eWakeTimeout = orig })
-	e2eWakeTimeout = 50 * time.Millisecond
-}
-
-func TestWakeUpHibernatingInstances_OnlyServingServersAreReused(t *testing.T) {
-	stubProvisioningTimers(t)
-	stubWakeTimeout(t)
+func TestInstancesServing_OnlyStableServersAreReused(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		states []string // GET answers in turn, the last repeating; "404" and "500" are statuses
-		wake   int
+		answer string // the installation's state; "404" and "500" are statuses
 		want   bool
 	}{
-		{"stable", []string{"stable"}, 0, true},
-		{"woken", []string{"hibernating", "wake-up-requested", "update-in-progress", "stable"}, http.StatusAccepted, true},
-		{"brief state-check error", []string{"500", "stable"}, 0, true},
-		{"going to sleep, then woken", []string{"hibernation-in-progress", "hibernating", "stable"}, http.StatusAccepted, true},
-		{"state check never answers", []string{"500"}, 0, false},
-		{"wake-up refused", []string{"hibernating"}, http.StatusBadGateway, false},
-		{"wake-up fails", []string{"hibernating", "update-failed"}, http.StatusAccepted, false},
-		{"deleted while waking", []string{"hibernating", "404"}, http.StatusAccepted, false},
-		{"deleted", []string{"deleted"}, 0, false},
+		{"stable", "stable", true},
+		{"state cannot be read", "500", true},
+		{"hibernating", "hibernating", false},
+		{"going to sleep", "hibernation-in-progress", false},
+		{"mid-update", "update-in-progress", false},
+		{"deleted", "deleted", false},
+		// The client returns nil, nil: reported, not dereferenced (this once crashed matterwick).
+		{"gone", "404", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var mu sync.Mutex
-			gets := 0
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPost {
-					w.WriteHeader(tc.wake)
-					_, _ = w.Write([]byte(`{}`))
-					return
-				}
-				mu.Lock()
-				state := tc.states[min(gets, len(tc.states)-1)]
-				gets++
-				mu.Unlock()
-				switch state {
+				switch tc.answer {
 				case "404":
 					w.WriteHeader(http.StatusNotFound)
 				case "500":
 					w.WriteHeader(http.StatusInternalServerError)
 				default:
-					_, _ = w.Write([]byte(`{"ID":"i","State":"` + state + `"}`))
+					_, _ = w.Write([]byte(`{"ID":"i","State":"` + tc.answer + `"}`))
 				}
 			}))
 			t.Cleanup(ts.Close)
 			s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
 
-			assert.Equal(t, tc.want, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
+			assert.Equal(t, tc.want, s.instancesServing([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
 		})
 	}
 }
 
-func TestWakeUpHibernatingInstances_ADeadServerStopsTheOthersWaits(t *testing.T) {
-	stubProvisioningTimers(t) // e2eWakeTimeout stays 10 minutes: only the dead server may end this
-	wakeSent, wakeCancelled := make(chan struct{}), make(chan struct{})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/installation/dead":
-			<-wakeSent // the other server is mid wake-up when this one turns out dead
-			_, _ = w.Write([]byte(`{"ID":"dead","State":"deleted"}`))
-		case r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"ID":"cold","State":"hibernating"}`))
-		default: // the wake-up never answers, until its request is cancelled
-			_, _ = io.Copy(io.Discard, r.Body) // the server notices a dropped client only after the body
-			close(wakeSent)
-			<-r.Context().Done()
-			close(wakeCancelled)
-		}
+func TestInstancesServing_AHungStateCheckIsAbortedAndReused(t *testing.T) {
+	orig := e2eCloudCallTimeout
+	e2eCloudCallTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { e2eCloudCallTimeout = orig })
+	aborted := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		close(aborted)
 	}))
 	t.Cleanup(ts.Close)
-	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+	s := &Server{CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
 
-	done := make(chan bool)
-	go func() {
-		done <- s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "cold"}, {InstallationID: "dead"}}, s.Logger)
-	}()
-
+	assert.True(t, s.instancesServing([]*E2EInstance{{InstallationID: "i"}}, s.Logger),
+		"a state that cannot be read must not tear down servers a run may be using")
 	select {
-	case serving := <-done:
-		assert.False(t, serving)
-	case <-time.After(10 * time.Second):
-		t.Fatal("a dead server must stop the wait on the others")
-	}
-	select {
-	case <-wakeCancelled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the hung wake-up request must be cancelled, not left running")
+	case <-aborted:
+	case <-time.After(time.Second):
+		t.Fatal("the timed-out state request must be aborted, not left running")
 	}
 }

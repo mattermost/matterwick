@@ -65,12 +65,33 @@ func NewCloudClient(address, clientID, clientSecret, tokenEndpoint, apiKey strin
 // CreateInstallationContext is CreateInstallation bound to ctx: cancelling ctx aborts the
 // in-flight HTTP request. Errors keep the upstream client's "failed with status code N" form.
 func (c *CloudClient) CreateInstallationContext(ctx context.Context, request *cloudModel.CreateInstallationRequest) (*cloudModel.InstallationDTO, error) {
-	return c.postContext(ctx, "/api/installations", request)
-}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.address+"/api/installations", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range c.headers {
+		req.Header.Set(key, value)
+	}
 
-// WakeupInstallationContext is WakeupInstallation bound to ctx, like CreateInstallationContext.
-func (c *CloudClient) WakeupInstallationContext(ctx context.Context, installationID string) (*cloudModel.InstallationDTO, error) {
-	return c.postContext(ctx, "/api/installation/"+installationID+"/wakeup", nil)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("failed with status code %d", resp.StatusCode)
+	}
+	var installation cloudModel.InstallationDTO
+	if err := json.NewDecoder(resp.Body).Decode(&installation); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to decode created installation: %w", err)
+	}
+	return &installation, nil
 }
 
 // GetInstallationContext is GetInstallation bound to ctx: cancelling ctx aborts the
@@ -92,36 +113,6 @@ func (c *CloudClient) GetInstallationContext(ctx context.Context, installationID
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed with status code %d", resp.StatusCode)
-	}
-	var installation cloudModel.InstallationDTO
-	if err := json.NewDecoder(resp.Body).Decode(&installation); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to decode installation: %w", err)
-	}
-	return &installation, nil
-}
-
-// postContext POSTs request to path under ctx and decodes the installation the provisioner
-// accepts (202).
-func (c *CloudClient) postContext(ctx context.Context, path string, request any) (*cloudModel.InstallationDTO, error) {
-	body, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.address+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for key, value := range c.headers {
-		req.Header.Set(key, value)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
 		return nil, fmt.Errorf("failed with status code %d", resp.StatusCode)
 	}
 	var installation cloudModel.InstallationDTO
