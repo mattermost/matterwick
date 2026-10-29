@@ -559,6 +559,61 @@ func TestSendCreateInstallation_Cancellation(t *testing.T) {
 	})
 }
 
+func TestInstallationState_Cancellation(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		cancel      bool
+		wantTimeout bool
+	}{
+		{name: "caller cancellation", cancel: true},
+		{name: "cloud timeout", wantTimeout: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantTimeout {
+				originalTimeout := e2eCloudCallTimeout
+				e2eCloudCallTimeout = 20 * time.Millisecond
+				t.Cleanup(func() { e2eCloudCallTimeout = originalTimeout })
+			}
+			started := make(chan struct{})
+			cancelled := make(chan struct{})
+			ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				close(started)
+				<-r.Context().Done()
+				close(cancelled)
+			}))
+			t.Cleanup(ts.Close)
+			s := &Server{CloudClient: model.NewCloudClient(ts.URL, "", "", "", "")}
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.installationState(ctx, "i1")
+				done <- err
+			}()
+
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("installation status request did not start")
+			}
+			if tt.cancel {
+				cancel()
+			}
+			select {
+			case <-cancelled:
+			case <-time.After(time.Second):
+				t.Fatal("stopping the installation state wait did not abort the request")
+			}
+			err := <-done
+			if tt.cancel {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.ErrorContains(t, err, "timed out")
+			}
+		})
+	}
+}
+
 func TestDeleteInstallationWithRetry(t *testing.T) {
 	for _, tt := range []struct {
 		name      string

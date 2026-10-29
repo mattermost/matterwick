@@ -416,13 +416,15 @@ func (s *Server) provisionQueued(ctx context.Context, create func() (*E2EInstanc
 var e2eCloudCallTimeout = 2 * time.Minute
 
 // withCloudTimeout runs call, returning its error, or an error once ctx is done or
-// e2eCloudCallTimeout passes. A call that times out keeps running in the background; call
-// must therefore only write variables the caller reads after a nil return. A create that
-// times out and later succeeds leaves a server with a matterwick name, which PR-close
-// cleanup or the stale scan removes.
-func withCloudTimeout(ctx context.Context, call func() error) error {
+// e2eCloudCallTimeout passes. It cancels the callback context on either condition, but calls
+// that ignore that context may keep running in the background. A create that times out and
+// later succeeds leaves a server with a matterwick name, which PR-close cleanup or the stale
+// scan removes.
+func withCloudTimeout(ctx context.Context, call func(context.Context) error) error {
+	callCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- call() }()
+	go func() { done <- call(callCtx) }()
 	timer := time.NewTimer(e2eCloudCallTimeout)
 	defer timer.Stop()
 	select {
@@ -431,6 +433,7 @@ func withCloudTimeout(ctx context.Context, call func() error) error {
 	case <-ctx.Done():
 		return fmt.Errorf("provisioner request abandoned: %w", ctx.Err())
 	case <-timer.C:
+		cancel()
 		return fmt.Errorf("provisioner request timed out after %s", e2eCloudCallTimeout)
 	}
 }
@@ -460,7 +463,7 @@ func (s *Server) deleteInstallationWithRetry(installationID, name string, logger
 	var lastErr error
 	delay := installationDeleteRetryDelay
 	for attempt := 1; attempt <= installationDeleteAttempts; attempt++ {
-		lastErr = withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(installationID) })
+		lastErr = withCloudTimeout(context.Background(), func(context.Context) error { return s.CloudClient.DeleteInstallation(installationID) })
 		if lastErr == nil || s.installationGoneOrDeleting(installationID, lastErr) {
 			s.e2eCreated.Delete(installationID)
 			return
@@ -491,7 +494,7 @@ func (s *Server) installationGoneOrDeleting(installationID string, deleteErr err
 		return false
 	}
 	var inst *cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		got, getErr := s.CloudClient.GetInstallation(installationID, nil)
 		inst = got
 		return getErr
@@ -502,7 +505,7 @@ func (s *Server) installationGoneOrDeleting(installationID string, deleteErr err
 // deleteInstallationsByDNS deletes every installation with this DNS name.
 func (s *Server) deleteInstallationsByDNS(dns string, logger logrus.FieldLogger) {
 	var installations []*cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dns, Paging: cloudModel.AllPagesNotDeleted()})
 		installations = found
 		return getErr
@@ -816,7 +819,7 @@ func (s *Server) waitForE2EInstallationStable(ctx context.Context, installationI
 	waitingForCapacity := false
 	for {
 		var inst *cloudModel.InstallationDTO
-		err := withCloudTimeout(ctx, func() error {
+		err := withCloudTimeout(ctx, func(context.Context) error {
 			got, getErr := s.CloudClient.GetInstallation(installationID, nil)
 			inst = got
 			return getErr
@@ -909,7 +912,7 @@ func (s *Server) restartWithSharedChannels(ctx context.Context, client *mattermo
 	// Changing a PriorityEnv value makes the operator restart the pod. The patch merges,
 	// so the existing env vars stay.
 	logger.Info("Restarting server so Shared Channels starts at boot")
-	err = withCloudTimeout(ctx, func() error {
+	err = withCloudTimeout(ctx, func(context.Context) error {
 		_, updateErr := s.CloudClient.UpdateInstallation(installationID, &cloudModel.PatchInstallationRequest{
 			PriorityEnv: cloudModel.EnvVarMap{"MATTERWICK_E2E_RESTART_NONCE": cloudModel.EnvVar{Value: cloudModel.NewID()}},
 		})
@@ -1139,7 +1142,7 @@ func (s *Server) cleanupOrphanedE2EInstances(pr *model.PullRequest, logger logru
 	dnsPattern := fmt.Sprintf("%s-pr-%d-%%", p.kind, pr.Number) // e.g. "mobile-pr-9587-%"
 
 	var installations []*cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(context.Background(), func(context.Context) error {
 		found, getErr := s.CloudClient.GetInstallations(&cloudModel.GetInstallationsRequest{DNS: dnsPattern, Paging: cloudModel.AllPagesNotDeleted()})
 		installations = found
 		return getErr
@@ -1240,7 +1243,7 @@ func (s *Server) cleanupStaleE2EInstances() {
 			}
 
 			instLogger.Warn("Destroying stale E2E instance")
-			if err := withCloudTimeout(context.Background(), func() error { return s.CloudClient.DeleteInstallation(inst.ID) }); err != nil {
+			if err := withCloudTimeout(context.Background(), func(context.Context) error { return s.CloudClient.DeleteInstallation(inst.ID) }); err != nil {
 				instLogger.WithError(err).Error("Failed to destroy stale E2E instance")
 				continue
 			}
@@ -1605,8 +1608,8 @@ func (s *Server) awaitServing(ctx context.Context, id string, log logrus.FieldLo
 // installationState is the installation's state, or "" when it no longer exists.
 func (s *Server) installationState(ctx context.Context, id string) (string, error) {
 	var installation *cloudModel.InstallationDTO
-	err := withCloudTimeout(ctx, func() error {
-		got, getErr := s.CloudClient.GetInstallation(id, nil)
+	err := withCloudTimeout(ctx, func(callCtx context.Context) error {
+		got, getErr := s.CloudClient.GetInstallationContext(callCtx, id)
 		installation = got
 		return getErr
 	})
