@@ -161,11 +161,17 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	existingInstances := s.e2eInstances[key]
 	s.e2eInstancesLock.Unlock()
 
-	if !fresh && len(existingInstances) > 0 && !s.instancesServing(existingInstances, logger) {
-		logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
-		s.untrackRun(key)
-		s.destroyE2EInstances(existingInstances, logger)
-		fresh = true
+	if !fresh && len(existingInstances) > 0 {
+		switch s.checkReuse(existingInstances, logger) {
+		case reuseGone:
+			logger.Warn("A tracked E2E server is gone; replacing the PR's servers")
+			s.untrackRun(key)
+			s.destroyE2EInstances(existingInstances, logger)
+			fresh = true
+		case reuseNotReady:
+			s.postE2EErrorComment(pr, e2eServersNotReady)
+			return
+		}
 	}
 	if !fresh && len(existingInstances) > 0 {
 		logger.WithField("instances", len(existingInstances)).Info("Reusing existing in-memory E2E instances")
@@ -180,10 +186,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 	if !fresh {
 		cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p)
 		reusable := err == nil && len(cloudInstances) == len(p.platforms)
-		if reusable && !s.instancesServing(cloudInstances, logger) {
-			logger.Warn("A cloud E2E server is not serving; replacing the PR's servers")
-			s.destroyE2EInstances(cloudInstances, logger)
-			reusable = false
+		if reusable {
+			switch s.checkReuse(cloudInstances, logger) {
+			case reuseGone:
+				reusable = false // fresh servers below; the rest go when the PR is idle
+			case reuseNotReady:
+				s.postE2EErrorComment(pr, e2eServersNotReady)
+				return
+			}
 		}
 		if reusable {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
@@ -1546,11 +1556,27 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 	return result, nil
 }
 
-// instancesServing reports whether every instance is up (stable), so a run can be
-// dispatched to it. Anything else (hibernating, mid-update, failed, gone) is not reused:
-// callers replace the PR's servers. A state that cannot be read counts as up, as in
-// isPRE2EIdle, so a cloud API blip never tears down servers a run is using.
-func (s *Server) instancesServing(instances []*E2EInstance, logger logrus.FieldLogger) bool {
+// reuseCheck is whether a run can be dispatched to a PR's existing servers.
+type reuseCheck int
+
+const (
+	// reuseOK: every server is up, or its state could not be read (as in isPRE2EIdle, an
+	// unknown state never tears servers down).
+	reuseOK reuseCheck = iota
+	// reuseGone: a server no longer exists, so no run can be using it: replace the set.
+	reuseGone
+	// reuseNotReady: a server exists but is not up (hibernating, updating, failed). Another
+	// run may be using the set, so it is neither torn down nor dispatched to; once the PR is
+	// idle, the next request gets fresh servers.
+	reuseNotReady
+)
+
+// e2eServersNotReady is the PR comment for reuseNotReady.
+const e2eServersNotReady = "This PR's E2E servers are not running, and another E2E run on the PR may still be using them, " +
+	"so they were not replaced. Add the label again once that run has finished: the PR then gets fresh servers."
+
+func (s *Server) checkReuse(instances []*E2EInstance, logger logrus.FieldLogger) reuseCheck {
+	verdict := reuseOK
 	for _, inst := range instances {
 		var installation *cloudModel.InstallationDTO
 		err := withCloudTimeout(context.Background(), func(ctx context.Context) error {
@@ -1562,15 +1588,16 @@ func (s *Server) instancesServing(instances []*E2EInstance, logger logrus.FieldL
 		switch {
 		case err != nil:
 			log.WithError(err).Warn("Failed to check E2E instance state; reusing it")
-		case installation == nil:
+		case installation == nil || installation.State == cloudModel.InstallationStateDeleted ||
+			strings.HasPrefix(installation.State, "deletion"):
 			log.Warn("E2E instance no longer exists")
-			return false
+			return reuseGone
 		case installation.State != cloudModel.InstallationStateStable:
-			log.WithField("state", installation.State).Warn("E2E instance is not serving")
-			return false
+			log.WithField("state", installation.State).Warn("E2E instance is not running")
+			verdict = reuseNotReady
 		}
 	}
-	return true
+	return verdict
 }
 
 // postE2EStartedComment posts a comment when E2E tests start

@@ -643,20 +643,22 @@ func TestCreateCloudInstallation_UnansweredCreateIsCleanedUp(t *testing.T) {
 	assert.Equal(t, []string{"oxide-pr-1-x-abcdef12|"}, requests, "Name is set and the deprecated DNS field is not")
 }
 
-func TestInstancesServing_OnlyStableServersAreReused(t *testing.T) {
+func TestCheckReuse(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		answer string // the installation's state; "404" and "500" are statuses
-		want   bool
+		want   reuseCheck
 	}{
-		{"stable", "stable", true},
-		{"state cannot be read", "500", true},
-		{"hibernating", "hibernating", false},
-		{"going to sleep", "hibernation-in-progress", false},
-		{"mid-update", "update-in-progress", false},
-		{"deleted", "deleted", false},
+		{"stable", "stable", reuseOK},
+		{"state cannot be read", "500", reuseOK},
+		{"hibernating", "hibernating", reuseNotReady},
+		{"going to sleep", "hibernation-in-progress", reuseNotReady},
+		{"mid-update", "update-in-progress", reuseNotReady},
+		{"failed update", "update-failed", reuseNotReady},
+		{"being deleted", "deletion-in-progress", reuseGone},
+		{"deleted", "deleted", reuseGone},
 		// The client returns nil, nil: reported, not dereferenced (this once crashed matterwick).
-		{"gone", "404", false},
+		{"gone", "404", reuseGone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -672,12 +674,12 @@ func TestInstancesServing_OnlyStableServersAreReused(t *testing.T) {
 			t.Cleanup(ts.Close)
 			s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
 
-			assert.Equal(t, tc.want, s.instancesServing([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
+			assert.Equal(t, tc.want, s.checkReuse([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
 		})
 	}
 }
 
-func TestInstancesServing_AHungStateCheckIsAbortedAndReused(t *testing.T) {
+func TestCheckReuse_AHungStateCheckIsAbortedAndReused(t *testing.T) {
 	orig := e2eCloudCallTimeout
 	e2eCloudCallTimeout = 20 * time.Millisecond
 	t.Cleanup(func() { e2eCloudCallTimeout = orig })
@@ -689,7 +691,7 @@ func TestInstancesServing_AHungStateCheckIsAbortedAndReused(t *testing.T) {
 	t.Cleanup(ts.Close)
 	s := &Server{CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
 
-	assert.True(t, s.instancesServing([]*E2EInstance{{InstallationID: "i"}}, s.Logger),
+	assert.Equal(t, reuseOK, s.checkReuse([]*E2EInstance{{InstallationID: "i"}}, s.Logger),
 		"a state that cannot be read must not tear down servers a run may be using")
 	select {
 	case <-aborted:
