@@ -1544,11 +1544,21 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 }
 
 // wakeUpHibernatingInstances reports whether every instance is serving, waking any that
-// hibernate. It reports false for one that is gone, failed, or not stable within
+// hibernate, all at once. It reports false if one is gone, failed, or not stable within
 // e2eWakeTimeout, so callers replace the servers instead of dispatching to a dead one.
 func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
-	for _, inst := range instances {
-		if !s.awaitServing(inst.InstallationID, logger.WithField("installation_id", inst.InstallationID)) {
+	serving := make([]bool, len(instances))
+	var wg sync.WaitGroup
+	for i, inst := range instances {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			serving[i] = s.awaitServing(inst.InstallationID, logger.WithField("installation_id", inst.InstallationID))
+		}()
+	}
+	wg.Wait()
+	for _, ok := range serving {
+		if !ok {
 			return false
 		}
 	}
