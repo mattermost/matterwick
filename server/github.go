@@ -81,6 +81,7 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 		Sha:       *pullRequest.Head.SHA,
 		State:     *pullRequest.State,
 		URL:       *pullRequest.URL,
+		HTMLURL:   pullRequest.GetHTMLURL(),
 		CreatedAt: pullRequest.GetCreatedAt(),
 	}
 
@@ -89,6 +90,11 @@ func (s *Server) GetPullRequestFromGithub(pullRequest *github.PullRequest) (*mod
 	}
 
 	client := newGithubClient(s.Config.GithubAccessToken)
+	if s.githubAPIBase != "" {
+		if baseURL, parseErr := url.Parse(s.githubAPIBase); parseErr == nil {
+			client.BaseURL = baseURL
+		}
+	}
 
 	labels, _, err := client.Issues.ListLabelsByIssue(context.Background(), pr.RepoOwner, pr.RepoName, pr.Number, nil)
 	if err != nil {

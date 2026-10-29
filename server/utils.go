@@ -42,7 +42,7 @@ func (s *Server) logPrettyErrorToMattermost(msg string, pr *model.PullRequest, e
 		err,
 		pr.RepoOwner, pr.RepoName,
 		pr.Number, pr.State,
-		pr.URL,
+		pr.HTMLURL,
 	)
 	for key, value := range additionalFields {
 		fullMessage = fullMessage + fmt.Sprintf("%s: %s\n", key, value)
