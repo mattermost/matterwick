@@ -23,6 +23,7 @@
   "MattermostCredentialsWebhookURL": "",
   "MattermostCredentialsChannelURL": "",
   "GrafanaURL": "",
+  "GrafanaOrgID": 1,
   "GrafanaLokiDatasourceUID": "",
   "KubeClusterName": "",
   "KubeClusterRegion": "",

@@ -140,13 +140,13 @@ func TestParseEnvVars(t *testing.T) {
 
 func TestGrafanaLogsLink(t *testing.T) {
 	t.Run("not configured", func(t *testing.T) {
-		require.Empty(t, grafanaLogsLink("", "loki_uid", "inst1"))
-		require.Empty(t, grafanaLogsLink("https://grafana.example.com", "", "inst1"))
-		require.Empty(t, grafanaLogsLink("https://grafana.example.com", "loki_uid", ""))
+		require.Empty(t, grafanaLogsLink("", 1, "loki_uid", "inst1"))
+		require.Empty(t, grafanaLogsLink("https://grafana.example.com", 1, "", "inst1"))
+		require.Empty(t, grafanaLogsLink("https://grafana.example.com", 1, "loki_uid", ""))
 	})
 
 	t.Run("builds explore link", func(t *testing.T) {
-		link := grafanaLogsLink("https://grafana.example.com/", "loki_uid", "inst1")
+		link := grafanaLogsLink("https://grafana.example.com/", 1, "loki_uid", "inst1")
 
 		parsed, err := url.Parse(link)
 		require.NoError(t, err)
@@ -168,6 +168,24 @@ func TestGrafanaLogsLink(t *testing.T) {
 		require.Equal(t, `{namespace="inst1"}`, panes["a"].Queries[0].Expr)
 		require.Equal(t, map[string]string{"type": "loki", "uid": "loki_uid"}, panes["a"].Queries[0].Datasource)
 	})
+}
+
+func TestGrafanaLogsLinkOrgID(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		orgID    int64
+		expected string
+	}{
+		{"unset defaults to 1", 0, "1"},
+		{"negative defaults to 1", -3, "1"},
+		{"configured org", 4, "4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := url.Parse(grafanaLogsLink("https://grafana.example.com", tc.orgID, "loki_uid", "inst1"))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, parsed.Query().Get("orgId"))
+		})
+	}
 }
 
 func TestLogsLinkMarkdown(t *testing.T) {

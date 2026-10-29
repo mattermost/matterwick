@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
@@ -139,10 +140,14 @@ func parseEnvArg(arg string) (cloudModel.EnvVarMap, error) {
 }
 
 // grafanaLogsLink returns a Grafana Explore link to the Loki logs of an
-// installation, or an empty string when Grafana is not configured.
-func grafanaLogsLink(grafanaURL, datasourceUID, installationID string) string {
+// installation, or an empty string when Grafana is not configured. orgID is
+// the organization that owns the datasource; values below 1 default to 1.
+func grafanaLogsLink(grafanaURL string, orgID int64, datasourceUID, installationID string) string {
 	if grafanaURL == "" || datasourceUID == "" || installationID == "" {
 		return ""
+	}
+	if orgID < 1 {
+		orgID = 1
 	}
 
 	datasource := map[string]string{"type": "loki", "uid": datasourceUID}
@@ -166,7 +171,7 @@ func grafanaLogsLink(grafanaURL, datasourceUID, installationID string) string {
 
 	query := url.Values{}
 	query.Set("schemaVersion", "1")
-	query.Set("orgId", "1")
+	query.Set("orgId", strconv.FormatInt(orgID, 10))
 	query.Set("panes", string(panesJSON))
 
 	return strings.TrimSuffix(grafanaURL, "/") + "/explore?" + query.Encode()
@@ -175,7 +180,7 @@ func grafanaLogsLink(grafanaURL, datasourceUID, installationID string) string {
 // logsLinkMarkdown returns the "Logs" line for a Spinwick message, or an empty
 // string when Grafana is not configured.
 func (s *Server) logsLinkMarkdown(installationID, linkText string) string {
-	link := grafanaLogsLink(s.Config.GrafanaURL, s.Config.GrafanaLokiDatasourceUID, installationID)
+	link := grafanaLogsLink(s.Config.GrafanaURL, s.Config.GrafanaOrgID, s.Config.GrafanaLokiDatasourceUID, installationID)
 	if link == "" {
 		return ""
 	}
