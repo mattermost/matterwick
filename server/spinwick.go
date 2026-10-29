@@ -126,7 +126,6 @@ func generateSecurePassword() (string, error) {
 func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installation *cloudModel.InstallationDTO, sysadminPassword, userPassword, extraInfo string, logger logrus.FieldLogger) {
 	// Send public message to GitHub (without credentials)
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
-	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", installation.ID)
 
 	var prefix string
 	if s.isPluginRepository(pr.RepoName) {
@@ -140,7 +139,7 @@ func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installa
 	if extraInfo != "" {
 		githubMsg += "\n\n" + extraInfo
 	}
-	githubMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`\n**Logs:** [Click here](%s)", installation.ID, logLink)
+	githubMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "Click here")
 
 	// Add link to credentials channel if configured
 	if s.Config.MattermostCredentialsChannelURL != "" {
@@ -163,7 +162,7 @@ func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installa
 	if extraInfo != "" {
 		mmMsg += "\n\n### Additional Info\n" + extraInfo
 	}
-	mmMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`\n**Logs:** [View in Grafana](%s)", installation.ID, logLink)
+	mmMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "View in Grafana")
 	if s.Config.MattermostWebhookFooter != "" {
 		mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
 	}
@@ -354,10 +353,9 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, _ string, log
 		return request.WithError(errors.Wrap(request.Error, "error waiting for installation to become stable"))
 	}
 
-	logLink := fmt.Sprintf("https://grafana.internal.mattermost.com/explore?orgId=1&left=%%7B%%22datasource%%22:%%22PFB2D5CACEC34D62E%%22,%%22queries%%22:%%5B%%7B%%22refId%%22:%%22A%%22,%%22expr%%22:%%22%%7Bnamespace%%3D%%5C%%22%s%%5C%%22%%7D%%22,%%22queryType%%22:%%22range%%22,%%22datasource%%22:%%7B%%22type%%22:%%22loki%%22,%%22uid%%22:%%22PFB2D5CACEC34D62E%%22%%7D,%%22editorMode%%22:%%22code%%22%%7D%%5D,%%22range%%22:%%7B%%22from%%22:%%22now-1h%%22,%%22to%%22:%%22now%%22%%7D%%7D", request.InstallationID)
-
 	// Send public message to GitHub (without credentials)
-	githubMsg := fmt.Sprintf("**Mattermost SpinWick with CWS PR #%d** :tada:\n\n**Test server created!**\n\nAccess here: %s\n\n**Installation ID:** `%s`\n**Logs:** [Click here](%s)", pr.Number, spinwickURL, request.InstallationID, logLink)
+	githubMsg := fmt.Sprintf("**Mattermost SpinWick with CWS PR #%d** :tada:\n\n**Test server created!**\n\nAccess here: %s\n\n**Installation ID:** `%s`", pr.Number, spinwickURL, request.InstallationID) +
+		s.logsLinkMarkdown(request.InstallationID, "Click here")
 
 	// Add link to credentials channel if configured
 	if s.Config.MattermostCredentialsChannelURL != "" {
@@ -370,8 +368,9 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, _ string, log
 	// Send credentials to Mattermost webhook
 	if s.Config.MattermostCredentialsWebhookURL != "" {
 		userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| CWS Admin | %s | %s |", username, password)
-		mmMsg := fmt.Sprintf("## Mattermost SpinWick with CWS for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s\n\n**Installation ID:** `%s`\n**Logs:** [View in Grafana](%s)",
-			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable, request.InstallationID, logLink)
+		mmMsg := fmt.Sprintf("## Mattermost SpinWick with CWS for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s\n\n**Installation ID:** `%s`",
+			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable, request.InstallationID) +
+			s.logsLinkMarkdown(request.InstallationID, "View in Grafana")
 		if s.Config.MattermostWebhookFooter != "" {
 			mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
 		}

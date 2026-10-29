@@ -82,6 +82,14 @@ type MatterwickConfig struct {
 	MattermostCredentialsWebhookURL string
 	MattermostCredentialsChannelURL string
 
+	// GrafanaURL, GrafanaOrgID and GrafanaLokiDatasourceUID build the "Logs"
+	// link posted for each Spinwick. The link is left out when GrafanaURL or
+	// GrafanaLokiDatasourceUID is empty. GrafanaOrgID is the organization that
+	// owns the datasource and defaults to 1.
+	GrafanaURL               string
+	GrafanaOrgID             int64
+	GrafanaLokiDatasourceUID string
+
 	KubeClusterName   string
 	KubeClusterRegion string
 

@@ -1,7 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
@@ -134,4 +137,52 @@ func parseEnvArg(arg string) (cloudModel.EnvVarMap, error) {
 	}
 
 	return m, nil
+}
+
+// grafanaLogsLink returns a Grafana Explore link to the Loki logs of an
+// installation, or an empty string when Grafana is not configured. orgID is
+// the organization that owns the datasource; values below 1 default to 1.
+func grafanaLogsLink(grafanaURL string, orgID int64, datasourceUID, installationID string) string {
+	if grafanaURL == "" || datasourceUID == "" || installationID == "" {
+		return ""
+	}
+	if orgID < 1 {
+		orgID = 1
+	}
+
+	datasource := map[string]string{"type": "loki", "uid": datasourceUID}
+	panes := map[string]interface{}{
+		"a": map[string]interface{}{
+			"datasource": datasourceUID,
+			"queries": []map[string]interface{}{{
+				"refId":      "A",
+				"expr":       fmt.Sprintf("{namespace=%q}", installationID),
+				"queryType":  "range",
+				"datasource": datasource,
+				"editorMode": "code",
+			}},
+			"range": map[string]string{"from": "now-1h", "to": "now"},
+		},
+	}
+	panesJSON, err := json.Marshal(panes)
+	if err != nil {
+		return ""
+	}
+
+	query := url.Values{}
+	query.Set("schemaVersion", "1")
+	query.Set("orgId", strconv.FormatInt(orgID, 10))
+	query.Set("panes", string(panesJSON))
+
+	return strings.TrimSuffix(grafanaURL, "/") + "/explore?" + query.Encode()
+}
+
+// logsLinkMarkdown returns the "Logs" line for a Spinwick message, or an empty
+// string when Grafana is not configured.
+func (s *Server) logsLinkMarkdown(installationID, linkText string) string {
+	link := grafanaLogsLink(s.Config.GrafanaURL, s.Config.GrafanaOrgID, s.Config.GrafanaLokiDatasourceUID, installationID)
+	if link == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n**Logs:** [%s](%s)", linkText, link)
 }
