@@ -22,6 +22,8 @@
   "MattermostWebhookFooter": "",
   "MattermostCredentialsWebhookURL": "",
   "MattermostCredentialsChannelURL": "",
+  "GrafanaURL": "",
+  "GrafanaLokiDatasourceUID": "",
   "KubeClusterName": "",
   "KubeClusterRegion": "",
   "LogSettings": {

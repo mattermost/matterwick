@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"net/url"
 	"testing"
 
 	cloudModel "github.com/mattermost/mattermost-cloud/model"
@@ -134,4 +136,45 @@ func TestParseEnvVars(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGrafanaLogsLink(t *testing.T) {
+	t.Run("not configured", func(t *testing.T) {
+		require.Empty(t, grafanaLogsLink("", "loki_uid", "inst1"))
+		require.Empty(t, grafanaLogsLink("https://grafana.example.com", "", "inst1"))
+		require.Empty(t, grafanaLogsLink("https://grafana.example.com", "loki_uid", ""))
+	})
+
+	t.Run("builds explore link", func(t *testing.T) {
+		link := grafanaLogsLink("https://grafana.example.com/", "loki_uid", "inst1")
+
+		parsed, err := url.Parse(link)
+		require.NoError(t, err)
+		require.Equal(t, "grafana.example.com", parsed.Host)
+		require.Equal(t, "/explore", parsed.Path)
+		require.Equal(t, "1", parsed.Query().Get("orgId"))
+		require.Equal(t, "1", parsed.Query().Get("schemaVersion"))
+
+		var panes map[string]struct {
+			Datasource string `json:"datasource"`
+			Queries    []struct {
+				Expr       string            `json:"expr"`
+				Datasource map[string]string `json:"datasource"`
+			} `json:"queries"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(parsed.Query().Get("panes")), &panes))
+		require.Equal(t, "loki_uid", panes["a"].Datasource)
+		require.Len(t, panes["a"].Queries, 1)
+		require.Equal(t, `{namespace="inst1"}`, panes["a"].Queries[0].Expr)
+		require.Equal(t, map[string]string{"type": "loki", "uid": "loki_uid"}, panes["a"].Queries[0].Datasource)
+	})
+}
+
+func TestLogsLinkMarkdown(t *testing.T) {
+	s := &Server{Config: &MatterwickConfig{}}
+	require.Empty(t, s.logsLinkMarkdown("inst1", "Click here"))
+
+	s.Config.GrafanaURL = "https://grafana.example.com"
+	s.Config.GrafanaLokiDatasourceUID = "loki_uid"
+	require.Contains(t, s.logsLinkMarkdown("inst1", "Click here"), "\n**Logs:** [Click here](https://grafana.example.com/explore?")
 }
