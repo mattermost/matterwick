@@ -21,6 +21,7 @@ type PullRequest struct {
 	Labels    []string
 	State     string
 	URL       string
+	HTMLURL   string
 	CreatedAt time.Time
 }
 

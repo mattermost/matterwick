@@ -159,7 +159,7 @@ func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installa
 
 	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | %s |\n| User | user-1 | %s |", sysadminPassword, userPassword)
 	mmMsg := fmt.Sprintf("## %sSpinwick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s",
-		prefix, pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, userTable)
+		prefix, pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable)
 	if extraInfo != "" {
 		mmMsg += "\n\n### Additional Info\n" + extraInfo
 	}
@@ -371,7 +371,7 @@ func (s *Server) createCloudSpinWickWithCWS(pr *model.PullRequest, _ string, log
 	if s.Config.MattermostCredentialsWebhookURL != "" {
 		userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| CWS Admin | %s | %s |", username, password)
 		mmMsg := fmt.Sprintf("## Mattermost SpinWick with CWS for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s\n\n**Installation ID:** `%s`\n**Logs:** [View in Grafana](%s)",
-			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, userTable, request.InstallationID, logLink)
+			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable, request.InstallationID, logLink)
 		if s.Config.MattermostWebhookFooter != "" {
 			mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
 		}
@@ -540,7 +540,7 @@ func (s *Server) createCWSSpinWick(pr *model.PullRequest, logger logrus.FieldLog
 	// Send to Mattermost webhook for consistency
 	if s.Config.MattermostCredentialsWebhookURL != "" {
 		mmMsg := fmt.Sprintf("## CWS SpinWick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n**Split individual target:** %s",
-			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.URL, spinwickURL, deployment.Environment.CWSSplitServerID)
+			pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, deployment.Environment.CWSSplitServerID)
 		if s.Config.MattermostWebhookFooter != "" {
 			mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
 		}
