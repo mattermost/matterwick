@@ -710,3 +710,41 @@ func TestWakeUpHibernatingInstances_OnlyServingServersAreReused(t *testing.T) {
 		})
 	}
 }
+
+func TestWakeUpHibernatingInstances_ADeadServerStopsTheOthersWaits(t *testing.T) {
+	stubProvisioningTimers(t) // e2eWakeTimeout stays 10 minutes: only the dead server may end this
+	wakeSent, wakeCancelled := make(chan struct{}), make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/installation/dead":
+			<-wakeSent // the other server is mid wake-up when this one turns out dead
+			_, _ = w.Write([]byte(`{"ID":"dead","State":"deleted"}`))
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"ID":"cold","State":"hibernating"}`))
+		default: // the wake-up never answers, until its request is cancelled
+			_, _ = io.Copy(io.Discard, r.Body) // the server notices a dropped client only after the body
+			close(wakeSent)
+			<-r.Context().Done()
+			close(wakeCancelled)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+	done := make(chan bool)
+	go func() {
+		done <- s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "cold"}, {InstallationID: "dead"}}, s.Logger)
+	}()
+
+	select {
+	case serving := <-done:
+		assert.False(t, serving)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a dead server must stop the wait on the others")
+	}
+	select {
+	case <-wakeCancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the hung wake-up request must be cancelled, not left running")
+	}
+}

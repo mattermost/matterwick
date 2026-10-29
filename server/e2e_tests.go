@@ -1547,22 +1547,21 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 // hibernate, all at once. It reports false if one is gone, failed, or not stable within
 // e2eWakeTimeout, so callers replace the servers instead of dispatching to a dead one.
 func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
-	serving := make([]bool, len(instances))
+	// The first server that is not serving stops the others' waits: the PR gets new servers.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var wg sync.WaitGroup
-	for i, inst := range instances {
+	for _, inst := range instances {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serving[i] = s.awaitServing(inst.InstallationID, logger.WithField("installation_id", inst.InstallationID))
+			if !s.awaitServing(ctx, inst.InstallationID, logger.WithField("installation_id", inst.InstallationID)) {
+				cancel()
+			}
 		}()
 	}
 	wg.Wait()
-	for _, ok := range serving {
-		if !ok {
-			return false
-		}
-	}
-	return true
+	return ctx.Err() == nil
 }
 
 // e2eWakeTimeout bounds how long a reused instance may take to be stable. Var so tests can
@@ -1572,10 +1571,10 @@ var e2eWakeTimeout = 10 * time.Minute
 // awaitServing polls the installation until it is stable, waking it while it hibernates.
 // Failed checks and in-between states are waited out, so a brief cloud API error does not
 // tear down servers a run is using.
-func (s *Server) awaitServing(id string, log logrus.FieldLogger) bool {
+func (s *Server) awaitServing(ctx context.Context, id string, log logrus.FieldLogger) bool {
 	timeout := time.Now().Add(e2eWakeTimeout)
 	for {
-		state, err := s.installationState(id)
+		state, err := s.installationState(ctx, id)
 		switch {
 		case err != nil:
 			log.WithError(err).Warn("Failed to check E2E instance state")
@@ -1587,7 +1586,7 @@ func (s *Server) awaitServing(id string, log logrus.FieldLogger) bool {
 			return false
 		case state == cloudModel.InstallationStateHibernating:
 			log.Info("Waking up hibernating E2E instance")
-			if _, err := s.CloudClient.WakeupInstallation(id, nil); err != nil {
+			if _, err := s.CloudClient.WakeupInstallationContext(ctx, id); err != nil {
 				log.WithError(err).Warn("Failed to wake up hibernating E2E instance")
 			}
 		}
@@ -1595,14 +1594,18 @@ func (s *Server) awaitServing(id string, log logrus.FieldLogger) bool {
 			log.WithField("state", state).Warn("E2E instance is not serving")
 			return false
 		}
-		time.Sleep(e2eInstallationPollInterval)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(e2eInstallationPollInterval):
+		}
 	}
 }
 
 // installationState is the installation's state, or "" when it no longer exists.
-func (s *Server) installationState(id string) (string, error) {
+func (s *Server) installationState(ctx context.Context, id string) (string, error) {
 	var installation *cloudModel.InstallationDTO
-	err := withCloudTimeout(context.Background(), func() error {
+	err := withCloudTimeout(ctx, func() error {
 		got, getErr := s.CloudClient.GetInstallation(id, nil)
 		installation = got
 		return getErr
