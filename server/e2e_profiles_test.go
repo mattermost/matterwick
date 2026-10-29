@@ -73,6 +73,11 @@ func newFakeCloudServer(t *testing.T, listJSON string) (*Server, *fakeCloud) {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
+		// The servers makeE2EInstances tracks are up, so they can be reused.
+		if id, ok := strings.CutPrefix(r.URL.Path, "/api/installation/old-"); ok && r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"ID":"old-` + id + `","State":"stable"}`))
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(ts.Close)

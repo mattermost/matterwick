@@ -653,3 +653,60 @@ func TestWakeUpHibernatingInstances_GoneServer(t *testing.T) {
 	assert.False(t, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "gone"}}, s.Logger),
 		"a deleted server must be reported, not dereferenced (this used to panic and crash matterwick)")
 }
+
+// stubWakeTimeout lets a wait for a server that never serves end quickly.
+func stubWakeTimeout(t *testing.T) {
+	t.Helper()
+	orig := e2eWakeTimeout
+	t.Cleanup(func() { e2eWakeTimeout = orig })
+	e2eWakeTimeout = 50 * time.Millisecond
+}
+
+func TestWakeUpHibernatingInstances_OnlyServingServersAreReused(t *testing.T) {
+	stubProvisioningTimers(t)
+	stubWakeTimeout(t)
+	for _, tc := range []struct {
+		name   string
+		states []string // GET answers in turn, the last repeating; "404" and "500" are statuses
+		wake   int
+		want   bool
+	}{
+		{"stable", []string{"stable"}, 0, true},
+		{"woken", []string{"hibernating", "wake-up-requested", "update-in-progress", "stable"}, http.StatusAccepted, true},
+		{"brief state-check error", []string{"500", "stable"}, 0, true},
+		{"going to sleep, then woken", []string{"hibernation-in-progress", "hibernating", "stable"}, http.StatusAccepted, true},
+		{"state check never answers", []string{"500"}, 0, false},
+		{"wake-up refused", []string{"hibernating"}, http.StatusBadGateway, false},
+		{"wake-up fails", []string{"hibernating", "update-failed"}, http.StatusAccepted, false},
+		{"deleted while waking", []string{"hibernating", "404"}, http.StatusAccepted, false},
+		{"deleted", []string{"deleted"}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			gets := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					w.WriteHeader(tc.wake)
+					_, _ = w.Write([]byte(`{}`))
+					return
+				}
+				mu.Lock()
+				state := tc.states[min(gets, len(tc.states)-1)]
+				gets++
+				mu.Unlock()
+				switch state {
+				case "404":
+					w.WriteHeader(http.StatusNotFound)
+				case "500":
+					w.WriteHeader(http.StatusInternalServerError)
+				default:
+					_, _ = w.Write([]byte(`{"ID":"i","State":"` + state + `"}`))
+				}
+			}))
+			t.Cleanup(ts.Close)
+			s := &Server{Config: &MatterwickConfig{}, CloudClient: model.NewCloudClient(ts.URL, "", "", "", ""), Logger: logrus.New()}
+
+			assert.Equal(t, tc.want, s.wakeUpHibernatingInstances([]*E2EInstance{{InstallationID: "i"}}, s.Logger))
+		})
+	}
+}

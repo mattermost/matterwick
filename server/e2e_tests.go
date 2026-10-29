@@ -178,7 +178,14 @@ func (s *Server) handleE2ETestRequest(pr *model.PullRequest, label string) {
 
 	// 2. Check cloud API for instances that survived a matterwick restart.
 	if !fresh {
-		if cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p); err == nil && len(cloudInstances) == len(p.platforms) && s.wakeUpHibernatingInstances(cloudInstances, logger) {
+		cloudInstances, err := s.findExistingE2EInstancesInCloud(pr, p)
+		reusable := err == nil && len(cloudInstances) == len(p.platforms)
+		if reusable && !s.wakeUpHibernatingInstances(cloudInstances, logger) {
+			logger.Warn("A cloud E2E server is not serving; replacing the PR's servers")
+			s.destroyE2EInstances(cloudInstances, logger)
+			reusable = false
+		}
+		if reusable {
 			logger.WithField("instances", len(cloudInstances)).Info("Reusing existing cloud E2E instances")
 			if !storeIfCurrent(cloudInstances) {
 				logger.Warn("E2E reset was requested during cloud-reuse path; discarding reused instances")
@@ -1536,60 +1543,64 @@ func (s *Server) findExistingE2EInstancesInCloud(pr *model.PullRequest, p *e2ePr
 	return result, nil
 }
 
-// wakeUpHibernatingInstances wakes any hibernating instance, waiting up to 10 minutes for it
-// to be stable, and reports false if any instance no longer exists. Other failures are logged
-// and the instance is used as it is.
+// wakeUpHibernatingInstances reports whether every instance is serving, waking any that
+// hibernate. It reports false for one that is gone, failed, or not stable within
+// e2eWakeTimeout, so callers replace the servers instead of dispatching to a dead one.
 func (s *Server) wakeUpHibernatingInstances(instances []*E2EInstance, logger logrus.FieldLogger) bool {
 	for _, inst := range instances {
-		var installation *cloudModel.InstallationDTO
-		err := withCloudTimeout(context.Background(), func() error {
-			got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
-			installation = got
-			return getErr
-		})
-		if err != nil {
-			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to check installation state before wake-up")
-			continue
-		}
-		if installation == nil || strings.HasPrefix(installation.State, "deletion") {
-			logger.WithField("installation_id", inst.InstallationID).Warn("E2E instance no longer exists")
+		if !s.awaitServing(inst.InstallationID, logger.WithField("installation_id", inst.InstallationID)) {
 			return false
-		}
-		if installation.State != cloudModel.InstallationStateHibernating {
-			continue
-		}
-		logger.WithField("installation_id", inst.InstallationID).Info("Waking up hibernating E2E instance")
-		if _, err := s.CloudClient.WakeupInstallation(inst.InstallationID, nil); err != nil {
-			logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Failed to wake up hibernating E2E instance")
-			continue
-		}
-		timeout := time.Now().Add(10 * time.Minute)
-		for {
-			var updated *cloudModel.InstallationDTO
-			err := withCloudTimeout(context.Background(), func() error {
-				got, getErr := s.CloudClient.GetInstallation(inst.InstallationID, nil)
-				updated = got
-				return getErr
-			})
-			if err != nil {
-				logger.WithError(err).WithField("installation_id", inst.InstallationID).Warn("Error polling installation state during wake-up")
-				break
-			}
-			if updated == nil {
-				return false
-			}
-			if updated.State == cloudModel.InstallationStateStable {
-				logger.WithField("installation_id", inst.InstallationID).Info("Hibernating E2E instance is now stable")
-				break
-			}
-			if time.Now().After(timeout) {
-				logger.WithField("installation_id", inst.InstallationID).Warn("Timeout waiting for E2E instance to wake up")
-				break
-			}
-			time.Sleep(15 * time.Second)
 		}
 	}
 	return true
+}
+
+// e2eWakeTimeout bounds how long a reused instance may take to be stable. Var so tests can
+// shorten it.
+var e2eWakeTimeout = 10 * time.Minute
+
+// awaitServing polls the installation until it is stable, waking it while it hibernates.
+// Failed checks and in-between states are waited out, so a brief cloud API error does not
+// tear down servers a run is using.
+func (s *Server) awaitServing(id string, log logrus.FieldLogger) bool {
+	timeout := time.Now().Add(e2eWakeTimeout)
+	for {
+		state, err := s.installationState(id)
+		switch {
+		case err != nil:
+			log.WithError(err).Warn("Failed to check E2E instance state")
+		case state == cloudModel.InstallationStateStable:
+			return true
+		case state == "" || state == cloudModel.InstallationStateDeleted ||
+			strings.HasPrefix(state, "deletion") || strings.HasSuffix(state, "-failed"):
+			log.WithField("state", state).Warn("E2E instance is gone or failed")
+			return false
+		case state == cloudModel.InstallationStateHibernating:
+			log.Info("Waking up hibernating E2E instance")
+			if _, err := s.CloudClient.WakeupInstallation(id, nil); err != nil {
+				log.WithError(err).Warn("Failed to wake up hibernating E2E instance")
+			}
+		}
+		if time.Now().After(timeout) {
+			log.WithField("state", state).Warn("E2E instance is not serving")
+			return false
+		}
+		time.Sleep(e2eInstallationPollInterval)
+	}
+}
+
+// installationState is the installation's state, or "" when it no longer exists.
+func (s *Server) installationState(id string) (string, error) {
+	var installation *cloudModel.InstallationDTO
+	err := withCloudTimeout(context.Background(), func() error {
+		got, getErr := s.CloudClient.GetInstallation(id, nil)
+		installation = got
+		return getErr
+	})
+	if err != nil || installation == nil {
+		return "", err
+	}
+	return installation.State, nil
 }
 
 // postE2EStartedComment posts a comment when E2E tests start
