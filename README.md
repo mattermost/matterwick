@@ -30,6 +30,30 @@ You do not need to rebuild the docker image unless you make changes to the Docke
 
 
 
+### Delivering HA SpinWick results to a Cursor agent
+
+By default the logins of a finished HA SpinWick (`SetupSpinWickHA`) are posted to the Mattermost credentials channel.
+A Cursor automation that applies the label itself can instead receive the result directly, as a follow-up message to
+the agent that asked. Delivery is off until `CursorAPIKey` and `CursorAgentCheckNames` are set. A label applied by a
+person always behaves as before.
+
+| Config | Meaning |
+|---|---|
+| `CursorAPIKey` | A Cursor API key with only Agents → Run agents. A secret. |
+| `CursorAPIBaseURL` | Optional. Defaults to `https://api.cursor.com`. |
+| `CursorAgentCheckNames` | Exact names of the GitHub check runs Cursor creates for the automations allowed to ask, for example `Cursor Automation: <automation name>`. |
+
+How a request is recognised: just before applying the label, the agent posts a PR comment containing
+`<!-- cursor-agent-request: bc-<agent id> -->`. Matterwick accepts it only if the comment was posted by the same user
+who applied the label, within five minutes before the label event, and the agent ID is the one behind a Cursor check
+run with one of the configured names on the pull request's head commit. If so, the server URL and logins go to that
+agent (`Status: ready`), a failed build sends it `Status: failed` with the error, and nothing is posted to the
+credentials channel. If the marker is missing or invalid, or the Cursor call fails, the credentials channel post
+happens as usual.
+
+Removing the label destroys the server. Applying it again right after, for a clean server, works: a create that finds
+the previous installation still being deleted waits for the deletion (up to 10 minutes) instead of giving up.
+
 ### E2E repo profiles
 
 Every E2E flow uses the repo's profile (`server/e2e_profiles.go`). Adding a repo means adding a profile:

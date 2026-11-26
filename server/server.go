@@ -38,6 +38,11 @@ type Server struct {
 
 	CloudClient *model.CloudClient
 
+	// cursorAgentRequests maps a SpinWick owner ID to the Cursor agent that asked for that SpinWick, found when
+	// the label was applied. It is read once when the build finishes. The zero value is ready to use.
+	cursorAgentRequests     map[string]string
+	cursorAgentRequestsLock sync.Mutex
+
 	// envMaps is a map of environment variables for each active installation.
 	envMaps     map[string]cloudModel.EnvVarMap
 	envMapsLock sync.Mutex

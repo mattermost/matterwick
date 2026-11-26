@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/mattermost/matterwick/model"
 	"github.com/sirupsen/logrus"
@@ -14,6 +15,9 @@ import (
 )
 
 func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
+	// The moment the event arrived stands in for when the label was applied. It is used to recognise the
+	// request marker a Cursor agent posts just before it applies the HA label.
+	labelTime := time.Now()
 	repoName := event.GetRepo().GetName()
 	prNumber := event.GetNumber()
 	label := event.GetLabel().GetName()
@@ -58,6 +62,9 @@ func (s *Server) handlePullRequestEvent(event *github.PullRequestEvent) {
 			case s.Config.SetupSpinWick:
 				s.handleCreateSpinWick(pr, "miniSingleton", false, false, s.getEnvMap(spinwick.RepeatableID))
 			case s.Config.SetupSpinWickHA:
+				// If a Cursor automation, not a person, applied the label, remember which agent so the result
+				// of the build can go straight to it. For a person this stores nothing.
+				s.rememberCursorAgentRequest(pr, spinwick.RepeatableID, event.GetSender().GetLogin(), labelTime)
 				s.handleCreateSpinWick(pr, "miniHA", true, false, s.getEnvMap(spinwick.RepeatableID))
 			case s.Config.SetupSpinWickWithCWS:
 				s.handleCreateSpinWick(pr, "miniSingleton", true, true, s.getEnvMap(spinwick.RepeatableID))
