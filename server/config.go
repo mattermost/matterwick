@@ -82,6 +82,18 @@ type MatterwickConfig struct {
 	MattermostCredentialsWebhookURL string
 	MattermostCredentialsChannelURL string
 
+	// CursorAPIKey is a Cursor API key with the Agents "Run agents" permission. When it is set, and an HA
+	// SpinWick was requested by a Cursor automation (see CursorAgentCheckNames), Matterwick sends the result
+	// of the build, the server URL and logins or a failure, to that agent as a follow-up message instead of
+	// posting the logins to the Mattermost credentials channel. Leave it empty to disable the feature.
+	CursorAPIKey string
+	// CursorAPIBaseURL overrides the Cursor API host. Default: https://api.cursor.com.
+	CursorAPIBaseURL string
+	// CursorAgentCheckNames are the exact names of the GitHub check runs Cursor creates for the automations
+	// allowed to request a SpinWick, for example "Cursor Automation: <automation name>". A request is
+	// honoured only when its agent ID matches one of these checks on the pull request's head commit.
+	CursorAgentCheckNames []string
+
 	// GrafanaURL, GrafanaOrgID and GrafanaLokiDatasourceUID build the "Logs"
 	// link posted for each Spinwick. The link is left out when GrafanaURL or
 	// GrafanaLokiDatasourceUID is empty. GrafanaOrgID is the organization that

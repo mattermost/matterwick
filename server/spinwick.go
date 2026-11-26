@@ -122,33 +122,58 @@ func generateSecurePassword() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// spinwickPrefix is the product name used in the titles of SpinWick messages.
+func (s *Server) spinwickPrefix(pr *model.PullRequest) string {
+	if s.isPluginRepository(pr.RepoName) {
+		return "Plugin "
+	}
+	return "Mattermost "
+}
+
+// sendSpinwickPublicComment posts the pull request comment that announces a finished build. It never contains
+// credentials; credentialsLine says where they went.
+func (s *Server) sendSpinwickPublicComment(pr *model.PullRequest, installation *cloudModel.InstallationDTO, extraInfo, credentialsLine string) {
+	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
+
+	githubMsg := fmt.Sprintf("%sSpinwick PR #%d :tada:\n\n**Test server created!**\n\nAccess here: %s", s.spinwickPrefix(pr), pr.Number, spinwickURL)
+	if extraInfo != "" {
+		githubMsg += "\n\n" + extraInfo
+	}
+	githubMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "Click here")
+	githubMsg += "\n\n" + credentialsLine
+
+	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, githubMsg)
+}
+
+// spinwickCredentialsMessage builds the message that carries a finished server's URL and logins.
+func (s *Server) spinwickCredentialsMessage(pr *model.PullRequest, installation *cloudModel.InstallationDTO, spinwickURL, sysadminPassword, userPassword, extraInfo string, includeFooter bool) string {
+	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | %s |\n| User | user-1 | %s |", sysadminPassword, userPassword)
+	mmMsg := fmt.Sprintf("## %sSpinwick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s",
+		s.spinwickPrefix(pr), pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable)
+	if extraInfo != "" {
+		mmMsg += "\n\n### Additional Info\n" + extraInfo
+	}
+	mmMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "View in Grafana")
+	if includeFooter && s.Config.MattermostWebhookFooter != "" {
+		mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
+	}
+	return mmMsg
+}
+
 // Helper function to format and send success comment to Mattermost webhook
 func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installation *cloudModel.InstallationDTO, sysadminPassword, userPassword, extraInfo string, logger logrus.FieldLogger) {
 	// Send public message to GitHub (without credentials)
 	spinwickURL := fmt.Sprintf("https://%s", cloudtools.GetInstallationDNSFromDNSRecords(installation))
 
-	var prefix string
-	if s.isPluginRepository(pr.RepoName) {
-		prefix = "Plugin "
-	} else {
-		prefix = "Mattermost "
-	}
-
-	// Public GitHub message (no credentials)
-	githubMsg := fmt.Sprintf("%sSpinwick PR #%d :tada:\n\n**Test server created!**\n\nAccess here: %s", prefix, pr.Number, spinwickURL)
-	if extraInfo != "" {
-		githubMsg += "\n\n" + extraInfo
-	}
-	githubMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "Click here")
-
 	// Add link to credentials channel if configured
+	var credentialsLine string
 	if s.Config.MattermostCredentialsChannelURL != "" {
-		githubMsg += fmt.Sprintf("\n\n**Credentials:** Posted securely in [this Mattermost channel](%s) - Look for PR #%d", s.Config.MattermostCredentialsChannelURL, pr.Number)
+		credentialsLine = fmt.Sprintf("**Credentials:** Posted securely in [this Mattermost channel](%s) - Look for PR #%d", s.Config.MattermostCredentialsChannelURL, pr.Number)
 	} else {
-		githubMsg += "\n\n**Credentials:** Have been sent securely to the internal Mattermost channel."
+		credentialsLine = "**Credentials:** Have been sent securely to the internal Mattermost channel."
 	}
 
-	s.sendGitHubComment(pr.RepoOwner, pr.RepoName, pr.Number, githubMsg)
+	s.sendSpinwickPublicComment(pr, installation, extraInfo, credentialsLine)
 
 	// Send credentials to Mattermost webhook
 	if s.Config.MattermostCredentialsWebhookURL == "" {
@@ -156,16 +181,7 @@ func (s *Server) sendSpinwickSuccessToMattermost(pr *model.PullRequest, installa
 		return
 	}
 
-	userTable := fmt.Sprintf("| Account Type | Username | Password |\n|---|---|---|\n| Admin | sysadmin | %s |\n| User | user-1 | %s |", sysadminPassword, userPassword)
-	mmMsg := fmt.Sprintf("## %sSpinwick for PR #%d\n---\n**Repository:** %s/%s\n**Pull Request:** [#%d](%s)\n\n**Test Server:** %s\n\n### Credentials\n%s",
-		prefix, pr.Number, pr.RepoOwner, pr.RepoName, pr.Number, pr.HTMLURL, spinwickURL, userTable)
-	if extraInfo != "" {
-		mmMsg += "\n\n### Additional Info\n" + extraInfo
-	}
-	mmMsg += fmt.Sprintf("\n\n**Installation ID:** `%s`", installation.ID) + s.logsLinkMarkdown(installation.ID, "View in Grafana")
-	if s.Config.MattermostWebhookFooter != "" {
-		mmMsg += "\n---\n" + s.Config.MattermostWebhookFooter
-	}
+	mmMsg := s.spinwickCredentialsMessage(pr, installation, spinwickURL, sysadminPassword, userPassword, extraInfo, true)
 
 	webhookRequest := &WebhookRequest{Username: "MatterWick", Text: mmMsg}
 
@@ -245,6 +261,7 @@ func (s *Server) handleCreateSpinWick(pr *model.PullRequest, size string, withLi
 		} else {
 			logger.WithError(request.Error).Error("Failed to create SpinWick")
 		}
+		s.deliverSpinwickFailure(pr, request, model.NewSpinwick(pr.RepoName, pr.Number, s.Config.DNSNameTestServer).RepeatableID, logger)
 		comments, err := s.getComments(pr.RepoOwner, pr.RepoName, pr.Number)
 		if err != nil {
 			logger.WithError(err).Error("Error getting comments")
@@ -592,6 +609,18 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	if err != nil {
 		return request.WithError(err).ShouldReportError()
 	}
+	if installation != nil && installation.State == cloudModel.InstallationStateDeletionInProgress {
+		// A label that was removed and re-applied, for example to get a clean server, lands while the old
+		// server is still being deleted. Wait for the deletion to finish instead of giving up.
+		logger.WithField("installation_id", installation.ID).Info("The previous installation is still being deleted. Waiting for that to finish")
+		if err = s.waitForInstallationDeletion(installation.ID, logger); err != nil {
+			return request.WithInstallationID(installation.ID).WithError(err).ShouldReportError()
+		}
+		installation, err = s.checkExistingInstallation(ownerID, logger)
+		if err != nil {
+			return request.WithError(err).ShouldReportError()
+		}
+	}
 	if installation != nil {
 		return request.WithInstallationID(installation.ID).
 			WithError(errors.Errorf("Already found a installation belonging to %s", ownerID)).
@@ -680,7 +709,7 @@ func (s *Server) createSpinWick(pr *model.PullRequest, size string, withLicense 
 	}
 
 	// Send success message to Mattermost webhook
-	s.sendSpinwickSuccessToMattermost(pr, installation, sysadminPassword, userPassword, "", logger)
+	s.deliverSpinwickSuccess(pr, installation, sysadminPassword, userPassword, "", ownerID, logger)
 
 	return request
 }
